@@ -1,0 +1,83 @@
+# sfv2 on Shipfloor V0, the software factory (https://github.com/kennedykjj/shipfloor).
+# Read from origin/main only; agents may never change this directory.
+# DRAFT of S0-05 (#5): confirm every layer's build/test against the real Gradle build once #2 lands, then run `shipfloor add`.
+project:
+  name: sfv2
+  repo: kennedykjj/sfv2
+board: {owner: kennedykjj, number: 4}
+language: pt-BR
+context: [PRODUCT.md, ARCHITECTURE.md, DESIGN.md, CLAUDE.md]
+review_criteria: .shipfloor/review-criteria.md
+# build-logic/ and the wrapper hold the test conventions (#2): implementers do not touch them.
+forbidden: [build-logic/, gradle/wrapper/, .github/]
+acceptance_assertions: 'assert|assertThat|assertEquals|@Disabled|@Ignore|@Test\(enabled'
+limits:
+  refine: {wip: 0}
+  develop: {wip: 4}
+layers:
+  - name: core
+    path: core/
+    stack: Kotlin, sem IO (puro)
+    build: ./gradlew :core:build --console=plain
+    test: ./gradlew :core:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['core/src/test/**']
+  - name: store
+    path: store/
+    stack: Kotlin, SQLite
+    build: ./gradlew :store:build --console=plain
+    test: ./gradlew :store:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['store/src/test/**']
+  - name: ports
+    path: ports/
+    stack: Kotlin, interfaces
+    build: ./gradlew :ports:build --console=plain
+    test: ./gradlew :ports:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['ports/src/test/**']
+  - name: adapters
+    path: adapters/
+    stack: Kotlin, runtimes e forge
+    build: ./gradlew :adapters:build --console=plain
+    test: ./gradlew :adapters:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['adapters/src/test/**']
+  - name: daemon
+    path: daemon/
+    stack: Kotlin, JVM, MCP e dispatcher
+    build: ./gradlew :daemon:build --console=plain
+    test: ./gradlew :daemon:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['daemon/src/test/**']
+  - name: cli
+    path: cli/
+    stack: Kotlin, Clikt
+    build: ./gradlew :cli:build --console=plain
+    test: ./gradlew :cli:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['cli/src/test/**']
+  - name: app
+    path: app/
+    stack: Kotlin, Compose Multiplatform
+    build: ./gradlew :app:build --console=plain
+    test: ./gradlew :app:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    assertions: 'FAILED|AssertionFailedError'
+    tests: ['app/src/test/**']
+  - name: e2e
+    path: e2e/
+    tests_only: true
+    stack: Kotlin, JUnit 5 contra o daemon
+    test: ./gradlew :e2e:test --tests {selector} --console=plain --rerun-tasks
+    ran: 'PASSED'
+    tests: ['e2e/src/test/**']
+deploy:
+  ci_workflow: CI
+  timeout_min: 30
