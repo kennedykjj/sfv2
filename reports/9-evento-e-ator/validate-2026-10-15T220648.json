@@ -1,0 +1,30 @@
+{
+  "issue": 9,
+  "pipeline": "validate",
+  "outcome": "staged",
+  "head": "f4f4f4bdd88a498f214b54a080372c46108575e6",
+  "pr": 97,
+  "qa_commit": "49fa97e024b7d88bb5f2c4b150c2edfaf3bf23be",
+  "merge_base": "c01bba80113e313711b95a4f13595b8fd88b0eaf",
+  "agents": [],
+  "rounds": {"review": 0, "gates": 0},
+  "gates": {
+    "qa-commit": "pass",
+    "forbidden": "pass",
+    "migration": "pass",
+    "acceptance-intact": "pass",
+    "build": "pass (from cache)",
+    "green core sfv2.core.EventTest": "pass"
+  },
+  "gates_reused": ["green core sfv2.core.EventTest"],
+  "flaky": [],
+  "amendments": [],
+  "findings": {
+    "red": 0,
+    "yellow": 3,
+    "white": 0
+  },
+  "ci": {"build": "pass", "guard": "pass"},
+  "brief": "run; no output",
+  "notes": "Brief build did not print a confirmation; check reviews/9.brief.json."
+}
