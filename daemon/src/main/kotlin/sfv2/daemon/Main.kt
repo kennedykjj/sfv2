@@ -103,7 +103,10 @@ internal fun resolveDatabasePath(env: Map<String, String>, socketPath: Path): Pa
 
 private const val DATABASE_FILE_NAME = "sfv2.db"
 
-fun main() {
+fun main(args: Array<String>) {
+    if (args.firstOrNull() == "service") {
+        exitProcess(runServiceCommand(args.toList(), System.getenv(), System.out, System.err))
+    }
     when (val launch = launchDaemon(System.getenv(), System.err)) {
         is DaemonLaunch.Failed -> exitProcess(launch.exitCode)
         is DaemonLaunch.Started -> {
