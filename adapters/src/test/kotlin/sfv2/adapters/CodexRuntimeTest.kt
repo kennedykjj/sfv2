@@ -59,6 +59,7 @@ class RecordingProcessRunner(private val outcome: ProcessOutcome) : ProcessRunne
         stdoutFile: Path,
         timeout: Duration,
         env: Map<String, String>,
+        envMode: EnvMode,
     ): ProcessOutcome {
         calls += Call(command, workingDir, stdoutFile, timeout, env)
         return outcome
