@@ -19,6 +19,8 @@ _Product Owner_
 - AC-5: Dado um custo abaixo dos dois limites, quando o daemon decide iniciar um run, então o comportamento é o de hoje, sem evento novo.
 - AC-6: Dado que nenhum limite foi informado, quando o daemon decide iniciar runs, então não há restrição de custo.
 - AC-7: Dado um run em andamento quando o limite do dia é cruzado, então esse run termina normalmente; o limite só impede começar runs novos.
+- AC-8: Dado um run cujo custo ficou `UNKNOWN` porque o modelo não tem preço (`reason` começa com `no price for models`) e um limite de card ou de dia configurado, quando o daemon avalia o custo, então o limite é tratado como atingido (falha fechada): o card é bloqueado com `reason=unpriced_model` (ou nenhum run novo começa no dia) até o preço entrar na tabela; um `UNKNOWN` por transcrição ausente ou malformada conta 0 e é registrado em log com o id do run. Sem limite configurado, nada muda.
+- AC-9: Dado um card bloqueado por custo, quando a fábrica ou um agente o move de coluna, então ele continua bloqueado; só um `CARD_MOVED` com ator dono depois do `CARD_BLOCKED` o desbloqueia.
 
 **Fora de escopo:** ler os limites de arquivo de config (outro card; aqui entram por parâmetro); interromper run em andamento; desbloqueio pelo dono e UI/app; limite por projeto; alerta de aproximação do limite; medir custo (feito em #33).
 
@@ -36,8 +38,8 @@ _Tech Lead_
 - `core`: `EventType.CARD_BLOCKED` no catálogo. Payload: `reason` (`card_cost_limit`), `spent_usd`, `limit_usd`, `estimate=true`. Ator: `Actor.Factory("cost")`.
 - `daemon`, `CostLimits(perCardUsd: BigDecimal?, perDayUsd: BigDecimal?)`: `null` = sem limite (`CostLimits.NONE`). Valores em `BigDecimal`.
 - `daemon`, `CostBudget(store, recorder: EventRecorder, limits, clock, zone: ZoneId, log)`:
-  - `onRunFinished(cardId)`: soma os `RUN_COST_RECORDED` do card (`cost_usd`; `UNKNOWN` conta 0); se `>= perCardUsd` e o card ainda não está bloqueado, grava `CARD_BLOCKED` pelo `EventRecorder` (nunca `store.recordChange` direto). Log `key=value` só com ids.
-  - `isBlocked(cardId): Boolean`: há `CARD_BLOCKED` depois do último `CARD_MOVED` do card (mover o card é a saída do dono; desbloqueio dedicado fica para outro card).
+  - `onRunFinished(cardId)`: soma os `RUN_COST_RECORDED` do card (`cost_usd`; `UNKNOWN` por transcrição ausente ou malformada conta 0; `UNKNOWN` por modelo sem preço falha fechado, AC-8); se `>= perCardUsd` e o card ainda não está bloqueado, grava `CARD_BLOCKED` pelo `EventRecorder` (nunca `store.recordChange` direto). Log `key=value` só com ids.
+  - `isBlocked(cardId): Boolean`: há `CARD_BLOCKED` depois do último `CARD_MOVED` com ator dono do card (movimento da fábrica ou de agente não desbloqueia, AC-9) (mover o card é a saída do dono; desbloqueio dedicado fica para outro card).
   - `dayLimitReached(): Boolean`: soma de `cost_usd` dos `RUN_COST_RECORDED` com `at` na data corrente (`clock` + `zone`) `>= perDayUsd`. O dia seguinte zera por construção (a data muda).
 - `daemon`, `Dispatcher`: novo parâmetro com padrão `launchGuard: LaunchGuard = LaunchGuard.Open` (`fun interface LaunchGuard { fun allows(cardId: String): Boolean }`; `CostBudget` implementa). Em `runCycle`, `dayLimitReached` interrompe o ciclo antes de iniciar qualquer run; card bloqueado é pulado (`continue`). Sem limites = `NONE`, comportamento atual.
 - Quem chama `onRunFinished` é o fim do run, logo depois do `RunCostRecorder.record`; ligar isso ao fim real do run fica com o card do dispatcher/runtime (aqui só o ponto de chamada testado).
@@ -61,9 +63,13 @@ _Tech Lead_
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/DispatcherTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/DispatcherTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **O limite é um controle de gasto:** tem de falhar fechado quando não sabe medir (AC-8) e não pode ser desfeito pela própria fábrica (AC-9): só o dono, com prova (#115), move o card para desbloquear.
+- Os valores do custo vêm de eventos gravados pelo `RunCostRecorder` a partir de tokens (não de texto do agente); nenhum texto de transcrição entra no motivo do bloqueio.
 
 ## Rollback
 n/a
@@ -73,7 +79,7 @@ _What the pipeline decided on its own; one line each, with the reason._
 - Peso `heavy`: duas camadas (core e daemon) e 7 critérios, apesar do `light` esperado na issue.
 - Evento novo `CARD_BLOCKED` em vez de campo no `Card`: o catálogo de eventos é a fonte; "bloqueado" deriva dos eventos (bloqueio depois do último movimento), sem mudar o modelo do card nem o `store`.
 - Saída do bloqueio: mover o card (ação do dono); desbloqueio dedicado está fora de escopo.
-- Custo `UNKNOWN` conta 0 nos limites e `PARTIAL` conta o subtotal: o limite é sobre estimativa conhecida; o custo desconhecido já é sinalizado no evento do #33.
+- `PARTIAL` conta o subtotal; `UNKNOWN` por transcrição ruim conta 0; `UNKNOWN` por modelo sem preço falha fechado (AC-8): contá-lo como zero deixaria um modelo sem preço gastar sem teto, contra o princípio do #33 de nunca subestimar em silêncio.
 - O limite do dia só olha runs já encerrados (o custo só existe ao fim do run); runs em andamento podem ultrapassá-lo (AC-7), aceito.
 - Limites entram por parâmetro (`CostLimits`), como `DispatchLimits`: a leitura do `factory.yml` é de outro card.
 - Dia pelo `Clock` e um `ZoneId` por parâmetro (padrão do sistema na composição), para o teste ser determinístico.
