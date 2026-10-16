@@ -1,0 +1,1 @@
+{"issue":76,"slug":"skin-pop-up-animado","pipeline":"refine","started_at":null,"finished_at":"2026-10-16","outcome":"ok","agents":[{"role":"product-owner","tokens":15680,"duration_s":27},{"role":"ux-designer","tokens":21721,"duration_s":17}],"rounds":{"po":1,"ux":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
