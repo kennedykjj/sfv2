@@ -4,12 +4,14 @@ import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
+import java.time.format.DateTimeParseException
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
@@ -37,6 +39,12 @@ data class RunRow(
 
 data class CostTotal(val status: CostStatus, val costUsd: BigDecimal?)
 
+/** Latest result of one gate; [durationMs] is null when the gate ran no process. */
+data class GateRow(val name: String, val verdict: String, val reason: String?, val durationMs: Long?, val at: Instant)
+
+/** One acceptance criterion linked to its layer's test file; [gate] is `PASS`, `FAIL`, `none` or `manual`. */
+data class CriterionRow(val ac: String, val layer: String, val testFile: String, val gate: String)
+
 data class CardDetail(
     val id: String,
     val title: String,
@@ -46,6 +54,8 @@ data class CardDetail(
     val eventsTruncated: Boolean,
     val runs: List<RunRow>,
     val total: CostTotal,
+    val gates: List<GateRow> = emptyList(),
+    val criteria: List<CriterionRow> = emptyList(),
 )
 
 sealed interface CardDetailState {
@@ -108,8 +118,29 @@ class CardDetailModel(private val cardId: String, private val source: CardDetail
             eventsTruncated = detail.bool("truncated") ?: false,
             runs = detail.arr("runs").map { parseRun(it.jsonObject) },
             total = CostTotal(costStatus(total.str("status")), total.cost()),
+            gates = (detail["gates"] as? JsonArray).orEmpty().map { parseGate(it.jsonObject) },
+            criteria = (detail["criteria"] as? JsonArray).orEmpty().map { parseCriterion(it.jsonObject) },
         )
     }
+
+    private fun parseGate(gate: JsonObject) = GateRow(
+        name = gate.str("name"),
+        verdict = gate.str("verdict"),
+        reason = gate.optStr("reason"),
+        durationMs = gate.optStr("duration_ms")?.toLongOrNull(),
+        at = try {
+            Instant.parse(gate.str("at"))
+        } catch (e: DateTimeParseException) {
+            throw IllegalArgumentException("invalid at in card.detail reply", e)
+        },
+    )
+
+    private fun parseCriterion(criterion: JsonObject) = CriterionRow(
+        ac = criterion.str("ac"),
+        layer = criterion.str("layer"),
+        testFile = criterion.str("test_file"),
+        gate = criterion.str("gate"),
+    )
 
     private fun parseEvent(event: JsonObject) = TimelineEvent(
         id = event.str("id"),
@@ -142,6 +173,9 @@ class CardDetailModel(private val cardId: String, private val source: CardDetail
 
     private fun JsonObject.str(key: String): String =
         (this[key] as? JsonPrimitive)?.content ?: throw IllegalArgumentException("missing $key in card.detail reply")
+
+    private fun JsonObject.optStr(key: String): String? =
+        (this[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content
 
     private fun JsonObject.obj(key: String): JsonObject =
         this[key] as? JsonObject ?: throw IllegalArgumentException("missing $key in card.detail reply")

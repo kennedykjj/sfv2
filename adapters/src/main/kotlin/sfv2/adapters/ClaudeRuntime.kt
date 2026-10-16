@@ -41,7 +41,7 @@ class ClaudeRuntime(
                 .redirectErrorStream(true)
                 .redirectOutput(transcript.toFile())
                 .also {
-                    it.environment().keys.removeAll(PROVIDER_VARIABLES)
+                    it.environment().keys.removeAll(PROVIDER_VARIABLES - provider.inheritedVariables())
                     it.environment().putAll(providerEnvironment)
                 }
                 .start()
@@ -50,7 +50,7 @@ class ClaudeRuntime(
             throw RuntimeBinaryNotFoundException(binary, request.stage)
         }
 
-        process.outputStream.use { it.write("/sf:${request.stage}\n".toByteArray()) }
+        process.outputStream.use { it.write((request.prompt.trimEnd() + "\n").toByteArray()) }
 
         if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
             process.descendants().forEach { it.destroyForcibly() }
@@ -65,6 +65,8 @@ class ClaudeRuntime(
         binary,
         "-p",
         "--permission-mode", "acceptEdits",
+        "--tools", READ_ONLY_TOOLS,
+        "--allowedTools", FACTORY_TOOLS,
         "--strict-mcp-config",
         "--mcp-config", request.mcpConfig.toString(),
         "--model", request.model,
@@ -73,6 +75,11 @@ class ClaudeRuntime(
     )
 
     private companion object {
+        /** Built-in tools of a session: reading only; every write goes through the factory's MCP server. */
+        const val READ_ONLY_TOOLS = "Read,Glob,Grep"
+
+        /** Every tool of the MCP server the daemon names `sfv2` in the session config. */
+        const val FACTORY_TOOLS = "mcp__sfv2"
         val STAGE_PATTERN = Regex("[a-z][a-z0-9-]*")
         val PROVIDER_VARIABLES = setOf(
             "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "AWS_REGION", "AWS_PROFILE",

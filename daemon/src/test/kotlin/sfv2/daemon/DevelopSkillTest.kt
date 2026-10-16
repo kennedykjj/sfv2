@@ -123,7 +123,7 @@ class DevelopSkillTest {
 
             for (step in steps) {
                 val tools = McpRequestTools(McpSession(project.repo, step.role, "c37"), store, recorder, worktrees, registry, clock)
-                val request = SessionRequest("develop", worktree, "model", dir.resolve("mcp.json"))
+                val request = SessionRequest("develop", worktree, "model", dir.resolve("mcp.json"), "prompt")
                 assertThat((runtime.launch(request) as SessionResult.Exited).exitCode).isZero()
                 tools.fileWriteRequest("c37", requireNotNull(writes[step.role]), "// ${step.role}")
                 tools.completionReport("c37", "${step.role} done")

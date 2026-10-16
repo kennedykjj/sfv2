@@ -61,6 +61,8 @@ class GhHarness(private val root: Path) {
         if [ "§code" -eq 0 ]; then
           if [ "§name" = "pr-create" ] && [ -f "§rec/after-create.out" ]; then cp "§rec/after-create.out" "§rec/pr-list.out"; fi
           if [ "§name" = "pr-merge" ] && [ -f "§rec/after-merge.out" ]; then cp "§rec/after-merge.out" "§rec/pr-view.out"; fi
+        else
+          if [ "§name" = "pr-merge" ] && [ -f "§rec/after-merge-failed.out" ]; then cp "§rec/after-merge-failed.out" "§rec/pr-view.out"; fi
         fi
         exit §code
         """.trimIndent().replace('§', '$')
@@ -82,8 +84,14 @@ object GhForgeFixtures {
     fun listJson(number: Int = 7, head: String = HEAD, branch: String = BRANCH) =
         """[{"number":$number,"headRefName":"$branch","headRefOid":"$head"}]"""
 
-    fun viewJson(state: String = "OPEN", head: String = HEAD, mergeable: String = "MERGEABLE", mergeOid: String? = null) =
-        """{"state":"$state","headRefOid":"$head","mergeable":"$mergeable","mergeCommit":${
+    fun viewJson(
+        state: String = "OPEN",
+        head: String = HEAD,
+        mergeable: String = "MERGEABLE",
+        mergeOid: String? = null,
+        mergeState: String = "CLEAN",
+    ) =
+        """{"state":"$state","headRefOid":"$head","mergeable":"$mergeable","mergeStateStatus":"$mergeState","mergeCommit":${
             if (mergeOid == null) "null" else """{"oid":"$mergeOid"}"""
         }}"""
 
@@ -165,6 +173,35 @@ class GhForgeTest {
         h.on("pr-view", GhForgeFixtures.viewJson(state = "CLOSED"))
         assertThat(h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD))
             .isEqualTo(MergeResult.NotOpen(PullRequestState.ClosedUnmerged))
+        assertThat(h.callsTo("pr merge")).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 a merge that fails on a branch the view still called unknown becomes Conflict once the view says behind`() {
+        val h = harness()
+        h.on("pr-view", GhForgeFixtures.viewJson(mergeState = "UNKNOWN"))
+        h.on("pr-merge", err = "not up to date", exit = 1)
+        h.on("after-merge-failed", GhForgeFixtures.viewJson(mergeState = "BEHIND"))
+
+        assertThat(h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD)).isEqualTo(MergeResult.Conflict)
+        assertThat(h.callsTo("pr merge")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-2 a merge that fails on a branch that is not behind keeps failing`() {
+        val h = harness()
+        h.on("pr-view", GhForgeFixtures.viewJson())
+        h.on("pr-merge", err = "boom", exit = 1)
+
+        assertThrows<ForgeException> { h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD) }
+    }
+
+    @Test
+    fun `AC-2 a branch behind the base is reported as Conflict and nothing is merged`() {
+        val h = harness()
+        h.on("pr-view", GhForgeFixtures.viewJson(mergeState = "BEHIND"))
+
+        assertThat(h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD)).isEqualTo(MergeResult.Conflict)
         assertThat(h.callsTo("pr merge")).isEmpty()
     }
 

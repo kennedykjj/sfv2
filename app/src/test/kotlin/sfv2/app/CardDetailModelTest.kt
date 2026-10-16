@@ -2,8 +2,12 @@ package sfv2.app
 
 import java.io.IOException
 import java.math.BigDecimal
+import java.time.Instant
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import sfv2.core.Column
 
 /**
  * Shape the implementation must follow (deterministic: no sockets, no sleeps, no clock):
@@ -16,7 +20,13 @@ import org.junit.jupiter.api.Test
  * - `sealed interface CardDetailState`: `Loading`, `Loaded(detail: CardDetail)`, `NotFound`, `Disconnected`.
  * - `CardDetail(id, title, column, spec: SpecView(status, text), events: List<TimelineEvent(id, at, actor, type, payload)>,
  *   eventsTruncated: Boolean, runs: List<RunRow(runId, stage, runtime, status: CostStatus, costUsd: BigDecimal?, reason: String?)>,
- *   total: CostTotal(status: CostStatus, costUsd: BigDecimal?))`; `eventsTruncated` reads `detail.truncated` of the reply.
+ *   total: CostTotal(status: CostStatus, costUsd: BigDecimal?), gates: List<GateRow>, criteria: List<CriterionRow>)`;
+ *   `eventsTruncated` reads `detail.truncated` of the reply.
+ * - `GateRow(name: String, verdict: String, reason: String?, durationMs: Long?, at: Instant)` reads one `detail.gates` item
+ *   (`name`, `verdict`, `reason`, `duration_ms`, `at`); an absent `duration_ms` is null, never zero.
+ * - `CriterionRow(ac: String, layer: String, testFile: String, gate: String)` reads one `detail.criteria` item
+ *   (`ac`, `layer`, `test_file`, `gate`).
+ * - A reply without `gates` or `criteria` (older daemon) loads with both lists empty.
  * - `enum class CostStatus { KNOWN, PARTIAL, UNKNOWN }` and the pure `formatCost(costUsd: BigDecimal?): String`
  *   (`US$ 0,42 est.`; `US$ ?` when the cost is unknown).
  */
@@ -49,8 +59,16 @@ class CardDetailModelTest {
         total: String = """{"status":"KNOWN","cost_usd":"0"}""",
         spec: String = """{"status":"valid","text":"Do the thing"}""",
         truncated: Boolean = false,
-    ) = """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"CODING"},"spec":$spec,""" +
-        """"events":[${events.joinToString(",")}],"truncated":$truncated,"runs":[${runs.joinToString(",")}],"total":$total}}"""
+        column: String = "CODING",
+        gates: String? = null,
+        criteria: String? = null,
+    ): String {
+        val gatesField = if (gates == null) "" else ""","gates":$gates"""
+        val criteriaField = if (criteria == null) "" else ""","criteria":$criteria"""
+        return """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"$column"},"spec":$spec,""" +
+            """"events":[${events.joinToString(",")}],"truncated":$truncated,"runs":[${runs.joinToString(",")}],"total":$total""" +
+            """$gatesField$criteriaField}}"""
+    }
 
     @Test
     fun `AC-7 a daemon that cannot be reached shows disconnected with no data and recovers on reconnect`() {
@@ -159,4 +177,110 @@ class CardDetailModelTest {
         assertThat(formatCost(allUnknown.costUsd)).isEqualTo("US$ ?")
         assertThat(formatCost(BigDecimal("1.356"))).isEqualTo("US$ 1,36 est.")
     }
+
+    @Test
+    fun `AC-5 a reply from an older daemon without gates and criteria loads with both lists empty`() {
+        val model = CardDetailModel("c1", FakeSource { reply() })
+
+        model.refresh()
+
+        val detail = loaded(model)
+        assertThat(detail.title).isEqualTo("Detail card")
+        assertThat(detail.gates).isEmpty()
+        assertThat(detail.criteria).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 a reply with gates and criteria exposes each one with the same values`() {
+        val gates = """[
+            {"name":"lint","verdict":"PASS","duration_ms":850,"at":"2026-10-16T10:00:01Z"},
+            {"name":"test-daemon","verdict":"FAIL","reason":"tests_failed","duration_ms":12000,"at":"2026-10-16T10:00:02Z"},
+            {"name":"scope","verdict":"PASS","at":"2026-10-16T10:00:03Z"}
+        ]"""
+        val criteria = """[
+            {"ac":"AC-1","layer":"daemon","test_file":"daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt","gate":"FAIL"},
+            {"ac":"AC-2","layer":"core","test_file":"core/src/test/kotlin/sfv2/core/BetaTest.kt","gate":"none"},
+            {"ac":"AC-3","layer":"manual","test_file":"n/a","gate":"manual"}
+        ]"""
+        val model = CardDetailModel("c1", FakeSource { reply(gates = gates, criteria = criteria) })
+
+        model.refresh()
+
+        val detail = loaded(model)
+        assertThat(detail.gates.map { it.name }).containsExactly("lint", "test-daemon", "scope")
+        assertThat(detail.gates.map { it.verdict }).containsExactly("PASS", "FAIL", "PASS")
+        assertThat(detail.gates.map { it.durationMs }).containsExactly(850L, 12000L, null)
+        assertThat(detail.gates.map { it.reason }).containsExactly(null, "tests_failed", null)
+        assertThat(detail.gates.map { it.at }.first()).isEqualTo(Instant.parse("2026-10-16T10:00:01Z"))
+        assertThat(detail.criteria.map { it.ac }).containsExactly("AC-1", "AC-2", "AC-3")
+        assertThat(detail.criteria.map { it.layer }).containsExactly("daemon", "core", "manual")
+        assertThat(detail.criteria.map { it.testFile }).containsExactly(
+            "daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt",
+            "core/src/test/kotlin/sfv2/core/BetaTest.kt",
+            "n/a",
+        )
+        assertThat(detail.criteria.map { it.gate }).containsExactly("FAIL", "none", "manual")
+    }
+
+    @Test
+    fun `AC-6 once the approval event reaches the view the new column shows, the actions go away and the timeline has the owner approval`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val commands = FakeOwnerCommands()
+            val controller = SpecReviewController(commands, Dispatchers.Unconfined)
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            controller.approve("c1")
+
+            // Accepted, but the daemon event has not arrived: the column is still the one the daemon last reported.
+            assertThat(commands.calls).containsExactly(SentMove("c1", Column.SPEC_REVIEW, Column.READY_FOR_DEV, null))
+            assertThat(controller.state.value.sent).isTrue()
+            assertThat(loaded(model).column).isEqualTo("SPEC_REVIEW")
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            val approval = event(1, "owner", "OWNER_APPROVED", """{"from":"SPEC_REVIEW","to":"READY_FOR_DEV"}""")
+            source.reply = { reply(events = listOf(created, approval), column = "READY_FOR_DEV") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_DEV")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.type).isEqualTo("OWNER_APPROVED")
+            assertThat(signed.actor).isEqualTo("owner")
+        }
+
+    @Test
+    fun `AC-6 a change request event sends the card back to refinement, hides the actions and shows the signed request with its note`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val controller = SpecReviewController(FakeOwnerCommands(), Dispatchers.Unconfined)
+
+            controller.requestChange("c1", "cover offline")
+            assertThat(controller.state.value.sent).isTrue()
+
+            val change = event(
+                1,
+                "owner",
+                "OWNER_CHANGE_REQUESTED",
+                """{"from":"SPEC_REVIEW","to":"READY_FOR_REFINEMENT","note":"cover offline"}""",
+            )
+            source.reply = { reply(events = listOf(created, change), column = "READY_FOR_REFINEMENT") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_REFINEMENT")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.actor).isEqualTo("owner")
+            assertThat(signed.payload["note"]).isEqualTo("cover offline")
+        }
 }
