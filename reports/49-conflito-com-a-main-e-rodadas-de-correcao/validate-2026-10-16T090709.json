@@ -1,0 +1,1 @@
+{"outcome": "staged", "agents": [], "rounds": 0, "failed_gates": [], "gates_reused": ["green daemon sfv2.daemon.ConflictResolutionTest", "green daemon sfv2.daemon.ValidatePipelineTest", "green daemon sfv2.daemon.AutonomousDeliveryTest"], "flaky": [], "amendments": []}
