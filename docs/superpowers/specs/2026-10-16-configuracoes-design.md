@@ -15,6 +15,9 @@ _Product Owner_
 - AC-2: Dado um rascunho alterado, quando o dono descarta, então a tela volta aos valores salvos e nada é gravado.
 - AC-3: Dado um rascunho válido e a prova do dono, quando o dono salva, então os valores persistem no daemon e valem a partir do próximo ciclo do dispatcher; um ciclo já em andamento mantém os valores antigos.
 - AC-4: Dado um valor inválido (ex.: pool zero, horário com fim antes do início, limite de custo negativo), quando o dono salva, então o salvamento é recusado com mensagem que nomeia o campo e nada é gravado.
+- AC-9: Dado o daemon sem `SFV2_COST_UNLIMITED=true` no ambiente, quando o dono salva sem limite de custo (os dois campos vazios, ou o limite por dia vazio), então o salvamento é recusado nomeando o campo: tirar o teto de gasto continua exigindo a variável de ambiente do daemon (decisão do #159), e uma configuração salva pelo app não pode contorná-la; com a variável ligada, vazio significa sem limite como a tela descreve.
+- AC-10: Dado um pool acima de 64, um fuso que não existe ou um dia da semana repetido ou inexistente, quando o dono salva, então a recusa nomeia o campo e nada é gravado.
+- AC-11: Dado um salvamento cujo evento `SETTINGS_SAVED` não consegue ser gravado, quando o daemon trata a falha, então o arquivo anterior é restaurado e a resposta é de erro: nada vale sem o evento assinado.
 - AC-5: Dado um salvamento sem a prova do dono, quando o daemon o recebe, então é recusado e os valores salvos não mudam.
 - AC-6: Dado o daemon inacessível, quando o dono salva, então o rascunho é mantido na tela com um erro visível e pode ser salvo depois.
 - AC-7: Dado preferências de notificação (quais tipos, horário silencioso) salvas, quando a tela é reaberta ou o app reiniciado, então os valores salvos são exibidos; nenhuma notificação é entregue por esta entrega.
@@ -45,7 +48,7 @@ Idioma do app: só pt-BR (strings em `Texts`, como `ConnectionScreen`). Tokens d
 _Tech Lead_
 
 - `core` (puro): `FactorySettings` (data class imutável: `poolSize: Int`, `workHours: WorkHoursSetting?` com dias, início, fim e zona, `cost: CostSetting` com `perCardUsd`/`perDayUsd` `BigDecimal?`, `notifications: NotificationSetting` com tipos ligados e horário silencioso) e `FactorySettingsRules.validate(settings): List<SettingsIssue>` (`field`, `reason`); `FactorySettings.DEFAULT`. Novo `EventType` `SETTINGS_SAVED` (ator dono; payload só com os nomes dos campos alterados, nunca valores de custo em log).
-- `daemon`: `SettingsStore(path, clock)` grava `<dataDir>/settings.json` (modo 0600, escrita atômica por arquivo temporário + rename; arquivo ausente = `DEFAULT`). Dois comandos em `Protocol.kt`: `settings.get` (`Request.SettingsGet`, só leitura) e `settings.save` (`Request.SettingsSave(actor, settings, proof)`), respostas `Response.Settings(settings)` e recusa com `field`. `SettingsCommands` valida (AC-4), confere a prova do dono (AC-5), grava o arquivo e depois o evento; inválido ou sem prova não grava nada. Roteados em `SocketServer`, fora de `CardCommands`.
+- `daemon`: `SettingsStore(path, clock)` grava `<dataDir>/settings.json` (modo 0600, escrita atômica por arquivo temporário + rename; arquivo ausente = `DEFAULT`). Dois comandos em `Protocol.kt`: `settings.get` (`Request.SettingsGet`, só leitura) e `settings.save` (`Request.SettingsSave(actor, settings, proof)`), respostas `Response.Settings(settings)` e recusa com `field`. `SettingsCommands` valida (AC-4, AC-9, AC-10), confere a prova do dono (AC-5), grava o arquivo e depois o evento; inválido ou sem prova não grava nada, e se o evento falhar o arquivo anterior é restaurado (AC-11). A regra do AC-9 consulta o ambiente do daemon (`SFV2_COST_UNLIMITED`), nunca um valor enviado pelo app. Limites de validação: pool de 1 a 64, fuso aceito por `ZoneId.of`, dias de `MONDAY` a `SUNDAY` sem repetição. Roteados em `SocketServer`, fora de `CardCommands`.
 - "Próximo ciclo" (AC-3): `ConfiguredDispatchControl` passa a ler o `SettingsStore` a cada chamada e as configurações salvas ganham do `factory.yml` nos campos que elas cobrem (horário, limites); `unlimited` continua só no ambiente. `RunPool` troca `capacity: Int` por `capacity: () -> Int` lido em cada `tryStart`/`hasRoom`; sessões já em andamento não são interrompidas, só a admissão seguinte muda. O ciclo em curso decide com o valor lido no início dele.
 - `app`: `SettingsDraft` (estado puro: valores salvos, rascunho, `changeCount`, `discard()`, `issues`), `SettingsClient` (interface) e `SocketSettingsClient` (JSON por linha no socket do daemon, como `SocketDaemonProbe`; lê o token do dono no arquivo do daemon como a CLI), `SettingsScreen` (Compose, textos em `Texts`, tokens `bad` e `sand` adicionados a `Tokens`) e entrada na navegação do shell. Falha de conexão mantém o rascunho (AC-6).
 - Sem migração: arquivo novo, ausência = defaults, o `factory.yml` segue valendo onde não há valor salvo.
@@ -61,6 +64,9 @@ _Tech Lead_
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
 | AC-4 | core | `core/src/test/kotlin/sfv2/core/FactorySettingsTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
+| AC-10 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
+| AC-11 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
 | AC-6 | app | `app/src/test/kotlin/sfv2/app/SettingsDraftTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
 | AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SettingsCommandsTest.kt` |
