@@ -14,6 +14,7 @@ _Product Owner_
 - **AC-2** — Dado o fim normal da sessão, quando o adaptador conclui, então devolve o caminho da transcrição e o código de saída do processo.
 - **AC-3** — Dado que o `codex exec` termina com código diferente de zero, quando a sessão acaba, então o adaptador devolve esse código e o caminho da transcrição, sem tratá-lo como sucesso.
 - **AC-4** — Dado o runtime codex, quando usado no lugar do runtime existente, então atende a mesma port de runtime e o chamador não precisa mudar.
+- **AC-5** — Dado um `mcpConfig` com nome de servidor fora de `[A-Za-z0-9_-]+` ou um `stage` fora de `[a-z][a-z0-9-]*`, quando a sessão é lançada, então o adaptador recusa com erro que nomeia o campo, nenhum processo inicia e nenhum arquivo é criado; valores de `command` e `args` com aspas ou barra são codificados como texto TOML e nunca alteram a chave do override.
 **Out of scope:** provedor próprio (runtime.provider da V0); seleção de runtime por projeto na UI; cálculo de custo a partir da transcrição.
 **Product fit:** serve o princípio de a fábrica ser dona do próprio estado e não depender de um provedor; a transcrição devolvida alimenta o custo medido por run. Não contradiz o posicionamento.
 **Touches UI:** no
@@ -41,9 +42,13 @@ _Tech Lead_
 | AC-2 | adapters | `adapters/src/test/kotlin/sfv2/adapters/CodexRuntimeTest.kt` |
 | AC-3 | adapters | `adapters/src/test/kotlin/sfv2/adapters/CodexRuntimeTest.kt` |
 | AC-4 | adapters | `adapters/src/test/kotlin/sfv2/adapters/CodexRuntimeTest.kt` |
+| AC-5 | adapters | `adapters/src/test/kotlin/sfv2/adapters/CodexRuntimeTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **O nome do servidor MCP vira chave de configuração** (`-c mcp_servers.<nome>...`) e os valores vão como texto TOML: validar o nome e escapar os valores (AC-5); sem shell em nenhum passo.
+- **Processo externo com timeout** (já no desenho) e kill da árvore ao estourar; a saída `--json` pode conter segredos: só o caminho vai para evento e log.
+- **Nenhum acesso a `~/.codex`:** a sessão não altera a configuração pessoal do dono (já decidido).
 
 ## Rollback
 n/a
