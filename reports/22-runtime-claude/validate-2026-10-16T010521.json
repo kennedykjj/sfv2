@@ -1,0 +1,1 @@
+{"issue":22,"slug":"runtime-claude","pipeline":"validate","started_at":"2026-10-16T04:05:00Z","finished_at":"2026-10-16T04:12:00Z","outcome":"ok","agents":[],"rounds":{"gates":0,"review":0},"gates_failed":[],"flaky":[],"gates_reused":[],"amendments":[],"manual_edit":false}
