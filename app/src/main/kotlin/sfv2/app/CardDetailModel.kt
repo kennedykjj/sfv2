@@ -72,6 +72,59 @@ fun formatCost(costUsd: BigDecimal?): String {
     return "US$ " + String.format(Locale.forLanguageTag("pt-BR"), "%.2f", rounded) + " est."
 }
 
+private val PR_EVENTS = setOf("CARD_MOVED", "OWNER_APPROVED", "PR_MERGED")
+private val SECONDS_FORMAT_LOCALE = Locale.forLanguageTag("pt-BR")
+
+/** One gate line of the Summary tab: verdict as text, duration text and the failure reason (only on FAIL). */
+data class GateLine(val name: String, val verdict: String, val duration: String, val reason: String?)
+
+fun gateLine(gate: GateRow): GateLine {
+    val duration = when (val ms = gate.durationMs) {
+        null -> Texts.NO_DURATION
+        in 0 until 1_000 -> "$ms ms"
+        else -> String.format(SECONDS_FORMAT_LOCALE, "%.1f s", ms / 1_000.0)
+    }
+    return GateLine(gate.name, gate.verdict, duration, gate.reason.takeIf { gate.verdict == "FAIL" })
+}
+
+enum class PrState { OPEN, MERGED }
+
+data class PullRequestView(val number: Int, val state: PrState)
+
+/** The PR of the last event that carries one; open until that event is `PR_MERGED`; null when no event has a PR. */
+fun cardPullRequest(events: List<TimelineEvent>): PullRequestView? {
+    val last = events.lastOrNull { it.type in PR_EVENTS && it.payload["pr"]?.toIntOrNull() != null } ?: return null
+    val number = requireNotNull(last.payload["pr"]?.toIntOrNull()) { "pr missing in event ${last.id}" }
+    return PullRequestView(number, if (last.type == "PR_MERGED") PrState.MERGED else PrState.OPEN)
+}
+
+data class OpenBlock(val reason: String, val at: Instant)
+
+/** The last `CARD_BLOCKED` when no `CARD_UNBLOCKED` follows it; null otherwise. */
+fun openBlock(events: List<TimelineEvent>): OpenBlock? {
+    val last = events.lastOrNull { it.type == "CARD_BLOCKED" || it.type == "CARD_UNBLOCKED" } ?: return null
+    if (last.type == "CARD_UNBLOCKED") return null
+    return OpenBlock(last.payload["reason"]?.takeIf { it.isNotBlank() } ?: Texts.BLOCK_NO_REASON, last.at)
+}
+
+/** Runs of one stage with the stage subtotal; [status] is PARTIAL when only some runs have a known cost. */
+data class StageRunCost(val stage: String, val status: CostStatus, val costUsd: BigDecimal?, val runs: List<RunRow>)
+
+/** Groups runs by stage in order of first appearance; an unknown run cost is never counted as zero. */
+fun costByStage(runs: List<RunRow>): List<StageRunCost> =
+    runs.groupBy { it.stage }.map { (stage, stageRuns) ->
+        val known = stageRuns.mapNotNull { it.costUsd }
+        val status = when {
+            known.isEmpty() -> CostStatus.UNKNOWN
+            known.size < stageRuns.size -> CostStatus.PARTIAL
+            else -> CostStatus.KNOWN
+        }
+        StageRunCost(stage, status, known.takeIf { it.isNotEmpty() }?.fold(BigDecimal.ZERO, BigDecimal::add), stageRuns)
+    }
+
+/** The gate state of a criterion as text: `PASS`, `FAIL`, `none` or `manual`. */
+fun criterionResult(criterion: CriterionRow): String = criterion.gate
+
 class CardDetailModel(private val cardId: String, private val source: CardDetailSource) {
     private val mutableState = MutableStateFlow<CardDetailState>(CardDetailState.Loading)
     val state: StateFlow<CardDetailState> = mutableState

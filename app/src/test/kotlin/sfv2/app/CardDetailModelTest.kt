@@ -446,6 +446,86 @@ class CardDetailModelTest {
         assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"))
         assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
     }
+
+    private fun aGate(name: String, verdict: String, reason: String? = null, durationMs: Long? = null) =
+        GateRow(name, verdict, reason, durationMs, Instant.parse("2026-10-16T10:00:01Z"))
+
+    @Test
+    fun `AC-1 each gate shows its verdict as text, its duration and the failure reason only on FAIL`() {
+        val pass = gateLine(aGate("lint", "PASS", durationMs = 850))
+        val fail = gateLine(aGate("test-daemon", "FAIL", "tests_failed", 12000))
+        val noProcess = gateLine(aGate("scope", "PASS"))
+
+        assertThat(pass).isEqualTo(GateLine("lint", "PASS", "850 ms", null))
+        assertThat(fail).isEqualTo(GateLine("test-daemon", "FAIL", "12,0 s", "tests_failed"))
+        assertThat(noProcess.duration).isEqualTo(Texts.NO_DURATION)
+        assertThat(noProcess.reason).isNull()
+    }
+
+    @Test
+    fun `AC-2 each criterion result is the state name in text and a manual criterion does not pretend an automatic result`() {
+        fun result(gate: String) = criterionResult(CriterionRow("AC-1", "app", "app/src/test/kotlin/sfv2/app/XTest.kt", gate))
+
+        assertThat(result("PASS")).isEqualTo("PASS")
+        assertThat(result("FAIL")).isEqualTo("FAIL")
+        assertThat(result("none")).isEqualTo("none")
+        assertThat(result("manual")).isEqualTo("manual")
+    }
+
+    @Test
+    fun `AC-3 the pull request is open until PR_MERGED and the number comes from the last event that carries it`() {
+        val moved = ClosureFixtures.anEvent(1, "CARD_MOVED", mapOf("to" to "REVIEW", "pr" to "7"))
+        val approved = ClosureFixtures.anEvent(2, "OWNER_APPROVED", mapOf("pr" to "9"))
+        val merged = ClosureFixtures.anEvent(3, "PR_MERGED", mapOf("pr" to "9"))
+        val plain = ClosureFixtures.anEvent(4, "CARD_MOVED", mapOf("to" to "DONE"))
+
+        assertThat(cardPullRequest(listOf(plain))).isNull()
+        assertThat(cardPullRequest(emptyList())).isNull()
+        assertThat(cardPullRequest(listOf(moved))).isEqualTo(PullRequestView(7, PrState.OPEN))
+        assertThat(cardPullRequest(listOf(moved, approved, plain))).isEqualTo(PullRequestView(9, PrState.OPEN))
+        assertThat(cardPullRequest(listOf(moved, approved, merged, plain))).isEqualTo(PullRequestView(9, PrState.MERGED))
+    }
+
+    @Test
+    fun `AC-4 a block shows the reason and instant of the last block until it is unblocked`() {
+        val first = ClosureFixtures.anEvent(1, "CARD_BLOCKED", mapOf("reason" to "ci_red"))
+        val unblocked = ClosureFixtures.anEvent(2, "CARD_UNBLOCKED")
+        val second = ClosureFixtures.anEvent(3, "CARD_BLOCKED", mapOf("reason" to "needs owner"))
+        val noReason = ClosureFixtures.anEvent(4, "CARD_BLOCKED")
+
+        assertThat(openBlock(emptyList())).isNull()
+        assertThat(openBlock(listOf(first))).isEqualTo(OpenBlock("ci_red", first.at))
+        assertThat(openBlock(listOf(first, unblocked))).isNull()
+        assertThat(openBlock(listOf(first, unblocked, second))).isEqualTo(OpenBlock("needs owner", second.at))
+        assertThat(openBlock(listOf(first, unblocked, second, noReason)))
+            .isEqualTo(OpenBlock("motivo não informado", noReason.at))
+    }
+
+    @Test
+    fun `AC-5 cost is grouped by stage in order of appearance with a subtotal and an unknown cost is never zero`() {
+        fun run(n: Int, stage: String, status: CostStatus, cost: String?) =
+            RunRow("run-$n", stage, "claude", status, cost?.let(::BigDecimal), null)
+        val runs = listOf(
+            run(1, "refine", CostStatus.KNOWN, "0.10"),
+            run(2, "develop", CostStatus.KNOWN, "0.40"),
+            run(3, "refine", CostStatus.KNOWN, "0.25"),
+            run(4, "develop", CostStatus.UNKNOWN, null),
+            run(5, "validate", CostStatus.UNKNOWN, null),
+        )
+
+        val stages = costByStage(runs)
+
+        assertThat(stages.map { it.stage }).containsExactly("refine", "develop", "validate")
+        assertThat(stages.map { it.runs.map { r -> r.runId } })
+            .containsExactly(listOf("run-1", "run-3"), listOf("run-2", "run-4"), listOf("run-5"))
+        assertThat(stages.map { it.status }).containsExactly(CostStatus.KNOWN, CostStatus.PARTIAL, CostStatus.UNKNOWN)
+        assertThat(stages[0].costUsd).isEqualByComparingTo("0.35")
+        assertThat(formatCost(stages[0].costUsd)).isEqualTo("US$ 0,35 est.")
+        assertThat(stages[1].costUsd).isEqualByComparingTo("0.40")
+        assertThat(stages[2].costUsd).isNull()
+        assertThat(formatCost(stages[2].costUsd)).isEqualTo("US$ ?")
+        assertThat(costByStage(emptyList())).isEmpty()
+    }
 }
 
 data class SentConfirm(val cardId: String, val draftHash: String)
