@@ -4,12 +4,10 @@ import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 import sfv2.core.Actor
-import sfv2.core.Card
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
-import sfv2.store.StoredEvent
 
 data class RunLock(val cardId: String, val pid: Long, val startedAt: Instant)
 
@@ -19,35 +17,15 @@ sealed interface StartDecision {
     data class CardLocked(val holder: RunLock) : StartDecision
 }
 
-/** What the pool needs from the event store to record a lock release. */
-interface LockEventRecorder {
-    fun card(id: String): Card?
-    fun recordChange(id: String, card: Card, event: Event): Long
-}
-
-private class StoreLockEventRecorder(private val store: CardEventStore) : LockEventRecorder {
-    override fun card(id: String): Card? = store.card(id)
-    override fun recordChange(id: String, card: Card, event: Event): Long = store.recordChange(id, card, event)
-}
-
 /** Bounded set of run slots with one lock per card; locks of dead owners are released by [sweep]. */
 class RunPool(
     private val capacity: Int,
-    private val store: LockEventRecorder,
+    private val store: CardEventStore,
     private val clock: Clock,
     private val probe: ProcessProbe,
     private val log: DaemonLog = StderrDaemonLog,
-    private val onEvent: (StoredEvent) -> Unit = {},
+    private val recorder: EventRecorder,
 ) {
-    constructor(
-        capacity: Int,
-        store: CardEventStore,
-        clock: Clock,
-        probe: ProcessProbe,
-        log: DaemonLog = StderrDaemonLog,
-        onEvent: (StoredEvent) -> Unit = {},
-    ) : this(capacity, StoreLockEventRecorder(store), clock, probe, log, onEvent)
-
     private val locks = linkedMapOf<String, RunLock>()
 
     init {
@@ -72,14 +50,13 @@ class RunPool(
     fun sweep(): List<RunLock> {
         val dead = locks.values.filter { !probe.isAlive(it.pid, it.startedAt) }
         return dead.filter { lock ->
-            val outcome = try {
+            try {
                 recordRelease(lock)
             } catch (e: RuntimeException) {
                 log.log("lock_release_failed", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
                 return@filter false
             }
             locks.remove(lock.cardId)
-            outcome?.let(onEvent)
             true
         }
     }
@@ -87,11 +64,11 @@ class RunPool(
     @Synchronized
     fun active(): List<RunLock> = locks.values.toList()
 
-    private fun recordRelease(lock: RunLock): StoredEvent? {
+    private fun recordRelease(lock: RunLock) {
         val card = store.card(lock.cardId)
         if (card == null) {
             log.log("lock_release_orphan_card", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-            return null
+            return
         }
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
@@ -100,8 +77,7 @@ class RunPool(
             type = EventType.LOCK_RELEASED,
             payload = mapOf("reason" to "owner_dead", "pid" to lock.pid.toString()),
         )
-        val seq = store.recordChange(lock.cardId, card, event)
+        recorder.record(lock.cardId, card, event)
         log.log("lock_released", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-        return StoredEvent(seq, lock.cardId, event)
     }
 }

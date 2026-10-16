@@ -68,7 +68,7 @@ class GateExecutorTest {
         timeout = Duration.ofSeconds(30),
     )
 
-    private fun executor(runner: GateRunner) = GateExecutor(store, EventStream(store), clock, runner)
+    private fun executor(runner: GateRunner) = GateExecutor(store, EventRecorder(store, EventStream(store)), clock, runner)
 
     private fun gateEvents(): List<Event> = store.events("card-1").filter { it.type.name == "GATE_FINISHED" }
 
