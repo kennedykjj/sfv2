@@ -1,0 +1,1 @@
+{"issue": 45, "slug": "validate-abre-o-pr-e-espera-o-ci", "pipeline": "refine", "started_at": "2026-10-16T00:00:00Z", "finished_at": "2026-10-16T00:00:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 15904, "duration_s": 13}], "rounds": {"po": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
