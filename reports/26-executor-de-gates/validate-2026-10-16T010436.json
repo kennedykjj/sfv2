@@ -1,0 +1,1 @@
+{"issue":26,"slug":"executor-de-gates","pipeline":"validate","started_at":"2026-10-16T04:10:00Z","finished_at":"2026-10-16T04:30:00Z","outcome":"ok","agents":[],"rounds":{"engineer":0},"gates_failed":[],"flaky":[],"gates_reused":["green daemon sfv2.daemon.GateExecutorTest","green core sfv2.core.EventTest"],"manual_edit":false,"amendments":[]}
