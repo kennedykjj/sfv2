@@ -87,10 +87,36 @@ class RefineRuntime private constructor(
                 log = log,
                 onRunFinished = control::onRunFinished,
             )
+            val gateExecutor = GateExecutor(store, recorder, clock, ProcessGateRunner(log), log)
+            val validateLauncher = ValidateStageLauncher(
+                pipelineFor = { cardId ->
+                    val project = projectOf(cardId, store, registry)
+                    ValidatePipeline(
+                        project = project,
+                        store = store,
+                        recorder = recorder,
+                        worktrees = worktrees,
+                        sessions = sessions,
+                        mcpPort = endpoint.port,
+                        runtime = runtime,
+                        costRecorder = costRecorder,
+                        branchSync = SystemBranchSync(),
+                        gates = ProjectValidateGates(
+                            project, store, recorder, gateExecutor, changedPaths, clock, dataDir.resolve("gates"),
+                        ),
+                        configDir = dataDir.resolve("mcp"),
+                        clock = clock,
+                        model = MODEL,
+                    )
+                },
+                pool = pool,
+                log = log,
+                onRunFinished = control::onRunFinished,
+            )
             val dispatcher = Dispatcher(
                 store = store,
                 pool = pool,
-                launcher = launcher,
+                launcher = StageRouter(mapOf(DispatchStage.REFINE to launcher, DispatchStage.VALIDATE to validateLauncher)),
                 pause = FilePauseSwitch(dataDir.resolve("PAUSE")),
                 schedule = control,
                 limits = DispatchLimits(emptyMap()),
@@ -98,7 +124,7 @@ class RefineRuntime private constructor(
                 tick = TICK,
                 log = log,
                 launchGuard = control,
-                stages = setOf(DispatchStage.REFINE),
+                stages = setOf(DispatchStage.REFINE, DispatchStage.VALIDATE),
             )
             return RefineRuntime(dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded)
         }
