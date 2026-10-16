@@ -43,6 +43,18 @@ sealed interface Request {
         override fun toString(): String = "CardRebuild(actor=$actor, project=$project, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Imports an issue by [id] or the results of a [query] (exactly one) from the tracker of [project]. */
+    data class CardImport(
+        val actor: Actor,
+        val project: String? = null,
+        val id: String? = null,
+        val query: String? = null,
+        val proof: String? = null,
+    ) : Request {
+        override fun toString(): String =
+            "CardImport(actor=$actor, project=$project, id=$id, query=${if (query == null) "null" else "***"}, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -117,6 +129,10 @@ fun parseRequest(line: String): Request {
         "card.rebuild" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             Request.CardRebuild(actor, stringField(obj, "project"), stringField(obj, "proof"))
+        }
+        "card.import" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            Request.CardImport(actor, stringField(obj, "project"), stringField(obj, "id"), stringField(obj, "query"), stringField(obj, "proof"))
         }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList

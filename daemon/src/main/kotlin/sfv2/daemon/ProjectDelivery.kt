@@ -7,6 +7,11 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import sfv2.adapters.GhForge
+import sfv2.adapters.GhTracker
+import sfv2.ports.CloseResult
+import sfv2.ports.Tracker
+import sfv2.ports.TrackerException
+import sfv2.ports.TrackerItem
 import sfv2.ports.Forge
 import sfv2.ports.ForgeException
 import sfv2.ports.MergeResult
@@ -33,6 +38,14 @@ object ProjectDelivery {
         return GhForge(repo = slug, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
     }
 
+    /** The project's [Tracker]: GitHub issues through `gh` when origin is on GitHub, otherwise one that fails every call. */
+    fun trackerOf(project: Project, tmpDir: Path): Tracker {
+        val repo = Path.of(project.repo)
+        val slug = originSlug(repo) ?: return UnavailableTracker
+        Files.createDirectories(tmpDir)
+        return GhTracker(repo = slug, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
+    }
+
     private fun originSlug(repo: Path): String? {
         val output = Files.createTempFile("sfv2-origin", ".txt")
         try {
@@ -55,6 +68,19 @@ object ProjectDelivery {
             Files.deleteIfExists(output)
         }
     }
+}
+
+/** Stands in when the project has no GitHub origin: every call fails. */
+private object UnavailableTracker : Tracker {
+    private fun unavailable(operation: String): Nothing = throw TrackerException("$operation: project has no GitHub origin")
+
+    override fun fetch(id: String): TrackerItem? = unavailable("fetch")
+
+    override fun search(query: String): List<TrackerItem> = unavailable("search")
+
+    override fun writeMilestone(id: String, milestone: String) = unavailable("writeMilestone")
+
+    override fun close(id: String, comment: String): CloseResult = unavailable("close")
 }
 
 /** Stands in when the project has no GitHub origin: every call fails, so the card is blocked and never staged. */
