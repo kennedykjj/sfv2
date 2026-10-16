@@ -117,6 +117,21 @@ class EventTest {
     }
 
     @Test
+    fun `AC-1 a card blocked event round trips through JSON with its payload`() {
+        val type = EventType.entries.firstOrNull { it.name == "CARD_BLOCKED" }
+        assertThat(type).isNotNull()
+        val event = EventFixtures.anEvent(
+            actor = Actor.Factory("cost"),
+            type = requireNotNull(type),
+            payload = mapOf("reason" to "card_cost_limit", "spent_usd" to "5.10", "limit_usd" to "5", "estimate" to "true"),
+        )
+
+        val decoded = EventJson.decode(EventJson.encode(event))
+
+        assertThat(decoded).isEqualTo(event)
+    }
+
+    @Test
     fun `reading an event without a field fails naming the field`() {
         val json = EventJson.encode(EventFixtures.anEvent()).replace("\"id\":\"evt-1\",", "")
 
