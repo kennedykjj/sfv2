@@ -1,0 +1,1 @@
+{"issue": 48, "slug": "pr-mergeado-fora-da-fabrica", "pipeline": "validate", "started_at": "2026-10-16T11:50:00Z", "finished_at": "2026-10-16T12:10:00Z", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
