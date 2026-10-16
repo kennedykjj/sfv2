@@ -1,0 +1,1 @@
+{"issue":129,"slug":"runpool-so-soltar-o-lock-orfao-depois-de-g","pipeline":"refine","started_at":"2026-10-16T00:55:00Z","finished_at":"2026-10-16T01:10:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15901,"duration_s":12}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
