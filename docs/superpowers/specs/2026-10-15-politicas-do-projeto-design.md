@@ -36,7 +36,7 @@ _Tech Lead_
   - `data class ProjectPolicies(deliveryMode, signers: Map<ExternalEffect, Signer>, conventions)` com `ProjectPolicies.DEFAULT` e `ProjectPolicies.from(raw: Map<String, Any?>?)`.
   - `class InvalidPolicyException(val field: String, message) : RuntimeException`, mensagem com o nome do campo e o valor rejeitado.
 - **Chaves lidas:** `delivery_mode`, `signers.<efeito>`, `conventions.commit_format`, `conventions.branch_format`. Chave ausente → padrão; chave presente e inválida → exceção com o caminho (ex.: `signers.close`). Chave desconhecida dentro de `signers` também é inválida.
-- **Padrões de assinatura:** `import`=owner, `close`=owner (fechamento com confirmação), `milestone`=policy (decisão #37: marcos sem confirmação).
+- **Padrões de assinatura:** `import`=owner, `milestone`=owner, `close`=owner. Todo efeito externo exige o dono por padrão; `policy` só vale escrito no factory.yml. (Revisão do dono interino: "marcos sem confirmação" é proposta ainda não aceita em decisions.md, não decisão; padrão implícito violaria "nada sai da máquina sem evento assinado ou política explícita".)
 - **Validação de formato:** não vazio; só placeholders conhecidos (commit: `type`, `scope`, `subject`, `id`; branch: `id`, `slug`); commit exige `{subject}`, branch exige `{id}`.
 - **Migração:** nenhuma (tipos novos, sem persistência).
 
@@ -62,7 +62,7 @@ n/a
 - Teste novo `ProjectPoliciesTest.kt`: nenhuma suíte do `core` cobre políticas (só Card, Event, Module, MoveRules).
 - Entrada é `Map<String, Any?>`, não YAML: o core não tem IO nem biblioteca de parsing; o daemon faz a leitura (fora do escopo).
 - Efeitos externos: IMPORT, MILESTONE, CLOSE, os três toques ao tracker da decisão #5; merge não entra, é coberto pelo modo de entrega.
-- Signatário `POLICY` representa "política explícita que dispensa a assinatura" (ARCHITECTURE, invariante 7); só vale se escrito no factory.yml ou no padrão de MILESTONE.
+- Signatário `POLICY` representa "política explícita que dispensa a assinatura" (ARCHITECTURE, invariante 7); só vale se escrito no factory.yml, nunca como padrão.
 - Peso `standard`: 6 critérios de aceitação (mais de 3) numa só camada.
 
 ## Open questions
