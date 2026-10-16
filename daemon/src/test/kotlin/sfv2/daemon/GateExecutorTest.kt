@@ -327,7 +327,7 @@ class GateExecutorTest {
 
         assertThat(verdict).isEqualTo(GateVerdict.Pass)
         assertThat(runner.command.takeLast(2)).containsExactly("--", "a/FooTest.kt")
-        assertThat(runner.command).contains("abc1234", "git")
+        assertThat(runner.command).contains("abc1234..HEAD", "git")
         assertThat(gateEvents().single().payload["gate"]).isEqualTo("acceptance-edit")
     }
 
@@ -375,5 +375,40 @@ class GateExecutorTest {
         val payload = gateEvents().single().payload
         assertThat(payload["reason"]).isEqualTo("start_error")
         assertThat(payload["duration_ms"]).isEqualTo("40")
+    }
+
+    @Test
+    fun `AC-4 acceptance edit command ignores assertions that a merge of the base brought into the test files`() {
+        val repo = Files.createDirectory(dir.resolve("repo"))
+        fun git(vararg args: String): String {
+            val process = ProcessBuilder(listOf("git", "-C", repo.toString(), "-c", "user.name=t", "-c", "user.email=t@t") + args)
+                .redirectErrorStream(true).start()
+            val out = process.inputStream.readBytes().toString(Charsets.UTF_8)
+            check(process.waitFor() == 0) { "git ${args.toList()}: $out" }
+            return out
+        }
+        git("init", "-q", "-b", "main")
+        Files.createDirectories(repo.resolve("a"))
+        Files.writeString(repo.resolve("a/FooTest.kt"), "assertThat(1)\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "qa")
+        val qa = git("rev-parse", "HEAD").trim()
+        git("switch", "-q", "-c", "feat")
+        Files.writeString(repo.resolve("b.txt"), "impl")
+        git("add", ".")
+        git("commit", "-q", "-m", "impl")
+        git("switch", "-q", "main")
+        Files.writeString(repo.resolve("a/FooTest.kt"), "assertThat(1)\nassertThat(2)\n")
+        git("commit", "-q", "-am", "main adds a test assertion")
+        git("switch", "-q", "feat")
+        git("merge", "-q", "--no-edit", "main")
+        val runner = RecordingRunner()
+        AcceptanceEditGate(executor(runner), runner).check("card-1", repo, qa, listOf("a/FooTest.kt"), keep, runDir)
+
+        val process = ProcessBuilder(runner.command).redirectErrorStream(true).start()
+        val patch = process.inputStream.readBytes().toString(Charsets.UTF_8)
+        process.waitFor()
+
+        assertThat(patch.lines().filter { it.startsWith("+") || it.startsWith("-") }).isEmpty()
     }
 }
