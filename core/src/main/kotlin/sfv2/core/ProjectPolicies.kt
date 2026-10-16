@@ -25,13 +25,29 @@ data class Conventions(val commitFormat: String, val branchFormat: String)
 
 class InvalidPolicyException(val field: String, message: String) : RuntimeException(message)
 
+sealed interface TrackerConfig {
+    val provider: String
+
+    data object GitHub : TrackerConfig {
+        override val provider: String = "github"
+    }
+
+    data class Jira(val site: String, val project: String) : TrackerConfig {
+        override val provider: String = "jira"
+    }
+}
+
 data class ProjectPolicies(
     val deliveryMode: DeliveryMode,
     val signers: Map<ExternalEffect, Signer>,
     val conventions: Conventions,
     val milestones: Set<Milestone> = emptySet(),
+    val tracker: TrackerConfig = TrackerConfig.GitHub,
 ) {
     companion object {
+        private val JIRA_SITE = Regex("^[a-z0-9][a-z0-9.-]{0,62}$")
+        private val JIRA_PROJECT = Regex("^[A-Z][A-Z0-9_]{1,19}$")
+
         private const val DEFAULT_COMMIT_FORMAT = "{type}({scope}): {subject}"
         private const val DEFAULT_BRANCH_FORMAT = "feat/{id}-{slug}"
         private val PLACEHOLDER = Regex("\\{([^{}]*)}")
@@ -61,7 +77,26 @@ data class ProjectPolicies(
                     ),
                 ),
                 milestones = readMilestones(raw["milestones"]),
+                tracker = readTracker(raw),
             )
+        }
+
+        private fun readTracker(raw: Map<String, Any?>): TrackerConfig {
+            val value = raw["tracker"] ?: return TrackerConfig.GitHub
+            return when (value) {
+                "github" -> TrackerConfig.GitHub
+                "jira" -> TrackerConfig.Jira(
+                    site = jiraField(raw, "jira_site", JIRA_SITE),
+                    project = jiraField(raw, "jira_project", JIRA_PROJECT),
+                )
+                else -> invalid("tracker", value)
+            }
+        }
+
+        private fun jiraField(raw: Map<String, Any?>, key: String, pattern: Regex): String {
+            val value = raw[key] ?: throw InvalidPolicyException(key, "policy field $key is required when tracker is jira")
+            if (value !is String || !pattern.matches(value)) invalid(key, value)
+            return value
         }
 
         private fun readMilestones(raw: Any?): Set<Milestone> {

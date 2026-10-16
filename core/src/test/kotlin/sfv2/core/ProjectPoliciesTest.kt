@@ -122,6 +122,31 @@ class ProjectPoliciesTest {
     }
 
     @Test
+    fun `tracker defaults to github and jira carries validated site and project`() {
+        assertThat(defaults.tracker).isEqualTo(TrackerConfig.GitHub)
+        assertThat(ProjectPolicies.from(mapOf("tracker" to "github")).tracker.provider).isEqualTo("github")
+        val jira = ProjectPolicies.from(
+            mapOf("tracker" to "jira", "jira_site" to "acme.atlassian.net", "jira_project" to "PROJ"),
+        ).tracker
+        assertThat(jira).isEqualTo(TrackerConfig.Jira("acme.atlassian.net", "PROJ"))
+        assertThat(jira.provider).isEqualTo("jira")
+    }
+
+    @Test
+    fun `invalid tracker settings name the field`() {
+        val site = "acme.atlassian.net"
+        listOf(
+            mapOf<String, Any?>("tracker" to "gitlab") to "tracker",
+            mapOf<String, Any?>("tracker" to "jira", "jira_project" to "PROJ") to "jira_site",
+            mapOf<String, Any?>("tracker" to "jira", "jira_site" to site) to "jira_project",
+            mapOf<String, Any?>("tracker" to "jira", "jira_site" to "Bad Site", "jira_project" to "PROJ") to "jira_site",
+            mapOf<String, Any?>("tracker" to "jira", "jira_site" to site, "jira_project" to "proj") to "jira_project",
+        ).forEach { (raw, field) ->
+            assertThat(assertThrows<InvalidPolicyException> { ProjectPolicies.from(raw) }.field).isEqualTo(field)
+        }
+    }
+
+    @Test
     fun `AC-6 partial policies keep present fields and default the rest`() {
         val policies = ProjectPolicies.from(
             mapOf(
