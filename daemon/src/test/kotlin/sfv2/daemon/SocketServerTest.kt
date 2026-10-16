@@ -271,21 +271,16 @@ class SocketServerTest {
     private val fixedNow = Instant.parse("2026-10-15T10:00:00Z")
     private val clock = Clock.fixed(fixedNow, ZoneOffset.UTC)
 
-    private fun withCardServer(queueLimit: Int = 1000, block: (CardEventStore) -> Unit) {
+    private fun withCardServer(block: (CardEventStore) -> Unit) {
         Database.open(runtimeDir.resolve("cards.db")).use { db ->
             val store = CardEventStore(db)
-            startCardServer(store, queueLimit)
+            startCardServer(store)
             block(store)
         }
     }
 
-    private fun startCardServer(store: CardEventStore, queueLimit: Int = 1000) {
-        servers.add(
-            SocketServer.start(
-                socketPath(),
-                commands = CardCommands(store, clock, subscriberQueueLimit = queueLimit),
-            ),
-        )
+    private fun startCardServer(store: CardEventStore) {
+        servers.add(SocketServer.start(socketPath(), commands = CardCommands(store, clock)))
     }
 
     private class EventStreamClient(private val channel: SocketChannel) : AutoCloseable {
@@ -320,7 +315,10 @@ class SocketServerTest {
 
     private fun JsonObject.seq(): Long = getValue("seq").jsonPrimitive.long
 
-    private fun bigTitle(n: Int): String = "t$n-" + "x".repeat(30_000)
+    // Above the default per-subscriber queue of 1000, with titles big enough to fill the socket buffer.
+    private val flood = 1100
+
+    private fun bigTitle(n: Int): String = "t$n-" + "x".repeat(5_000)
 
     @Test
     fun `AC-1 stream two subscribers receive the same events in the same order`() = withCardServer { _ ->
@@ -370,26 +368,26 @@ class SocketServerTest {
 
     @Test
     fun `AC-3 stream a subscriber that never reads does not delay the others or the writes`() =
-        withCardServer(queueLimit = 3) { store ->
-            subscribe().use { slow ->
+        withCardServer { store ->
+            subscribe().use { _ ->
                 subscribe().use { fast ->
-                    val ids = (1..40).map { n ->
+                    val ids = (1..flood).map { n ->
                         val id = createCard(bigTitle(n))
                         assertThat(fast.nextEvent().str("card")).isEqualTo(id)
                         id
                     }
 
-                    assertThat(ids.flatMap { store.events(it) }).hasSize(40)
+                    assertThat(ids.flatMap { store.events(it) }).hasSize(flood)
                 }
             }
         }
 
     @Test
     fun `AC-4 stream a subscriber that fell behind is dropped and resumes by its last seq without loss`() =
-        withCardServer(queueLimit = 3) { _ ->
+        withCardServer { _ ->
             subscribe().use { slow ->
                 subscribe().use { fast ->
-                    val all = (1..40).map { n ->
+                    val all = (1..flood).map { n ->
                         createCard(bigTitle(n))
                         fast.nextEvent().seq()
                     }
@@ -427,7 +425,7 @@ class SocketServerTest {
 
     @Test
     fun `AC-6 stream a subscriber that disconnects does not affect the others or the daemon`() =
-        withCardServer(queueLimit = 3) { store ->
+        withCardServer { store ->
             val gone = subscribe()
             subscribe().use { stayer ->
                 gone.close()
