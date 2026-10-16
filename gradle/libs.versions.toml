@@ -3,6 +3,7 @@ kotlin = "2.4.20"
 junit = "6.1.2"
 assertj = "3.27.6"
 clikt = "5.0.3"
+jackson = "2.18.2"
 
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -11,3 +12,4 @@ junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
