@@ -14,3 +14,16 @@ CREATE TABLE event (
 );
 
 CREATE INDEX event_card_id ON event(card_id);
+
+CREATE TABLE spec (
+    card_id TEXT NOT NULL PRIMARY KEY,
+    path TEXT NOT NULL,
+    hash TEXT NOT NULL
+);
+
+upsertSpec:
+INSERT INTO spec(card_id, path, hash) VALUES (?, ?, ?)
+ON CONFLICT(card_id) DO UPDATE SET path = excluded.path, hash = excluded.hash;
+
+selectSpec:
+SELECT path, hash FROM spec WHERE card_id = ?;

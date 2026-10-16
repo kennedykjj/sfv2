@@ -14,7 +14,7 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
     override fun close() = driver.close()
 
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
 
         fun open(path: Path): Database {
             val driver = JdbcSqliteDriver("jdbc:sqlite:$path")
