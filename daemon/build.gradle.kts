@@ -1,5 +1,6 @@
 plugins {
     id("sfv2.kotlin-jvm")
+    id("org.jetbrains.kotlin.plugin.serialization")
     application
 }
 
@@ -12,5 +13,5 @@ dependencies {
     implementation(project(":store"))
     implementation(project(":ports"))
     implementation(project(":adapters"))
-    implementation(libs.jackson.databind)
+    implementation(libs.kotlinx.serialization.json)
 }
