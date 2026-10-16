@@ -1,0 +1,1 @@
+{"issue": 32, "slug": "gates-de-spec-plano-de-teste-e-peso", "pipeline": "validate", "started_at": "2026-10-16T04:12:00Z", "finished_at": "2026-10-16T04:20:02Z", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
