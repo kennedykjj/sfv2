@@ -22,8 +22,14 @@ class Sfv2Command(version: String) : CliktCommand(name = "sfv2") {
 }
 
 /** Runs the CLI on [args] and returns its exit code; [out] and [err] receive what it prints. */
-fun runCli(args: List<String>, version: String, out: (String) -> Unit, err: (String) -> Unit): Int {
-    val command = Sfv2Command(version)
+fun runCli(
+    args: List<String>,
+    version: String,
+    out: (String) -> Unit,
+    err: (String) -> Unit,
+    env: Map<String, String>,
+): Int {
+    val command = Sfv2Command(version).withCardCommands(CliEnvironment(env, out, err))
     return try {
         command.parse(args)
         0
@@ -34,5 +40,5 @@ fun runCli(args: List<String>, version: String, out: (String) -> Unit, err: (Str
 }
 
 fun main(args: Array<String>) {
-    exitProcess(runCli(args.toList(), BuildInfo.version, ::println, System.err::println))
+    exitProcess(runCli(args.toList(), BuildInfo.version, ::println, System.err::println, System.getenv()))
 }
