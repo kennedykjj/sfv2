@@ -13,6 +13,7 @@ _Product Owner_
 - **AC-1** — Dado uma spec com critérios `AC-n`, quando o gate de spec roda, então cada critério tem uma linha no plano de teste com camada existente no projeto e caminho de teste; critério sem linha, com camada inexistente ou sem caminho vira um achado que nomeia o AC.
 - **AC-2** — Dado uma spec, quando o gate calcula o peso, então o resultado é `light`, `standard` ou `heavy`, e é `heavy` quando os arquivos citados em Architecture tocam duas camadas ou mais, a seção Security está preenchida ou há migração destrutiva; a contagem de ACs não entra no cálculo.
 - **AC-3** — Dado um peso declarado ausente, fora de `light|standard|heavy` ou abaixo do calculado, quando o gate roda, então a spec é recusada com um achado que informa o peso declarado e o calculado.
+- **AC-4** — Dado uma spec cujos critérios aparecem como `- AC-1:`, `**AC-1** —` ou `AC-1 —`, quando o gate de spec roda, então todos os critérios são encontrados e conferidos contra o plano de teste, e uma spec sem nenhum critério reconhecível vira achado `TEST_PLAN` (não passa em silêncio).
 **Out of scope:** escrever ou corrigir a spec (o gate só devolve achados); rodar os testes do plano ou checar que o arquivo de teste existe no disco; mover o card ou notificar o dono (é do pipeline que consome o gate); recusar peso declarado acima do calculado.
 **Product fit:** serve ao princípio "gates são scripts, não a palavra do agente" e ao propósito de o dono aparecer só onde a decisão é dele. Não contradiz o posicionamento nem o que está fora de escopo.
 **Touches UI:** no
@@ -32,7 +33,7 @@ Camada única: `daemon`. Função pura (sem IO, sem relógio): recebe o texto da
 - `SpecCheck(weight: SpecWeight, findings: List<SpecFinding>)`; `SpecGates.check(specText: String, layers: List<SpecLayer>): SpecCheck`. Sem achados = spec aprovada pelo gate.
 
 **Regras**
-- Plano de teste: os ACs são os `**AC-n**` da seção Product; cada um precisa de uma linha na tabela de `## Test plan` com camada em `layers` (ou `manual`) e, para camada real, caminho entre crases que case com um glob de `tests` da camada. Linha de `manual` não exige caminho.
+- Plano de teste: os ACs são os identificadores `AC-n` da seção Product, em qualquer das formas que as specs da fábrica já usam (`**AC-1** —`, `- AC-1:`, `AC-1 —`), com ou sem negrito: um critério em outro formato não pode sumir do gate; cada um precisa de uma linha na tabela de `## Test plan` com camada em `layers` (ou `manual`) e, para camada real, caminho entre crases que case com um glob de `tests` da camada. Linha de `manual` não exige caminho.
 - Peso calculado: `HEAVY` com 2 ou mais camadas nos caminhos entre crases de `## Architecture` (camada pelo prefixo `path`), ou `## Security` preenchida (diferente de `n/a`), ou `## Rollback` diferente de `n/a`, ou mais de 8 caminhos; `LIGHT` com 1 camada, no máximo 3 caminhos, `Touches UI: no` e sem os sinais acima; `STANDARD` no resto. Contagem de ACs não entra (G8 de `gargalos-da-v0.md`).
 - Peso declarado: lido da linha `**Weight:**` do cabeçalho; ausente, inválido ou de ordem menor que o calculado gera achado `WEIGHT` com os dois valores.
 
@@ -48,6 +49,7 @@ _Tech Lead_
 | AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SpecGatesTest.kt` |
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SpecGatesTest.kt` |
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SpecGatesTest.kt` |
+| AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SpecGatesTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
