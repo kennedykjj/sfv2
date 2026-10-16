@@ -11,16 +11,19 @@ import sfv2.core.Event
 import sfv2.core.EventType
 import sfv2.store.SpecRead
 
-/** Builds the `card.detail` answer: card, spec, events and runs with their cost. Pure: no IO. */
+/** Builds the `card.detail` answer: card, spec, events, runs with their cost, gates and criteria. Pure: no IO. */
 object CardDetail {
     const val MAX_EVENTS = 500
     const val MAX_SPEC_BYTES = 64 * 1024
     const val MAX_PAYLOAD_CHARS = 512
     const val SPEC_CUT_NOTICE = "\n\n[spec cortada: o texto passou de 64 KiB]"
+    private const val MANUAL_LAYER = "manual"
+    private const val NO_GATE = "none"
 
     fun build(id: String, card: Card, spec: SpecRead, events: List<Event>): JsonObject {
         val kept = events.takeLast(MAX_EVENTS)
         val runs = events.filter { it.type == EventType.RUN_COST_RECORDED }.map { run(it.payload) }
+        val latestGates = latestGates(events)
         return buildJsonObject {
             put(
                 "card",
@@ -35,6 +38,44 @@ object CardDetail {
             put("truncated", events.size > kept.size)
             put("runs", JsonArray(runs.map { it.json }))
             put("total", total(runs))
+            put("gates", JsonArray(latestGates.map { gateJson(it.key, it.value) }))
+            put("criteria", JsonArray(criteria(spec, latestGates)))
+        }
+    }
+
+    /** Latest GATE_FINISHED per gate name, keyed in the order each gate first appeared. */
+    private fun latestGates(events: List<Event>): Map<String, Event> {
+        val latest = LinkedHashMap<String, Event>()
+        events.filter { it.type == EventType.GATE_FINISHED }.forEach { event ->
+            val name = event.payload["gate"] ?: return@forEach
+            latest[name] = event
+        }
+        return latest
+    }
+
+    private fun gateJson(name: String, event: Event): JsonObject = buildJsonObject {
+        put("name", name)
+        put("verdict", event.payload["verdict"].orEmpty())
+        event.payload["reason"]?.let { put("reason", cut(it, MAX_PAYLOAD_CHARS)) }
+        event.payload["duration_ms"]?.toLongOrNull()?.let { put("duration_ms", it) }
+        put("at", event.at.toString())
+    }
+
+    private fun criteria(spec: SpecRead, latestGates: Map<String, Event>): List<JsonObject> {
+        if (spec !is SpecRead.Valid) return emptyList()
+        return SpecGates.plan(spec.text).map { row ->
+            buildJsonObject {
+                put("ac", row.ac)
+                put("layer", row.layer)
+                put("test_file", row.testFile)
+                put(
+                    "gate",
+                    when (row.layer) {
+                        MANUAL_LAYER -> MANUAL_LAYER
+                        else -> latestGates["test-${row.layer}"]?.payload?.get("verdict") ?: NO_GATE
+                    },
+                )
+            }
         }
     }
 
