@@ -26,6 +26,7 @@ class RefineRuntime private constructor(
     val milestones: ExternalMilestones,
     val costSummary: CostSummaryQuery,
     val pulse: FactoryPulse,
+    val docsDraft: ProjectDocsDraft,
 ) : AutoCloseable {
 
     override fun close() {
@@ -80,8 +81,9 @@ class RefineRuntime private constructor(
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
             val sessions = McpSessions(clock)
             val specStore = SpecStore(database, dataDir.resolve("specs"))
+            val docsScratch = Files.createDirectories(dataDir.resolve("docs-draft-scratch"))
             val endpoint = McpServerFactory(
-                sessions, store, specStore, registry, files, recorder, worktrees, clock,
+                sessions, store, specStore, registry, files, recorder, worktrees, clock, docsScratchRoot = docsScratch,
             ).start()
             val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock, provider = provider)
             val prices = loadPrices(dataDir.resolve(PRICES_FILE))
@@ -275,6 +277,18 @@ class RefineRuntime private constructor(
                 milestones = milestones,
                 costSummary = CostSummaryQuery(store, control::limits),
                 pulse = pulse,
+                docsDraft = ProjectDocsDraft(
+                    registry = registry,
+                    files = files,
+                    sessions = sessions,
+                    runtime = runtime,
+                    ownerProof = commands.ownerProof,
+                    scratchRoot = docsScratch,
+                    mcpPort = endpoint.port,
+                    configDir = dataDir.resolve("mcp"),
+                    model = MODEL,
+                    log = log,
+                ),
             )
         }
 

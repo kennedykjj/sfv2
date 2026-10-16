@@ -53,6 +53,11 @@ sealed interface Request {
 
     data object ProjectList : Request
 
+    /** Owner request for a draft of the project documents missing on main; [project] null means the only registered project. */
+    data class ProjectDocsDraft(val actor: Actor, val project: String? = null, val proof: String? = null) : Request {
+        override fun toString(): String = "ProjectDocsDraft(actor=$actor, project=$project, proof=${if (proof == null) "null" else "***"})"
+    }
+
     /** Recreates the cards of [project] (null: the only registered project) from its pull requests. */
     data class CardRebuild(val actor: Actor, val project: String? = null, val proof: String? = null) : Request {
         override fun toString(): String = "CardRebuild(actor=$actor, project=$project, proof=${if (proof == null) "null" else "***"})"
@@ -174,6 +179,9 @@ data class StageCost(val stage: String, val costUsd: BigDecimal, val status: Cos
 /** The cost of one local day (`AAAA-MM-DD`) in the period asked. */
 data class DayCost(val day: String, val costUsd: BigDecimal, val status: CostStatus)
 
+/** The draft of one project document: [status] is `drafted` (with [text]) or `failed` (with [reason]). */
+data class DocDraft(val doc: String, val status: String, val text: String? = null, val reason: String? = null)
+
 /** A reply to the client. */
 sealed interface Response {
     /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
@@ -211,6 +219,9 @@ sealed interface Response {
     data class AuditResult(val text: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
+
+    /** One draft per missing document; [DocDraft.text] is set when drafted, [DocDraft.reason] when failed. */
+    data class DocsDraftResult(val drafts: List<DocDraft>) : Response
     data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
     data class MilestonesResult(val items: List<MilestoneItem>) : Response
     data class Settings(val settings: FactorySettings) : Response
@@ -265,6 +276,11 @@ fun parseRequest(line: String): Request {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val path = stringField(obj, "path") ?: return Request.Rejected("missing path")
             Request.ProjectAdd(actor, path, stringField(obj, "proof"))
+        }
+        "project.docs.draft" -> {
+            // An actor that is not even parseable is still not the owner: same refusal, before anything is read.
+            val actor = parseActor(obj) ?: return Request.Rejected(ProjectDocsDraft.OWNER_ONLY)
+            Request.ProjectDocsDraft(actor, stringField(obj, "project"), stringField(obj, "proof"))
         }
         "card.rebuild" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
@@ -540,6 +556,22 @@ fun render(response: Response): String = when (response) {
     is Response.ProjectsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.projects.map { projectJson(it) }))
+    }.toString()
+    is Response.DocsDraftResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            JsonArray(
+                response.drafts.map { draft ->
+                    buildJsonObject {
+                        put("doc", draft.doc)
+                        put("status", draft.status)
+                        draft.text?.let { put("text", it) }
+                        draft.reason?.let { put("reason", it) }
+                    }
+                },
+            ),
+        )
     }.toString()
     is Response.CloseDraftResult -> buildJsonObject {
         put("ok", true)

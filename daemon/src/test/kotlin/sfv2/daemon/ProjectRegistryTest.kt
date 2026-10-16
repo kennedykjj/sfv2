@@ -7,6 +7,8 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
+import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -14,6 +16,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
@@ -24,6 +28,9 @@ import org.junit.jupiter.api.io.TempDir
 import sfv2.core.DeliveryMode
 import sfv2.core.ExternalEffect
 import sfv2.core.Signer
+import sfv2.ports.Runtime
+import sfv2.ports.SessionRequest
+import sfv2.ports.SessionResult
 import sfv2.store.Database
 import sfv2.store.ProjectPathStore
 
@@ -521,6 +528,265 @@ class ProjectRegistryTest {
         val after = exchange(socket, """{"cmd":"project.list"}""")
         assertThat(after.isOk()).isTrue()
         assertThat(after.toString()).contains("guarded").contains("core").contains("daemon")
+    }
+
+    // ---- #83: assisted draft of the project documents (project.docs.draft) ----
+
+    private val scratchRoot: Path by lazy { Files.createDirectories(dir.resolve("scratch")) }
+    private val draftSessions = McpSessions()
+    private val ownerTokenFile: Path by lazy { dir.resolve("owner").resolve("owner.token") }
+    private val ownerProof: OwnerProof by lazy { OwnerProof.create(ownerTokenFile, SecureRandom()) }
+
+    private fun proofText(): String {
+        ownerProof
+        return Files.readString(ownerTokenFile).trim()
+    }
+
+    /** Serves project files from main by path; counts reads so a test can show nothing was read. */
+    private class FakeDocs(private val present: Map<String, String> = emptyMap()) : ProjectFileSource {
+        var reads = 0
+
+        override fun read(repo: Path, path: String): String? {
+            reads++
+            return present[path]
+        }
+    }
+
+    private data class SeenSession(
+        val worktree: Path,
+        val config: Path,
+        val token: String,
+        val role: String?,
+        val hasMainTree: Boolean,
+        val configMode: String,
+    )
+
+    /** Records what the session could see while it ran, then lets [behavior] play the agent. */
+    private inner class FakeRuntime(private val behavior: (SessionRequest) -> SessionResult) : Runtime {
+        val seen = mutableListOf<SeenSession>()
+
+        override fun launch(request: SessionRequest): SessionResult {
+            val token = Json.parseToJsonElement(Files.readString(request.mcpConfig)).jsonObject
+                .getValue("mcpServers").jsonObject.getValue("sfv2").jsonObject
+                .getValue("headers").jsonObject.getValue("Authorization").jsonPrimitive.content
+                .removePrefix("Bearer ")
+            seen.add(
+                SeenSession(
+                    worktree = request.worktree,
+                    config = request.mcpConfig,
+                    token = token,
+                    role = draftSessions.find(token)?.role,
+                    hasMainTree = Files.exists(request.worktree.resolve(".shipfloor/factory.yml")),
+                    configMode = PosixFilePermissions.toString(Files.getPosixFilePermissions(request.mcpConfig)),
+                ),
+            )
+            return behavior(request)
+        }
+    }
+
+    private fun exited(code: Int): SessionResult = SessionResult.Exited(code, Files.createTempFile(dir, "transcript", ".jsonl"))
+
+    private fun writeDraft(request: SessionRequest, doc: String, text: String) {
+        val folder = Files.createDirectories(request.worktree.resolve("docs-draft"))
+        Files.writeString(folder.resolve(doc), text)
+    }
+
+    private fun docsService(repo: Path, files: ProjectFileSource, runtime: Runtime, log: DaemonLog = RecordingLog()): ProjectDocsDraft {
+        val registry = ProjectRegistry(GitProjectConfigSource())
+        registry.register(repo)
+        return ProjectDocsDraft(
+            registry = registry,
+            files = files,
+            sessions = draftSessions,
+            runtime = runtime,
+            ownerProof = ownerProof,
+            scratchRoot = scratchRoot,
+            mcpPort = 4000,
+            configDir = Files.createDirectories(dir.resolve("mcp-config")),
+            model = "test-model",
+            log = log,
+        )
+    }
+
+    /** The request goes through the wire parser, as the socket would deliver it. */
+    private fun draftRequest(actor: String = "owner", proof: String? = proofText(), project: String = "docs-alpha"): Request {
+        val proofPart = proof?.let { ""","proof":"$it"""" }.orEmpty()
+        return parseRequest("""{"cmd":"project.docs.draft","actor":"$actor","project":"$project"$proofPart}""")
+    }
+
+    private fun ProjectDocsDraft.ask(request: Request): JsonObject = Json.parseToJsonElement(render(handle(request))).jsonObject
+
+    private fun JsonObject.draftsByDoc(): Map<String, JsonObject> =
+        getValue("result").jsonArray.map { it.jsonObject }.associateBy { it.getValue("doc").jsonPrimitive.content }
+
+    private fun JsonObject.field(name: String): String? = this[name]?.jsonPrimitive?.contentOrNull
+
+    private fun treeOf(repo: Path): Map<String, String> = Files.walk(repo).use { paths ->
+        paths.filter { Files.isRegularFile(it) && !repo.relativize(it).startsWith(".git") }
+            .toList()
+            .associate { repo.relativize(it).toString() to Files.readString(it) }
+    }
+
+    private fun assertCleanedUp(session: SeenSession) {
+        assertThat(session.worktree).doesNotExist()
+        assertThat(session.config).doesNotExist()
+        assertThat(draftSessions.find(session.token)).isNull()
+        Files.list(scratchRoot).use { assertThat(it.count()).isZero() }
+    }
+
+    @Test
+    fun `AC-1 of #83 a draft request without the owner proof is refused and no session is launched`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val files = FakeDocs()
+        val runtime = FakeRuntime { exited(0) }
+        val service = docsService(repo, files, runtime)
+        val proof = proofText()
+        val wrongProof = "${proof.dropLast(1)}${if (proof.last() == '0') '1' else '0'}"
+        val refused = listOf(
+            service.ask(draftRequest(actor = "agent:dev", proof = proof)),
+            service.ask(draftRequest(actor = "adapter:github", proof = proof)),
+            service.ask(draftRequest(proof = null)),
+            service.ask(draftRequest(proof = "deadbeef")),
+            service.ask(draftRequest(proof = wrongProof)),
+        )
+
+        for (reply in refused) {
+            assertThat(reply.isOk()).describedAs(reply.toString()).isFalse()
+            assertThat(reply.getValue("error").jsonPrimitive.content).contains("only the owner").doesNotContain(proof)
+        }
+        assertThat(runtime.seen).isEmpty()
+        assertThat(files.reads).isZero()
+    }
+
+    @Test
+    fun `AC-2 of #83 the owner gets a draft for each missing document and none for the one that exists`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val files = FakeDocs(mapOf("ARCHITECTURE.md" to "# Architecture of the project"))
+        val runtime = FakeRuntime { request ->
+            writeDraft(request, "PRODUCT.md", "# Product draft")
+            writeDraft(request, "DESIGN.md", "# Design draft")
+            writeDraft(request, "ARCHITECTURE.md", "# Architecture rewritten by the agent")
+            exited(0)
+        }
+        val service = docsService(repo, files, runtime)
+
+        val reply = service.ask(draftRequest())
+
+        assertThat(reply.isOk()).describedAs(reply.toString()).isTrue()
+        val drafts = reply.draftsByDoc()
+        assertThat(drafts.keys).containsExactlyInAnyOrder("PRODUCT.md", "DESIGN.md")
+        assertThat(drafts.getValue("PRODUCT.md").field("status")).isEqualTo("drafted")
+        assertThat(drafts.getValue("PRODUCT.md").field("text")).isEqualTo("# Product draft")
+        assertThat(drafts.getValue("DESIGN.md").field("status")).isEqualTo("drafted")
+        assertThat(drafts.getValue("DESIGN.md").field("text")).isEqualTo("# Design draft")
+        assertThat(runtime.seen).hasSize(1)
+        assertThat(runtime.seen.single().role).isEqualTo("docs-draft")
+    }
+
+    @Test
+    fun `AC-3 of #83 a project with the three documents on main gets an empty list and no session`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val files = FakeDocs(
+            mapOf("PRODUCT.md" to "# Product", "ARCHITECTURE.md" to "# Architecture", "DESIGN.md" to "# Design"),
+        )
+        val runtime = FakeRuntime { exited(0) }
+        val service = docsService(repo, files, runtime)
+
+        val reply = service.ask(draftRequest())
+
+        assertThat(reply.isOk()).describedAs(reply.toString()).isTrue()
+        assertThat(reply.getValue("result").jsonArray).isEmpty()
+        assertThat(runtime.seen).isEmpty()
+        Files.list(scratchRoot).use { assertThat(it.count()).isZero() }
+    }
+
+    @Test
+    fun `AC-4 of #83 the session runs in a scratch directory outside the repository and everything is removed at the end`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val before = treeOf(repo)
+        val runtime = FakeRuntime { request ->
+            writeDraft(request, "PRODUCT.md", "# Product draft")
+            writeDraft(request, "DESIGN.md", "# Design draft")
+            writeDraft(request, "ARCHITECTURE.md", "# Architecture draft")
+            exited(0)
+        }
+        val service = docsService(repo, FakeDocs(), runtime)
+
+        val reply = service.ask(draftRequest())
+
+        assertThat(reply.isOk()).describedAs(reply.toString()).isTrue()
+        val session = runtime.seen.single()
+        // Raw comparison: the scratch directory is already removed, so it cannot be resolved to a real path.
+        assertThat(session.worktree.toAbsolutePath().normalize()).startsWithRaw(scratchRoot.toAbsolutePath().normalize())
+        assertThat(session.worktree.toAbsolutePath().toString()).doesNotStartWith(repo.toAbsolutePath().toString())
+        assertThat(session.hasMainTree).describedAs("main tree exported for context").isTrue()
+        assertThat(session.role).isEqualTo("docs-draft")
+        assertThat(session.configMode).isEqualTo("rw-------")
+        assertThat(treeOf(repo)).isEqualTo(before)
+        assertCleanedUp(session)
+    }
+
+    @Test
+    fun `AC-4 of #83 the scratch directory the config file and the token are removed also when the session ends badly or throws`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val before = treeOf(repo)
+        val failing = FakeRuntime { exited(1) }
+        val hung = FakeRuntime { SessionResult.Hung(Files.createTempFile(dir, "transcript", ".jsonl")) }
+        val throwing = FakeRuntime { throw IllegalStateException("runtime exploded") }
+
+        listOf(failing, hung, throwing).forEach { runtime ->
+            val service = docsService(repo, FakeDocs(), runtime)
+            runCatching { service.ask(draftRequest()) }
+            assertThat(runtime.seen).hasSize(1)
+            assertCleanedUp(runtime.seen.single())
+        }
+        assertThat(treeOf(repo)).isEqualTo(before)
+    }
+
+    @Test
+    fun `AC-5 of #83 a document without a draft is marked failed with the reason and the other drafts are kept`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val before = treeOf(repo)
+        val onlyProduct = { request: SessionRequest -> writeDraft(request, "PRODUCT.md", "# Product draft") }
+        val nonZero = FakeRuntime { request -> onlyProduct(request); exited(2) }
+        val hung = FakeRuntime { request -> onlyProduct(request); SessionResult.Hung(Files.createTempFile(dir, "transcript", ".jsonl")) }
+        val silent = FakeRuntime { request -> onlyProduct(request); exited(0) }
+
+        // ARCHITECTURE.md exists on main, so only PRODUCT.md and DESIGN.md are asked for.
+        val architectureOnMain = mapOf("ARCHITECTURE.md" to "# Architecture of the project")
+        val byExit = docsService(repo, FakeDocs(architectureOnMain), nonZero).ask(draftRequest()).draftsByDoc()
+        val byHang = docsService(repo, FakeDocs(architectureOnMain), hung).ask(draftRequest()).draftsByDoc()
+        val byOmission = docsService(repo, FakeDocs(architectureOnMain), silent).ask(draftRequest()).draftsByDoc()
+
+        listOf(byExit to "exit_code", byHang to "hung", byOmission to "not_written").forEach { (drafts, reason) ->
+            assertThat(drafts.keys).describedAs(reason).containsExactlyInAnyOrder("PRODUCT.md", "DESIGN.md")
+            assertThat(drafts.getValue("PRODUCT.md").field("status")).describedAs(reason).isEqualTo("drafted")
+            assertThat(drafts.getValue("PRODUCT.md").field("text")).describedAs(reason).isEqualTo("# Product draft")
+            assertThat(drafts.getValue("DESIGN.md").field("status")).describedAs(reason).isEqualTo("failed")
+            assertThat(drafts.getValue("DESIGN.md").field("reason")).describedAs(reason).isEqualTo(reason)
+        }
+        assertThat(treeOf(repo)).isEqualTo(before)
+    }
+
+    @Test
+    fun `AC-6 of #83 the log carries the project and the documents with their result and never the text read or drafted`() {
+        val repo = gitRepoWithConfig("docs-alpha")
+        val readMarker = "TEXTO-LIDO-DO-REPOSITORIO"
+        val draftMarker = "TEXTO-DO-RASCUNHO"
+        val files = FakeDocs(mapOf("ARCHITECTURE.md" to "# Architecture $readMarker"))
+        val runtime = FakeRuntime { request ->
+            writeDraft(request, "PRODUCT.md", "# Product $draftMarker")
+            exited(0)
+        }
+        val log = RecordingLog()
+        val service = docsService(repo, files, runtime, log)
+
+        val reply = service.ask(draftRequest())
+
+        assertThat(reply.isOk()).describedAs(reply.toString()).isTrue()
+        val logged = log.events.joinToString("\n") { (event, fields) -> "$event " + fields.entries.joinToString(" ") { "${it.key}=${it.value}" } }
+        assertThat(logged).contains("docs-alpha").contains("PRODUCT.md").contains("DESIGN.md").contains("drafted").contains("failed")
+        assertThat(logged).doesNotContain(readMarker).doesNotContain(draftMarker).doesNotContain(proofText())
     }
 
     private fun git(repo: Path, vararg args: String) {
