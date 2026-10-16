@@ -27,7 +27,7 @@ sealed interface ClosureState {
 
     data object Closed : ClosureState
 
-    data class Failed(val reason: String, val draftHash: String) : ClosureState
+    data class Failed(val reason: String, val draftHash: String, val notSent: NotSentCause? = null) : ClosureState
 }
 
 /** The closure screen's logic: asks for the draft, sends the owner's confirmation once and keeps the hash for a retry. */
@@ -62,8 +62,11 @@ class ClosureController(private val commands: ClosureCommands, private val io: C
             ConfirmOutcome.Closed -> ClosureState.Closed
             ConfirmOutcome.DraftChanged -> fetchDraft()
             is ConfirmOutcome.Failed -> ClosureState.Failed(outcome.reason, hash)
-            is ConfirmOutcome.NotSent ->
-                if (before is ClosureState.Draft) before.copy(notSent = outcome.cause) else before
+            is ConfirmOutcome.NotSent -> when (before) {
+                is ClosureState.Draft -> before.copy(notSent = outcome.cause)
+                is ClosureState.Failed -> before.copy(notSent = outcome.cause)
+                else -> before
+            }
         }
     }
 

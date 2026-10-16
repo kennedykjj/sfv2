@@ -67,7 +67,10 @@ fun ClosureScreen(controller: ClosureController, events: List<TimelineEvent>, ca
                 is ClosureState.Refused -> Line(Texts.closureRefused(current.reason), Tokens.bad)
                 is ClosureState.Confirming -> Line(Texts.CLOSURE_CONFIRMING, Tokens.muted)
                 ClosureState.Closed -> Line(Texts.CLOSURE_CLOSED, Tokens.ok)
-                is ClosureState.Failed -> Line(Texts.closureFailed(current.reason), Tokens.bad)
+                is ClosureState.Failed -> {
+                    Line(Texts.closureFailed(current.reason), Tokens.bad)
+                    current.notSent?.let { Line(Texts.closureNotSent(it), Tokens.bad) }
+                }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
