@@ -1,0 +1,4 @@
+{"issue":87,"slug":"runtime-via-bedrock-vertex-e-proxy","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:20:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":53452,"duration_s":152},{"role":"engineer","tokens":31673,"duration_s":78},{"role":"qa-engineer","tokens":17846,"duration_s":32},{"role":"engineer","tokens":22546,"duration_s":58}],
+"rounds":{"4":1},"gates_failed":["red daemon (AC-6 já passava, esperado)"],"flaky":[],"gates_reused":[],"manual_edit":false,
+"amendments":[{"file":"adapters/src/test/kotlin/sfv2/adapters/ClaudeRuntimeTest.kt","reason":"launchWith reutilizava diretórios; subdiretório por chamada, nenhuma asserção alterada"}]}
