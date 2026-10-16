@@ -1,0 +1,1 @@
+{"issue":142,"slug":"mcp-sessao-token-revogar-validar","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:20:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":45366,"duration_s":79},{"role":"engineer","tokens":43535,"duration_s":80}],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
