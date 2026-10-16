@@ -276,4 +276,5 @@ fun Sfv2Command.withCardCommands(cli: CliEnvironment): Sfv2Command =
     subcommands(
         CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardRebuild(cli), CardImportBoard(cli), CardShow(cli)),
         EventsCommand(cli),
+        AuditGroup().subcommands(AuditExport(cli)),
     ) as Sfv2Command
