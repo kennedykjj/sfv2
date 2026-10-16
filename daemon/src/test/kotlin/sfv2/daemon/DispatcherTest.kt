@@ -533,7 +533,10 @@ class DispatcherTest {
 
         // pool capacity is 2: the refine card c1 takes one slot, "a" the other, "b" waits
         assertThat(started).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"), DispatchedRun(DispatchStage.DEVELOP, "a"))
-        assertThat(DevelopFixtures.await { daemon.store.events("a").any { it.type == EventType.LOCK_RELEASED } }).isTrue()
+        // the run of "a" is a thread of the daemon that releases its pool lock as its last act; wait for it to end
+        val runThreads = Thread.getAllStackTraces().keys.filter { it.name.endsWith("-a") }
+        runThreads.forEach { it.join(5_000L) }
+        assertThat(runThreads.none { it.isAlive }).isTrue()
         assertThat(daemon.store.card("held")?.column).isEqualTo(Column.READY_FOR_DEV)
         assertThat(daemon.store.card("b")?.column).isEqualTo(Column.READY_FOR_DEV)
         assertThat(daemon.store.card("v")?.column).isEqualTo(Column.VALIDATION)
