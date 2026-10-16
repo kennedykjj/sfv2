@@ -520,6 +520,26 @@ class DispatcherTest {
         }
 
     @Test
+    fun `AC-6 the composed dispatcher develops a ready card with a free slot but not a blocked, validation or slotless one`() {
+        val daemon = composed(ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        daemon.card("held", Column.READY_FOR_DEV)
+        val block = Event(EventId("block-held"), daemon.clock.instant(), Actor.Factory("cost"), EventType.CARD_BLOCKED, mapOf("reason" to "card_cost_limit"))
+        daemon.commands.recorder.record("held", Card.create("Card held", Column.READY_FOR_DEV), block)
+        daemon.card("a", Column.READY_FOR_DEV)
+        daemon.card("b", Column.READY_FOR_DEV)
+        daemon.card("v", Column.VALIDATION)
+
+        val started = daemon.cycle()
+
+        // pool capacity is 2: the refine card c1 takes one slot, "a" the other, "b" waits
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"), DispatchedRun(DispatchStage.DEVELOP, "a"))
+        assertThat(DevelopFixtures.await { daemon.store.events("a").any { it.type == EventType.LOCK_RELEASED } }).isTrue()
+        assertThat(daemon.store.card("held")?.column).isEqualTo(Column.READY_FOR_DEV)
+        assertThat(daemon.store.card("b")?.column).isEqualTo(Column.READY_FOR_DEV)
+        assertThat(daemon.store.card("v")?.column).isEqualTo(Column.VALIDATION)
+    }
+
+    @Test
     fun `AC-2 the day limit reached closes the composed dispatcher and blocks no card`() {
         val daemon = composed(ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
         val runtime = daemon.start()
