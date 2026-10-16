@@ -217,7 +217,7 @@ class ProjectRegistryTest {
             add("factory:dispatcher", ""","proof":"$proof""""),
             add("owner", ""),
             add("owner", ""","proof":"deadbeef""""),
-            add("owner", ""","proof":"${proof.dropLast(1)}0""""),
+            add("owner", ""","proof":"${proof.dropLast(1)}${if (proof.last() == '0') '1' else '0'}""""),
         )
 
         for (reply in refused) {
