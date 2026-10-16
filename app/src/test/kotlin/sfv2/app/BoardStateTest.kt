@@ -90,24 +90,24 @@ class BoardStateTest {
     }
 
     @Test
-    fun `AC-5 only Spec Review and Ready for Prod wait for the owner`() {
-        assertThat(OWNER_DECISION_COLUMNS).containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.READY_FOR_PROD)
+    fun `AC-5 only Spec Review and Staged wait for the owner`() {
+        assertThat(OWNER_DECISION_COLUMNS).containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
         assertThat(Column.entries.filter { isWaitingForOwner(it) })
-            .containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.READY_FOR_PROD)
+            .containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
     }
 
     @Test
     fun `AC-6 a card moved out of a decision column is no longer in a waiting column`() {
         val board = BoardFixtures.empty()
-            .applySnapshot(listOf(BoardFixtures.aCard("a", Column.READY_FOR_PROD)))
+            .applySnapshot(listOf(BoardFixtures.aCard("a", Column.STAGED)))
 
-        val after = board.applyEvent(BoardFixtures.aMove(1, "a", Column.DONE))
+        val after = board.applyEvent(BoardFixtures.aMove(1, "a", Column.READY_FOR_PROD))
 
-        assertThat(board.cardsIn(Column.READY_FOR_PROD)).hasSize(1)
-        assertThat(isWaitingForOwner(Column.READY_FOR_PROD)).isTrue()
-        assertThat(after.cardsIn(Column.READY_FOR_PROD)).isEmpty()
-        assertThat(isWaitingForOwner(Column.DONE)).isFalse()
-        assertThat(after.cardsIn(Column.DONE).map { it.id }).containsExactly("a")
+        assertThat(board.cardsIn(Column.STAGED)).hasSize(1)
+        assertThat(isWaitingForOwner(Column.STAGED)).isTrue()
+        assertThat(after.cardsIn(Column.STAGED)).isEmpty()
+        assertThat(isWaitingForOwner(Column.READY_FOR_PROD)).isFalse()
+        assertThat(after.cardsIn(Column.READY_FOR_PROD).map { it.id }).containsExactly("a")
     }
 }
 
