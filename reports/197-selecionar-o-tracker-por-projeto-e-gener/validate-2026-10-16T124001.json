@@ -1,0 +1,1 @@
+{"outcome":"blocked","issue":197,"pipeline":"validate","agents":[{"name":"engineer","tokens":74770,"seconds":190},{"name":"qa-engineer","tokens":45581,"seconds":88}],"rounds":{"engineer":1,"qa":1},"failed_gates":["acceptance-intact"],"flaky":[],"gates_reused":["green daemon *of #197*"],"amendments":[]}
