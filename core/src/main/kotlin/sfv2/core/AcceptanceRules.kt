@@ -1,5 +1,7 @@
 package sfv2.core
 
+import java.util.regex.PatternSyntaxException
+
 /** Extra per-layer patterns; they add to the default patterns. */
 data class AcceptancePatterns(
     val ran: Regex,
@@ -9,10 +11,17 @@ data class AcceptancePatterns(
     companion object {
         fun of(ran: String, assertions: String? = null, setupErrors: String? = null): AcceptancePatterns =
             AcceptancePatterns(
-                ran = Regex(ran),
-                assertions = assertions?.let { Regex(it) },
-                setupErrors = setupErrors?.let { Regex(it) },
+                ran = compile("ran", ran),
+                assertions = assertions?.let { compile("assertions", it) },
+                setupErrors = setupErrors?.let { compile("setupErrors", it) },
             )
+
+        private fun compile(field: String, pattern: String): Regex =
+            try {
+                Regex(pattern)
+            } catch (e: PatternSyntaxException) {
+                throw InvalidAcceptancePatternException("invalid regex in field $field: ${e.description}")
+            }
     }
 }
 
@@ -32,21 +41,80 @@ enum class AcceptanceReason {
 }
 
 object AcceptanceRules {
-    fun red(exitCode: Int?, output: Sequence<String>, patterns: AcceptancePatterns): AcceptanceVerdict =
-        AcceptanceVerdict.Ok
+    const val MAX_LINE_LENGTH = 8 * 1024
 
-    fun green(exitCode: Int?, output: Sequence<String>, patterns: AcceptancePatterns): AcceptanceVerdict =
-        AcceptanceVerdict.Ok
+    private val DEFAULT_SETUP_ERRORS = Regex(
+        "compilation (error|failure)|unresolved reference|cannot find module|syntaxerror|error TS[0-9]+|" +
+            "could not resolve|transform failed|is not a function|is not defined|ERR_CONNECTION|ECONNREFUSED|" +
+            "failed to load applicationcontext|beancreationexception|Errors: [1-9]|^ERROR: ",
+        RegexOption.IGNORE_CASE,
+    )
+    private val DEFAULT_ASSERTIONS = Regex(
+        "AssertionFailedError|AssertionError|expected: ?<.*> but was|" +
+            "expect\\(.*\\)\\.[A-Za-z]+\\(.*\\) failed|^\\s*Received:",
+    )
+    private val COMMENT_ONLY = Regex("^[+-][ \\t]*(//|/\\*|\\*|#|--|<!--)")
 
-    fun assertionEdit(diff: Sequence<String>, keep: Regex): List<String> = emptyList()
+    fun red(exitCode: Int?, output: Sequence<String>, patterns: AcceptancePatterns): AcceptanceVerdict {
+        if (exitCode == 0) return AcceptanceVerdict.Rejected(AcceptanceReason.TESTS_PASSED_BEFORE_IMPL)
+        val setup = patterns.setupErrors?.let { Regex(it.pattern, it.options + RegexOption.IGNORE_CASE) }
+        var setupError = false
+        var assertion = false
+        output.map(::truncate).forEach { line ->
+            if (DEFAULT_SETUP_ERRORS.containsMatchIn(line) || setup?.containsMatchIn(line) == true) setupError = true
+            if (DEFAULT_ASSERTIONS.containsMatchIn(line) || patterns.assertions?.containsMatchIn(line) == true) {
+                assertion = true
+            }
+        }
+        return when {
+            setupError -> AcceptanceVerdict.Rejected(AcceptanceReason.SETUP_ERROR)
+            !assertion -> AcceptanceVerdict.Rejected(AcceptanceReason.NO_ASSERTION_FAILURE)
+            else -> AcceptanceVerdict.Ok
+        }
+    }
+
+    fun green(exitCode: Int?, output: Sequence<String>, patterns: AcceptancePatterns): AcceptanceVerdict {
+        if (exitCode != 0) return AcceptanceVerdict.Rejected(AcceptanceReason.TESTS_FAILED)
+        val ran = output.map(::truncate).any { patterns.ran.containsMatchIn(it) }
+        return if (ran) AcceptanceVerdict.Ok else AcceptanceVerdict.Rejected(AcceptanceReason.NO_TEST_RAN)
+    }
+
+    fun assertionEdit(diff: Sequence<String>, keep: Regex): List<String> =
+        diff.map(::truncate)
+            .filter { (it.startsWith("+") || it.startsWith("-")) && !it.startsWith("+++ ") && !it.startsWith("--- ") }
+            .filterNot { COMMENT_ONLY.containsMatchIn(it) }
+            .filter { keep.containsMatchIn(it) }
+            .toList()
+
+    private fun truncate(line: String): String = if (line.length > MAX_LINE_LENGTH) line.take(MAX_LINE_LENGTH) else line
 }
 
 object GateInputs {
-    fun selector(value: String): String = value
+    private val SELECTOR = Regex("[A-Za-z0-9_.*#$-]+")
+    private val QA_COMMIT = Regex("[0-9a-f]{7,40}")
 
-    fun qaCommit(value: String): String = value
+    fun selector(value: String): String {
+        if (!SELECTOR.matches(value) || value.startsWith("-")) {
+            throw InvalidGateInputException("selector is not allowed: ${describe(value)}")
+        }
+        return value
+    }
 
-    fun file(value: String): String = value
+    fun qaCommit(value: String): String {
+        if (!QA_COMMIT.matches(value)) {
+            throw InvalidGateInputException("qaCommit must be 7 to 40 lowercase hex characters: ${describe(value)}")
+        }
+        return value
+    }
+
+    fun file(value: String): String {
+        val bad = value.isEmpty() || value.startsWith("-") || value.split('/').contains("..") ||
+            value.any { it.isISOControl() }
+        if (bad) throw InvalidGateInputException("files entry is not allowed: ${describe(value)}")
+        return value
+    }
+
+    private fun describe(value: String): String = "length=${value.length}"
 }
 
 class InvalidAcceptancePatternException(message: String) : RuntimeException(message)
