@@ -35,7 +35,7 @@ Só o módulo `daemon`; nenhum contrato externo (socket, MCP, eventos) muda.
 - Gates de camada: `DevelopGates` (interface, como `RefineGates`) com implementação que monta os `GateSpec` de teste e build de cada camada a partir de `ProjectLayer`, que ganha `build: List<String>? = null`, `test: List<String>? = null` e `ran: String? = null` lidos de `factory.yml` por `ProjectRegistry` (campos já existem no arquivo; hoje ignorados). Camada sem `test` falha o gate com motivo `no_test_command`. Os comandos vêm do `factory.yml` da `main` (nunca do worktree) e rodam sem shell: o texto é dividido em tokens por espaço, sem aspas nem expansão. O marcador `{selector}` (convenção do `factory.yml` atual) é trocado pelo nome simples de cada classe de teste da camada, tirado da tabela Test plan da spec (nome do arquivo sem `.kt`; só `[A-Za-z0-9_]` é aceito, outro valor falha o gate com `invalid_selector`); com mais de uma classe, o token anterior (`--tests`) e o marcador se repetem por classe. Sem tratar o marcador, o gate verde passaria `{selector}` literal ao Gradle (nenhum teste encontrado) e nenhum card sairia de Coding.
 - `DevelopStageLauncher` (mesmo arquivo): implementa `StageLauncher`, igual ao `RefineStageLauncher`: thread própria, `RunPool.release(cardId)` no `finally`; qualquer outro estágio lança `IllegalArgumentException`. A espera do lock e o gancho `onRunFinished` seguem o mesmo contrato. A parte comum (thread, lock, finally) vira uma classe `PipelineStageLauncher` extraída de `RefineStageLauncher`, sem mudar o comportamento dele.
 - `RefineRuntime.kt`: monta também o `DevelopStageLauncher`, um `ModelStepUp` (escada de modelos fixa na classe; ouvinte registrado no `EventStream`, fechado em `close()`), e passa `stages = setOf(REFINE, DEVELOP)` ao `Dispatcher` com um launcher que despacha por estágio.
-- Máximo de rodadas: parâmetro `maxRounds` (padrão 3), sem leitura de configuração nova.
+- Máximo de rodadas: parâmetro `maxRounds`, cujo padrão vem da fonte única `DEFAULT_MAX_ROUNDS` (3, compartilhada com Refine e Validate), sem leitura de configuração nova.
 - Sem migração de banco; sem mudança em `core`, `store`, `ports` ou `adapters`.
 
 ## Test plan
@@ -64,7 +64,7 @@ _What the pipeline decided on its own; one line each, with the reason._
 - AC-6 vai em `DispatcherTest.kt` (já cobre as regras de vaga/bloqueio do dispatcher) com `DispatchStage.DEVELOP`.
 - Comandos de build/teste por camada entram em `ProjectLayer` (opcionais) em vez de arquivo de config novo: o `factory.yml` já os traz.
 - Lógica de thread/lock extraída do `RefineStageLauncher` para reaproveitar: duplicar o `finally` do AC-8 arriscaria divergir.
-- Máximo de rodadas fixo em 3 e escada de modelos fixa: o dono não pediu configuração; trivial de mudar depois.
+- Máximo de rodadas vindo da fonte única `DEFAULT_MAX_ROUNDS` (3) e escada de modelos fixa: o dono não pediu configuração; trivial de mudar depois.
 - O motivo no card é o `GATE_FINISHED` existente, sem evento novo: evita ampliar o contrato de eventos.
 - Peso `heavy`: mais de 6 ACs (8), mesmo com uma só camada e sem UI nem segurança.
 
