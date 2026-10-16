@@ -62,6 +62,12 @@ class RunPool(
     }
 
     @Synchronized
+    fun isLocked(cardId: String): Boolean = cardId in locks
+
+    @Synchronized
+    fun hasRoom(): Boolean = locks.size < capacity
+
+    @Synchronized
     fun active(): List<RunLock> = locks.values.toList()
 
     private fun recordRelease(lock: RunLock) {
