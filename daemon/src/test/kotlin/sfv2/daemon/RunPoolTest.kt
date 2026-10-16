@@ -46,7 +46,7 @@ class RunPoolTest {
 
     private val probe = RunPoolFixtures.FakeProbe()
     private val log = RunPoolFixtures.RecordingLog()
-    private val published = mutableListOf<StoredEvent>()
+    private lateinit var collector: StreamCollector
 
     private fun withPool(capacity: Int, block: (RunPool, CardEventStore) -> Unit) {
         Database.open(dir.resolve("pool.db")).use { db ->
@@ -54,8 +54,15 @@ class RunPoolTest {
             RunPoolFixtures.seed(store, "c1")
             RunPoolFixtures.seed(store, "c2")
             RunPoolFixtures.seed(store, "c3")
-            val pool = RunPool(capacity, store, RunPoolFixtures.clock, probe, log, onEvent = { published.add(it) })
-            block(pool, store)
+            val stream = EventStream(store)
+            collector = StreamCollector(stream)
+            try {
+                val pool = RunPool(capacity, store, RunPoolFixtures.clock, probe, log, recorder = EventRecorder(store, stream))
+                block(pool, store)
+            } finally {
+                collector.close()
+                stream.close()
+            }
         }
     }
 
@@ -103,7 +110,7 @@ class RunPoolTest {
             val event = store.events("c1").single { it.type.name == "LOCK_RELEASED" }
             assertThat(event.actor).isEqualTo(Actor.Factory("pool"))
             assertThat(event.payload).containsEntry("reason", "owner_dead").containsEntry("pid", "101")
-            assertThat(published.map { it.event }).containsExactly(event)
+            assertThat(collector.read(1).map { it.id }).containsExactly(event.id.value)
             assertThat(log.lines).contains("lock_released" to mapOf("card" to "c1", "pid" to "101"))
         }
     }
@@ -120,7 +127,89 @@ class RunPoolTest {
             assertThat(pool.active()).containsExactly(lock)
             assertThat(pool.tryStart("c2", 102, RunPoolFixtures.now)).isEqualTo(StartDecision.PoolFull(1))
             assertThat(store.events("c1").map { it.type.name }).doesNotContain("LOCK_RELEASED")
-            assertThat(published).isEmpty()
+            assertThat(collector.read(1, timeoutMillis = 300)).isEmpty()
+        }
+    }
+
+    /** Delegates to the real store but fails recordChange for the cards in [failing]. */
+    private class FlakyRecorder(store: CardEventStore, events: EventStream) : EventRecorder(store, events) {
+        val failing = mutableSetOf<String>()
+        override fun record(cardId: String, card: Card, event: Event): StoredEvent {
+            if (cardId in failing) throw IllegalStateException("db down secret-detail")
+            return super.record(cardId, card, event)
+        }
+    }
+
+    private fun withFlakyPool(block: (RunPool, FlakyRecorder, CardEventStore) -> Unit) {
+        Database.open(dir.resolve("flaky.db")).use { db ->
+            val store = CardEventStore(db)
+            RunPoolFixtures.seed(store, "c1")
+            RunPoolFixtures.seed(store, "c2")
+            val stream = EventStream(store)
+            collector = StreamCollector(stream)
+            try {
+                val recorder = FlakyRecorder(store, stream)
+                val pool = RunPool(3, store, RunPoolFixtures.clock, probe, log, recorder = recorder)
+                block(pool, recorder, store)
+            } finally {
+                collector.close()
+                stream.close()
+            }
+        }
+    }
+
+    private fun releasedCount(store: CardEventStore, id: String) =
+        store.events(id).count { it.type.name == "LOCK_RELEASED" }
+
+    @Test
+    fun `AC-1 (129) sweep keeps the lock when recording fails and logs only the card id`() {
+        withFlakyPool { pool, recorder, store ->
+            val lock = started(pool.tryStart("c1", 101, RunPoolFixtures.now))
+            recorder.failing.add("c1")
+
+            val released = pool.sweep()
+
+            assertThat(released).isEmpty()
+            assertThat(pool.active()).containsExactly(lock)
+            assertThat(releasedCount(store, "c1")).isZero()
+            val failure = log.lines.single { it.first == "lock_release_failed" }
+            assertThat(failure.second).containsEntry("card", "c1")
+            assertThat(failure.second.values).noneMatch { it.contains("secret-detail") }
+        }
+    }
+
+    @Test
+    fun `AC-2 (129) sweep releases the other orphan locks when the first recording fails`() {
+        withFlakyPool { pool, recorder, store ->
+            val first = started(pool.tryStart("c1", 101, RunPoolFixtures.now))
+            val second = started(pool.tryStart("c2", 102, RunPoolFixtures.now))
+            recorder.failing.add("c1")
+
+            val released = pool.sweep()
+
+            assertThat(released).containsExactly(second)
+            assertThat(pool.active()).containsExactly(first)
+            assertThat(releasedCount(store, "c2")).isEqualTo(1)
+            val releasedId = store.events("c2").single { it.type.name == "LOCK_RELEASED" }.id.value
+            assertThat(collector.read(2, timeoutMillis = 300).map { it.id }).containsExactly(releasedId)
+        }
+    }
+
+    @Test
+    fun `AC-3 (129) next sweep releases the pending lock once the failure is resolved`() {
+        withFlakyPool { pool, recorder, store ->
+            val lock = started(pool.tryStart("c1", 101, RunPoolFixtures.now))
+            recorder.failing.add("c1")
+            pool.sweep()
+
+            recorder.failing.clear()
+            val released = pool.sweep()
+            val again = pool.sweep()
+
+            assertThat(released).containsExactly(lock)
+            assertThat(again).isEmpty()
+            assertThat(pool.active()).isEmpty()
+            assertThat(releasedCount(store, "c1")).isEqualTo(1)
         }
     }
 

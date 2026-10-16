@@ -13,7 +13,6 @@ import sfv2.core.EventType
 import sfv2.core.MoveDecision
 import sfv2.core.MoveRules
 import sfv2.store.CardEventStore
-import sfv2.store.StoredEvent
 
 /** Applies the core rules to card commands and writes through the store. A refusal writes nothing. */
 class CardCommands(
@@ -27,6 +26,9 @@ class CardCommands(
 
     /** Live feed of every recorded change. */
     val events: EventStream = EventStream(store, subscriberQueueLimit, log, clock, closeGrace)
+
+    /** The only writer of events; shared with the run pool and the gate executor. */
+    val recorder: EventRecorder = EventRecorder(store, events)
 
     /** Serialized so the read-check-write of a move cannot interleave with another command. */
     @Synchronized
@@ -56,7 +58,7 @@ class CardCommands(
             type = EventType.CARD_CREATED,
             payload = mapOf("title" to card.title),
         )
-        events.publish(StoredEvent(store.recordChange(id, card, event), id, event))
+        recorder.record(id, card, event)
         log.log("card_command", mapOf("cmd" to "card.create", "card" to id))
         return Response.CardResult(CardView(id, card.title, card.column))
     }
@@ -82,7 +84,7 @@ class CardCommands(
             type = EventType.CARD_MOVED,
             payload = mapOf("from" to current.column.name, "to" to request.to.name),
         )
-        events.publish(StoredEvent(store.recordChange(request.id, moved, event), request.id, event))
+        recorder.record(request.id, moved, event)
         log.log("card_command", mapOf("cmd" to "card.move", "card" to request.id))
         return Response.CardResult(CardView(request.id, moved.title, moved.column))
     }
