@@ -12,6 +12,8 @@ sqldelight {
     databases {
         create("Sfv2Database") {
             packageName.set("sfv2.store.db")
+            verifyMigrations.set(true)
+            schemaOutputDirectory.set(file("src/main/sqldelight/databases"))
         }
     }
 }
