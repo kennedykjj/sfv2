@@ -307,6 +307,114 @@ class RefinePipelineTest {
         }
     }
 
+    private fun finishedCards(failure: RuntimeException?): List<String> {
+        card("c1")
+        val pool = RunPool(2, store, clock, ProcessProbe { _, _ -> true }, log, recorder = recorder)
+        val runtime = RefineFixtures.ProbingRuntime(succeeding(1), failure = failure)
+        val gates = RefineFixtures.ScriptedGates(listOf(RefineFixtures.green))
+        val finished = CopyOnWriteArrayList<String>()
+        val launcher = RefineStageLauncher({ pipeline(runtime, gates) }, pool, onRunFinished = { finished.add(it) })
+        val dispatcher = DispatcherFixtures.dispatcherFor(
+            setOf(DispatchStage.REFINE), store, pool, launcher, DispatcherFixtures.FakePause(), AlwaysWorkTime, clock, log,
+        )
+        try {
+            assertThat(dispatcher.runCycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+            assertThat(RefineFixtures.await { finished.isNotEmpty() && !pool.isLocked("c1") }).isTrue()
+            return finished.toList()
+        } finally {
+            dispatcher.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a finished refine run tells the cost budget which card ended`() {
+        assertThat(finishedCards(failure = null)).containsExactly("c1")
+    }
+
+    @Test
+    fun `AC-2 a refine run that throws still tells the cost budget which card ended`() {
+        assertThat(finishedCards(failure = IllegalStateException("boom"))).containsExactly("c1")
+    }
+
+    private fun composedWithTwoProjects(): Triple<ComposedDaemon, Path, Path> {
+        val daemon = ComposedDaemon(Files.createDirectories(dir.resolve("composed-${System.nanoTime()}")))
+        val alpha = daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        val beta = daemon.repo("beta")
+        daemon.prices()
+        return Triple(daemon, alpha, beta)
+    }
+
+    /** The refine run reached its end (moved on, blocked or failed), so nothing writes under the temp dir any more. */
+    private fun refineEnded(daemon: ComposedDaemon, cardId: String) =
+        RefineFixtures.await {
+            listOf("refine_moved", "refine_blocked", "refine_failed").any { name ->
+                daemon.log.events(name).any { it.second["card"] == cardId && (name != "refine_moved" || it.second["to"] != Column.REFINEMENT.name) }
+            }
+        }
+
+    private fun refineFailed(daemon: ComposedDaemon, cardId: String) =
+        RefineFixtures.await { daemon.log.events("refine_failed").any { it.second["card"] == cardId } }
+
+    @Test
+    fun `AC-5 with two projects registered the card goes to the project of its card_project link`() {
+        val (daemon, _, beta) = composedWithTwoProjects()
+        daemon.use {
+            daemon.card("c1")
+            daemon.store.assignProject("c1", beta.toString())
+
+            assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+
+            assertThat(RefineFixtures.await { daemon.store.card("c1")?.column == Column.REFINEMENT }).isTrue()
+            assertThat(daemon.store.projectOf("c1")).isEqualTo(beta.toString())
+        }
+    }
+
+    @Test
+    fun `AC-5 with two projects a card without link is not refined, fails with its id and links to no project`() {
+        val (daemon, alpha, beta) = composedWithTwoProjects()
+        daemon.use {
+            daemon.card("c2")
+
+            assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c2"))
+
+            assertThat(refineFailed(daemon, "c2")).isTrue()
+            assertThat(daemon.store.card("c2")?.column).isEqualTo(Column.READY_FOR_REFINEMENT)
+            assertThat(daemon.store.projectOf("c2")).isNull()
+            assertThat(daemon.log.everything()).doesNotContain(alpha.toString()).doesNotContain(beta.toString())
+        }
+    }
+
+    @Test
+    fun `AC-5 a card without link and exactly one registered project uses it and records the link`() {
+        ComposedDaemon(Files.createDirectories(dir.resolve("single"))).use { daemon ->
+            val alpha = daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+            daemon.prices()
+            daemon.card("c3")
+
+            assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c3"))
+
+            assertThat(refineEnded(daemon, "c3")).isTrue()
+            assertThat(RefineFixtures.await { daemon.store.card("c3")?.column == Column.REFINEMENT }).isTrue()
+            assertThat(daemon.store.projectOf("c3")).isEqualTo(alpha.toString())
+        }
+    }
+
+    @Test
+    fun `AC-5 a link to a repository that is not registered fails with the card id and falls back to no other project`() {
+        ComposedDaemon(Files.createDirectories(dir.resolve("unregistered"))).use { daemon ->
+            daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+            daemon.prices()
+            daemon.card("c4")
+            daemon.store.assignProject("c4", "/repos/nowhere")
+
+            assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c4"))
+
+            assertThat(refineFailed(daemon, "c4")).isTrue()
+            assertThat(daemon.store.card("c4")?.column).isEqualTo(Column.READY_FOR_REFINEMENT)
+            assertThat(daemon.store.projectOf("c4")).isEqualTo("/repos/nowhere")
+        }
+    }
+
     private fun tokenIn(config: String): String {
         val candidates = Regex("[A-Za-z0-9_-]{43}").findAll(config).map { it.value }.toList()
         return requireNotNull(candidates.firstOrNull { sessions.find(it) != null } ?: candidates.lastOrNull()) {

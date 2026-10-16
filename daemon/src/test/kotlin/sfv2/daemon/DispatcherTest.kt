@@ -1,6 +1,7 @@
 package sfv2.daemon
 
 import java.math.BigDecimal
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
@@ -508,5 +509,128 @@ class DispatcherTest {
         assertThat(second).isEmpty()
         assertThat(pool.isLocked("a")).isTrue()
         assertThat(launcher.launched.map { it.second }).containsExactly("a")
+    }
+
+    private fun composed(extra: String, prices: Boolean = true): ComposedDaemon =
+        ComposedDaemon(dir.resolve("composed-${System.nanoTime()}").also { Files.createDirectories(it) }).also {
+            toClose.add(it)
+            it.repo("alpha", extra)
+            if (prices) it.prices()
+            it.card("c1")
+        }
+
+    @Test
+    fun `AC-2 the day limit reached closes the composed dispatcher and blocks no card`() {
+        val daemon = composed(ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        val runtime = daemon.start()
+        daemon.card("other", Column.INBOX)
+        daemon.spend("other", "25.00")
+
+        assertThat(runtime.dispatcher.runCycle()).isEmpty()
+        assertThat(daemon.log.events("card_blocked_by_cost")).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 limits below the spent day cost leave the composed dispatcher open`() {
+        val daemon = composed(ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        daemon.card("other", Column.INBOX)
+        daemon.spend("other", "3.00")
+
+        assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+    }
+
+    @Test
+    fun `AC-2 without limits and without the environment variable the dispatcher launches nothing`() {
+        val daemon = composed(ComposedDaemon.ENABLED)
+
+        assertThat(daemon.cycle()).isEmpty()
+
+        assertThat(daemon.log.events("dispatcher_state").map { it.second["state"] }).containsExactly("invalid")
+    }
+
+    @Test
+    fun `AC-2 SFV2_COST_UNLIMITED true in the daemon environment launches without a ceiling`() {
+        val daemon = composed(ComposedDaemon.ENABLED)
+        daemon.card("other", Column.INBOX)
+        daemon.spend("other", "9999.00")
+
+        assertThat(daemon.cycle(mapOf("SFV2_COST_UNLIMITED" to "true"))).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+    }
+
+    @Test
+    fun `AC-2 the environment variable must be exactly true to lift the ceiling`() {
+        listOf("TRUE", "1", "yes", "false").forEach { value ->
+            val daemon = composed(ComposedDaemon.ENABLED)
+
+            assertThat(daemon.cycle(mapOf("SFV2_COST_UNLIMITED" to value))).`as`("value $value").isEmpty()
+        }
+    }
+
+    @Test
+    fun `AC-2 cost unlimited in the factory yml neither opens the dispatcher nor lifts a limit, and is logged as invalid`() {
+        val withoutLimits = composed(ComposedDaemon.ENABLED + "cost:\n  unlimited: true\n")
+        assertThat(withoutLimits.cycle()).isEmpty()
+        assertThat(withoutLimits.log.events("dispatcher_state").map { it.second }).anyMatch {
+            it["state"] == "invalid" && it["field"] == "cost.unlimited"
+        }
+
+        val withLimits = composed(ComposedDaemon.ENABLED + "cost:\n  per_card_usd: \"5\"\n  per_day_usd: \"20\"\n  unlimited: \"true\"\n")
+        withLimits.card("other", Column.INBOX)
+        withLimits.spend("other", "25.00")
+        assertThat(withLimits.cycle()).isEmpty()
+        assertThat(withLimits.log.events("dispatcher_state").map { it.second }).anyMatch {
+            it["state"] == "invalid" && it["field"] == "cost.unlimited"
+        }
+    }
+
+    @Test
+    fun `AC-2 a limit at or below zero, a non numeric one or a text enabled fails closed`() {
+        listOf(
+            "dispatcher:\n  enabled: true\ncost:\n  per_card_usd: 0\n  per_day_usd: 20\n",
+            "dispatcher:\n  enabled: true\ncost:\n  per_card_usd: -3\n  per_day_usd: 20\n",
+            "dispatcher:\n  enabled: true\ncost:\n  per_card_usd: abc\n  per_day_usd: 20\n",
+            "dispatcher:\n  enabled: \"yes\"\n" + ComposedDaemon.LIMITS,
+            "dispatcher:\n  enabled: true\nwork_hours:\n  start: \"09:00\"\n  end: \"18:00\"\n  timezone: Mars/Base\n" + ComposedDaemon.LIMITS,
+        ).forEach { extra ->
+            val daemon = composed(extra)
+
+            assertThat(daemon.cycle()).`as`(extra).isEmpty()
+        }
+    }
+
+    @Test
+    fun `AC-2 a malformed factory yml after registration fails closed`() {
+        val daemon = ComposedDaemon(dir.resolve("composed-${System.nanoTime()}").also { Files.createDirectories(it) })
+        toClose.add(daemon)
+        val repo = daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        daemon.prices()
+        daemon.card("c1")
+        daemon.setConfig(repo, "dispatcher: [broken\n")
+
+        assertThat(daemon.cycle()).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 an unreadable factory yml on main closes the dispatcher instead of opening it`() {
+        val daemon = composed(ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        val runtime = daemon.start(mapOf("SFV2_COST_UNLIMITED" to "true"))
+        assertThat(runtime.dispatcher.runCycle()).hasSize(1)
+        daemon.card("c2")
+
+        daemon.source.failure = IllegalStateException("git exploded")
+
+        assertThat(runtime.dispatcher.runCycle()).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 the log of an invalid setting names the state and field but never the value or the yaml`() {
+        val daemon = composed("dispatcher:\n  enabled: true\ncost:\n  per_card_usd: SECRET-VALUE-4242\n  per_day_usd: 20\n")
+
+        assertThat(daemon.cycle()).isEmpty()
+
+        val state = daemon.log.events("dispatcher_state").map { it.second }.single()
+        assertThat(state["state"]).isEqualTo("invalid")
+        assertThat(state["field"]).isEqualTo("cost.per_card_usd")
+        assertThat(daemon.log.everything()).doesNotContain("SECRET-VALUE-4242").doesNotContain("per_day_usd: 20")
     }
 }
