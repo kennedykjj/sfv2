@@ -17,6 +17,7 @@ _Product Owner_
 - AC-3: Dado um card que sai do board (Done ou descartado), quando a saída é registrada, então o worktree e a branch local do card são removidos.
 - AC-4: Dado dois cards ativos no mesmo projeto, então cada um tem seu próprio worktree e branch, sem compartilhar diretório.
 - AC-5: Dado um worktree com alterações não commitadas, quando o card sai do board, então a limpeza não descarta esse trabalho em silêncio: o worktree e a branch ficam, o resultado informa a recusa e o daemon segue de pé.
+- AC-6: Dado um `project.name` ou um `cardId` que não é um segmento de caminho seguro (`[A-Za-z0-9][A-Za-z0-9._-]*`, sem `..`, sem `/` nem `\\`), quando `ensure` ou `cleanup` é chamado, então o gerenciador recusa com erro que nomeia o campo (`project.name` ou `cardId`), nenhum processo `git` roda e nenhum diretório é criado ou removido.
 
 **Fora de escopo**
 - Push da branch, PR e remoção de branch remota (entrega).
@@ -58,9 +59,14 @@ _Tech Lead_
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/WorktreeManagerTest.kt` |
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/WorktreeManagerTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/WorktreeManagerTest.kt` |
+| AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/WorktreeManagerTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **`project.name` vem do `factory.yml` e o diretório do worktree é `<root>/<project.name>/<cardId>`:** sem validação, um nome com `..` levaria a criação e a remoção para fora de `root` (AC-6). O caminho resolvido precisa ficar dentro de `root` (`normalize` + `startsWith`) antes de qualquer `git` ou remoção.
+- **A limpeza só remove o que o gerenciador criou:** `removeWorktree` recusa diretório que não seja worktree registrado do repositório; nunca apaga por `rm -r` do caminho.
+- **O slug da branch vem do título (texto externo):** só `[a-z0-9-]`, máx. 40 caracteres, aplicado dentro do `branchFormat` já validado no #19; nunca o título cru em argumento ou log.
+- **`git` sem shell**, com timeout, `GIT_TERMINAL_PROMPT=0` e `-c core.fsmonitor=false`; hooks do repositório do dono rodam como sempre (`post-checkout`), o que é aceito porque o repositório é registrado pelo dono.
 
 ## Rollback
 n/a
