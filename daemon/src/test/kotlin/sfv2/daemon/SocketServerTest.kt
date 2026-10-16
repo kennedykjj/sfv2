@@ -1047,6 +1047,111 @@ class SocketServerTest {
         assertThat(partial.str("cost_usd").toBigDecimal()).isEqualByComparingTo("0.42")
     }
 
+    private fun gateEvent(
+        store: CardEventStore,
+        cardId: String,
+        seq: Int,
+        gate: String,
+        verdict: String,
+        extra: Map<String, String> = emptyMap(),
+    ) = record(
+        store, cardId, seq, Actor.Factory("gate"), EventType.GATE_FINISHED,
+        mapOf("gate" to gate, "verdict" to verdict) + extra,
+    )
+
+    private val planSpec = """
+        # Spec
+
+        ## Test plan
+
+        | AC | Layer | Test file |
+        |---|---|---|
+        | AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt` |
+        | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/BetaTest.kt` |
+        | AC-3 | app | `app/src/test/kotlin/sfv2/app/GammaTest.kt` |
+        | AC-4 | core | `core/src/test/kotlin/sfv2/core/DeltaTest.kt` |
+        | AC-5 | manual | n/a |
+    """.trimIndent()
+
+    @Test
+    fun `AC-2 card detail gates carry the latest result of each gate in order of first appearance`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        gateEvent(store, "c1", 1, "lint", "FAIL", mapOf("reason" to "exit_code", "duration_ms" to "850"))
+        gateEvent(store, "c1", 2, "scope", "PASS")
+        gateEvent(store, "c1", 3, "lint", "PASS", mapOf("duration_ms" to "12000"))
+        gateEvent(store, "c1", 4, "test-daemon", "FAIL", mapOf("reason" to "tests_failed", "duration_ms" to "3000"))
+
+        val gates = detailOf("c1").items("gates")
+
+        assertThat(gates.map { it.str("name") }).containsExactly("lint", "scope", "test-daemon")
+        val lint = gates[0]
+        assertThat(lint.str("verdict")).isEqualTo("PASS")
+        assertThat(lint.getValue("duration_ms").jsonPrimitive.long).isEqualTo(12000L)
+        assertThat(Instant.parse(lint.str("at"))).isEqualTo(fixedNow.plusSeconds(3))
+        val failed = gates[2]
+        assertThat(failed.str("verdict")).isEqualTo("FAIL")
+        assertThat(failed.str("reason")).isEqualTo("tests_failed")
+        assertThat(failed.getValue("duration_ms").jsonPrimitive.long).isEqualTo(3000L)
+        assertThat(Instant.parse(failed.str("at"))).isEqualTo(fixedNow.plusSeconds(4))
+    }
+
+    @Test
+    fun `AC-2 a gate recorded without a duration has no duration_ms, never zero`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        gateEvent(store, "c1", 1, "scope", "PASS")
+
+        val scope = detailOf("c1").items("gates").single()
+
+        assertThat(scope.str("name")).isEqualTo("scope")
+        assertThat(scope.containsKey("duration_ms")).isFalse()
+    }
+
+    @Test
+    fun `AC-3 card detail criteria link each AC of the test plan to the latest verdict of its layer gate`() =
+        withDetailServer { store, specs ->
+            record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+            specs.write("c1", planSpec)
+            gateEvent(store, "c1", 1, "test-daemon", "FAIL", mapOf("reason" to "tests_failed"))
+            gateEvent(store, "c1", 2, "test-daemon", "PASS", mapOf("duration_ms" to "900"))
+            gateEvent(store, "c1", 3, "test-app", "FAIL", mapOf("reason" to "tests_failed"))
+
+            val criteria = detailOf("c1").items("criteria")
+
+            assertThat(criteria.map { it.str("ac") }).containsExactly("AC-1", "AC-2", "AC-3", "AC-4", "AC-5")
+            assertThat(criteria.map { it.str("layer") }).containsExactly("daemon", "daemon", "app", "core", "manual")
+            assertThat(criteria[0].str("test_file")).isEqualTo("daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt")
+            assertThat(criteria[2].str("test_file")).isEqualTo("app/src/test/kotlin/sfv2/app/GammaTest.kt")
+            assertThat(criteria.map { it.str("gate") }).containsExactly("PASS", "PASS", "FAIL", "none", "manual")
+        }
+
+    @Test
+    fun `AC-4 card detail without spec has no criteria and without gate events has no gates, the rest unchanged`() =
+        withDetailServer { store, _ ->
+            record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+            costEvent(store, "c1", 1, mapOf("status" to "KNOWN", "cost_usd" to "0.42"))
+
+            val detail = detailOf("c1")
+
+            assertThat(detail.items("gates")).isEmpty()
+            assertThat(detail.items("criteria")).isEmpty()
+            assertThat(detail.getValue("spec").jsonObject.str("status")).isEqualTo("missing")
+            assertThat(detail.items("runs").map { it.str("run_id") }).containsExactly("run-1")
+            assertThat(detail.getValue("total").jsonObject.str("cost_usd").toBigDecimal()).isEqualByComparingTo("0.42")
+        }
+
+    @Test
+    fun `AC-4 card detail with a diverged spec has no criteria even when gates ran`() = withDetailServer { store, specs ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        specs.write("c1", planSpec)
+        gateEvent(store, "c1", 1, "test-daemon", "PASS", mapOf("duration_ms" to "900"))
+        Files.writeString(runtimeDir.resolve("specs").resolve("c1.md"), planSpec + "\n\nedited behind the store's back\n")
+
+        val detail = detailOf("c1")
+
+        assertThat(detail.getValue("spec").jsonObject.str("status")).isEqualTo("diverged")
+        assertThat(detail.items("criteria")).isEmpty()
+    }
+
     private fun approve(id: String, proofValue: String? = proof, actor: String = "owner"): JsonObject =
         reply(withProof("""{"cmd":"card.approve","actor":"$actor","id":"$id"}""", proofValue))
 

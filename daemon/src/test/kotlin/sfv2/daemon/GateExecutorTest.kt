@@ -5,6 +5,7 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -45,6 +46,29 @@ class GateExecutorTest {
         }
     }
 
+    /** Clock that only moves when told to. */
+    private class SteppedClock(private var current: Instant) : Clock() {
+        override fun getZone() = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+        override fun instant(): Instant = current
+        fun advance(by: Duration) {
+            current = current.plus(by)
+        }
+    }
+
+    /** Fake runner whose process "takes" [takes] on the stepped clock, however often the executor reads it. */
+    private class TimedRunner(
+        private val clock: SteppedClock,
+        private val takes: Duration,
+        private val run: GateRun,
+    ) : GateRunner {
+        override fun run(spec: GateSpec, outputFile: Path): GateRun {
+            clock.advance(takes)
+            Files.writeString(outputFile, "output\n")
+            return run
+        }
+    }
+
     @BeforeEach
     fun openStore() {
         database = Database.open(dir.resolve("cards.db"))
@@ -70,6 +94,9 @@ class GateExecutorTest {
     )
 
     private fun executor(runner: GateRunner) = GateExecutor(store, EventRecorder(store, EventStream(store)), clock, runner)
+
+    private fun executor(runner: GateRunner, onClock: Clock) =
+        GateExecutor(store, EventRecorder(store, EventStream(store)), onClock, runner)
 
     private fun gateEvents(): List<Event> = store.events("card-1").filter { it.type.name == "GATE_FINISHED" }
 
@@ -302,5 +329,51 @@ class GateExecutorTest {
         assertThat(runner.command.takeLast(2)).containsExactly("--", "a/FooTest.kt")
         assertThat(runner.command).contains("abc1234", "git")
         assertThat(gateEvents().single().payload["gate"]).isEqualTo("acceptance-edit")
+    }
+
+    @Test
+    fun `AC-1 a finished gate records duration_ms measured by the injected clock around the process`() {
+        val stepped = SteppedClock(now)
+        val runner = TimedRunner(stepped, Duration.ofMillis(850), GateRun(exitCode = 0, timedOut = false))
+
+        executor(runner, stepped).execute("card-1", spec(), runDir)
+
+        assertThat(gateEvents().single().payload["duration_ms"]).isEqualTo("850")
+    }
+
+    @Test
+    fun `AC-1 a failing gate records the duration of its run too`() {
+        val stepped = SteppedClock(now)
+        val runner = TimedRunner(stepped, Duration.ofSeconds(12), GateRun(exitCode = 3, timedOut = false))
+
+        executor(runner, stepped).execute("card-1", spec(), runDir)
+
+        val payload = gateEvents().single().payload
+        assertThat(payload["verdict"]).isEqualTo("FAIL")
+        assertThat(payload["duration_ms"]).isEqualTo("12000")
+    }
+
+    @Test
+    fun `AC-1 a gate that times out records the time it ran`() {
+        val stepped = SteppedClock(now)
+        val runner = TimedRunner(stepped, Duration.ofSeconds(30), GateRun(exitCode = null, timedOut = true))
+
+        executor(runner, stepped).execute("card-1", spec(), runDir)
+
+        val payload = gateEvents().single().payload
+        assertThat(payload["reason"]).isEqualTo("timeout")
+        assertThat(payload["duration_ms"]).isEqualTo("30000")
+    }
+
+    @Test
+    fun `AC-1 a gate that could not start records its duration`() {
+        val stepped = SteppedClock(now)
+        val runner = TimedRunner(stepped, Duration.ofMillis(40), GateRun(exitCode = null, timedOut = false))
+
+        executor(runner, stepped).execute("card-1", spec(), runDir)
+
+        val payload = gateEvents().single().payload
+        assertThat(payload["reason"]).isEqualTo("start_error")
+        assertThat(payload["duration_ms"]).isEqualTo("40")
     }
 }
