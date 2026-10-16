@@ -7,6 +7,9 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -21,6 +24,8 @@ import org.junit.jupiter.api.io.TempDir
 import sfv2.core.DeliveryMode
 import sfv2.core.ExternalEffect
 import sfv2.core.Signer
+import sfv2.store.Database
+import sfv2.store.ProjectPathStore
 
 class ProjectRegistryTest {
 
@@ -329,6 +334,126 @@ class ProjectRegistryTest {
             assertThat(refusedField("${jira}jira_site: acme.atlassian.net\njira_project: '$project'\n", "bad-project-$index"))
                 .describedAs(project).isEqualTo("jira_project")
         }
+    }
+
+    // ---- #210: registered projects persist across daemon restarts ----
+
+    private class RecordingLog : DaemonLog {
+        val events = mutableListOf<Pair<String, Map<String, String>>>()
+
+        override fun log(event: String, fields: Map<String, String>) {
+            events.add(event to fields)
+        }
+    }
+
+    private val fixedClock = Clock.fixed(Instant.parse("2026-10-16T12:00:00Z"), ZoneOffset.UTC)
+
+    /** Runs [block] with a registry on the database file [name], like one daemon run; the file outlives the call. */
+    private fun <T> daemonRun(
+        name: String,
+        source: ProjectConfigSource,
+        log: DaemonLog = RecordingLog(),
+        block: (ProjectRegistry) -> T,
+    ): T = Database.open(dir.resolve(name)).use { db ->
+        block(ProjectRegistry(source, ProjectPathStore(db), log, fixedClock))
+    }
+
+    @Test
+    fun `AC-1 persisted a project added before a restart is listed after restore without a new add`() {
+        val repo = aRepo("alpha")
+        val other = aRepo("beta")
+        val source = FakeSource().also { it.put(repo, validYaml("alpha")); it.put(other, validYaml("beta")) }
+        val registeredBefore = daemonRun("restart.db", source) { listOf(it.register(repo), it.register(other)) }
+
+        val restarted = daemonRun("restart.db", source) { registry ->
+            assertThat(registry.list()).isEmpty()
+            registry.restore()
+            registry.list()
+        }
+
+        assertThat(restarted).containsExactlyElementsOf(registeredBefore)
+    }
+
+    @Test
+    fun `AC-2 persisted the restored project uses the factory yml of main as it is now`() {
+        val repo = aRepo("alpha")
+        val source = FakeSource().also { it.put(repo, validYaml("alpha")) }
+        daemonRun("policy.db", source) { it.register(repo) }
+        source.put(repo, validYaml("renamed").replace("close: policy", "close: owner").replace("name: daemon", "name: app").replace("path: daemon/", "path: app/"))
+
+        val restored = daemonRun("policy.db", source) { registry -> registry.restore(); registry.list().single() }
+
+        assertThat(restored.name).isEqualTo("renamed")
+        assertThat(restored.layers).containsExactly(ProjectLayer("core", "core/"), ProjectLayer("app", "app/"))
+        assertThat(restored.policies.signers.getValue(ExternalEffect.CLOSE)).isEqualTo(Signer.OWNER)
+    }
+
+    @Test
+    fun `AC-3 persisted a missing path or invalid factory yml is logged by path and field and the others stay`() {
+        val gone = aRepo("gone")
+        val broken = aRepo("broken")
+        val good = aRepo("good")
+        val source = FakeSource().also {
+            it.put(gone, validYaml("gone")); it.put(broken, validYaml("broken")); it.put(good, validYaml("good"))
+        }
+        daemonRun("failing.db", source) { registry -> listOf(gone, broken, good).forEach { registry.register(it) } }
+        val goneCanonical = gone.toRealPath().toString()
+        val brokenCanonical = broken.toRealPath().toString()
+        source.put(broken, validYaml("broken").replace("close: policy", "close: nobody"))
+        Files.delete(gone.resolve(".git"))
+        Files.delete(gone)
+        val log = RecordingLog()
+
+        val restored = daemonRun("failing.db", source, log) { registry -> registry.restore(); registry.list() }
+
+        assertThat(restored.map { it.name }).containsExactly("good")
+        val failures = log.events.filter { it.first == "project_restore_failed" }.map { it.second }
+        assertThat(failures).hasSize(2)
+        assertThat(failures.first { it["path"] == brokenCanonical }["field"]).isEqualTo("signers.close")
+        assertThat(failures.first { it["path"] == goneCanonical }).containsKey("field")
+        failures.forEach { assertThat(it.keys).containsExactlyInAnyOrder("path", "field") }
+        // The failing paths stay persisted: once the owner fixes main, the next start restores them.
+        source.put(broken, validYaml("broken"))
+        val afterFix = daemonRun("failing.db", source) { registry -> registry.restore(); registry.list() }
+        assertThat(afterFix.map { it.name }).containsExactlyInAnyOrder("broken", "good")
+    }
+
+    @Test
+    fun `AC-3 persisted a refused registration leaves no trace for the next start`() {
+        val bad = aRepo("bad")
+        val missing = aRepo("missing")
+        val source = FakeSource().also { it.put(bad, validYaml().replace("close: policy", "close: nobody")) }
+        daemonRun("refused.db", source) { registry ->
+            assertThrows(InvalidProjectConfigException::class.java) { registry.register(bad) }
+            assertThrows(ProjectNotFoundException::class.java) { registry.register(missing) }
+        }
+        source.put(bad, validYaml("bad"))
+        val log = RecordingLog()
+
+        val restored = daemonRun("refused.db", source, log) { registry -> registry.restore(); registry.list() }
+
+        assertThat(restored).isEmpty()
+        assertThat(log.events.filter { it.first == "project_restore_failed" }).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 persisted the same repository registered twice is listed once after a restart`() {
+        val repo = aRepo("alpha")
+        val alias = Files.createSymbolicLink(dir.resolve("alias"), repo)
+        val source = FakeSource().also { it.put(repo, validYaml("alpha")) }
+        daemonRun("twice.db", source) { registry ->
+            registry.register(repo)
+            assertThrows(ProjectAlreadyRegisteredException::class.java) { registry.register(repo) }
+            assertThrows(ProjectAlreadyRegisteredException::class.java) { registry.register(alias) }
+        }
+        daemonRun("twice.db", source) { registry ->
+            registry.restore()
+            assertThrows(ProjectAlreadyRegisteredException::class.java) { registry.register(repo) }
+        }
+
+        val restored = daemonRun("twice.db", source) { registry -> registry.restore(); registry.list() }
+
+        assertThat(restored.map { it.name }).containsExactly("alpha")
     }
 
     // ---- AC-7: through the socket of a real daemon ----
