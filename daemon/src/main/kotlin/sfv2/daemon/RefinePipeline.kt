@@ -19,6 +19,7 @@ import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
 import sfv2.ports.SessionResult
 import sfv2.store.CardEventStore
+import sfv2.store.SpecStore
 
 /** Single source of the default number of review/fix rounds for the refine, develop and validate pipelines. */
 const val DEFAULT_MAX_ROUNDS = 3
@@ -38,24 +39,28 @@ class SpecScopeRefineGates(
     private val changedPaths: ChangedPaths,
     private val clock: Clock,
     private val baseRevision: String = "main",
+    private val specs: SpecStore? = null,
 ) : RefineGates {
 
     override fun evaluate(cardId: String, worktree: Path): List<GateResult> {
         val changed = (changedPaths.between(worktree, baseRevision) + changedPaths.untracked(worktree)).distinct()
-        val results = specGates(worktree, changed) + scopeGate(changed)
+        val results = specGates(cardId, worktree, changed) + scopeGate(changed)
         val card = store.card(cardId)
         if (card != null) results.forEach { record(cardId, card, it) }
         return results
     }
 
-    private fun specGates(worktree: Path, changed: List<String>): List<GateResult> {
+    /** A spec that passes its gates is registered for the card, so that `spec_get` and the divergence check read it. */
+    private fun specGates(cardId: String, worktree: Path, changed: List<String>): List<GateResult> {
         val specPath = changed.filter { it.startsWith(SPEC_DIR) && it.endsWith(".md") }
             .maxByOrNull { Files.getLastModifiedTime(worktree.resolve(it)).toMillis() }
         if (specPath == null) {
             return listOf(GateResult("test-plan", false, "no spec file written under $SPEC_DIR"), GateResult("weight", true, null))
         }
         val layers = project.layers.map { SpecLayer(it.name, it.path, listOf("${it.path.trimEnd('/')}/**")) }
-        val check = SpecGates.check(Files.readString(worktree.resolve(specPath)), layers)
+        val specText = Files.readString(worktree.resolve(specPath))
+        val check = SpecGates.check(specText, layers)
+        if (check.findings.isEmpty()) specs?.write(cardId, specText)
         return SpecGate.entries.map { gate ->
             val findings = check.findings.filter { it.gate == gate }
             val name = gate.name.lowercase().replace('_', '-')

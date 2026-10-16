@@ -76,8 +76,9 @@ class RefineRuntime private constructor(
             val recorder = commands.recorder
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
             val sessions = McpSessions(clock)
+            val specStore = SpecStore(database, dataDir.resolve("specs"))
             val endpoint = McpServerFactory(
-                sessions, store, SpecStore(database, dataDir.resolve("specs")), registry, files, recorder, worktrees, clock,
+                sessions, store, specStore, registry, files, recorder, worktrees, clock,
             ).start()
             val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock, provider = provider)
             val prices = loadPrices(dataDir.resolve(PRICES_FILE))
@@ -113,7 +114,7 @@ class RefineRuntime private constructor(
                         mcpPort = endpoint.port,
                         runtime = runtime,
                         costRecorder = costRecorder,
-                        gates = SpecScopeRefineGates(project, store, recorder, changedPaths, clock),
+                        gates = SpecScopeRefineGates(project, store, recorder, changedPaths, clock, specs = specStore),
                         configDir = dataDir.resolve("mcp"),
                         clock = clock,
                         model = MODEL,
