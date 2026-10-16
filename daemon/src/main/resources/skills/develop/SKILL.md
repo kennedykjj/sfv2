@@ -20,6 +20,7 @@ Sem shell: não use shell, `gh`, `git` nem `board.sh`. Tudo o que precisa está 
 
 <!-- rule:write-scope -->
 Escreva sempre pela ferramenta `file_write_request`, e só dentro do seu escopo: a QA escreve apenas testes; o engenheiro escreve apenas dentro da sua própria camada. Qualquer outro caminho é recusado e não deve ser tentado de outra forma.
+Para mudar um trecho de um arquivo que já existe, use `file_edit_request` (`path`, `oldText`, `newText`): troca um trecho exato, que deve aparecer uma única vez, e preserva o resto do arquivo. `file_write_request` substitui o arquivo inteiro e é recusado quando deixaria um arquivo existente com menos de 40% do tamanho: nesse caso mande o arquivo completo ou use `file_edit_request`.
 
 ## Passos
 

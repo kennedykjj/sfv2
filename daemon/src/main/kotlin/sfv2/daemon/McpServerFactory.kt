@@ -146,6 +146,16 @@ class McpServerFactory(
                 buildJsonObject { put("path", view.path); put("bytes", view.bytes) }
             }
         }
+        server.addTool(
+            FILE_EDIT_REQUEST,
+            "Replaces one exact passage (oldText, which must appear once) of an existing file in the card's worktree.",
+            stringSchema("cardId", "path", "oldText", "newText"),
+        ) { request ->
+            toolResult(FILE_EDIT_REQUEST) {
+                val view = requests.fileEditRequest(request.cardId(), request.text("path"), request.text("oldText"), request.text("newText"))
+                buildJsonObject { put("path", view.path); put("bytes", view.bytes) }
+            }
+        }
         return server
     }
 
@@ -218,10 +228,12 @@ class McpServerFactory(
         private const val LAYERS_GET = "layers_get"
         private const val COMPLETION_REPORT = "completion_report"
         private const val FILE_WRITE_REQUEST = "file_write_request"
+        private const val FILE_EDIT_REQUEST = "file_edit_request"
 
         /** Every tool the server registers; single source for the registration and the skill contract tests. */
         val TOOL_NAMES: Set<String> = setOf(
             CARD_GET, SPEC_GET, REVIEW_CRITERIA_GET, POLICIES_GET, LAYERS_GET, COMPLETION_REPORT, FILE_WRITE_REQUEST,
+            FILE_EDIT_REQUEST,
         )
 
         private const val LOOPBACK = "127.0.0.1"
