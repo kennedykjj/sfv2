@@ -1,0 +1,1 @@
+{"issue":64,"slug":"esteira","pipeline":"validate","started_at":"2026-10-16T15:50:00Z","finished_at":"2026-10-16T15:58:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green app sfv2.app.BoardMonitorTest","green app sfv2.app.BoardStateTest"],"manual_edit":false}
