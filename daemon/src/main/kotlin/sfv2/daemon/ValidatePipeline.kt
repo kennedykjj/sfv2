@@ -16,7 +16,7 @@ import sfv2.store.CardEventStore
 
 /** Judges the card's worktree before the review; the verdict is the gates', never the agent's report. */
 fun interface ValidateGates {
-    fun evaluate(cardId: String, worktree: Path): List<GateResult>
+    fun evaluate(cardId: String, worktree: Path): ValidateGateResults
 }
 
 /**
@@ -38,7 +38,7 @@ class ValidatePipeline(
     private val configDir: Path,
     private val clock: Clock,
     private val model: String,
-    private val maxRounds: Int = 3,
+    private val maxRounds: Int = DEFAULT_VALIDATE_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
 ) {
@@ -62,14 +62,12 @@ class ValidatePipeline(
         }
         for (round in 1..maxRounds) {
             val results = gates.evaluate(cardId, worktree.path)
-            val failed = results.filter { !it.passed }
-            val state = if (failed.isEmpty()) GatesState.GREEN else GatesState.RED
             val report = review(cardId, worktree.path)
-            val decision = report?.let { outcome.apply(cardId, it, state) } ?: ValidationDecision.Malformed
+            val decision = report?.let { outcome.apply(cardId, it, results.state) } ?: ValidationDecision.Malformed
             log.log("validate_round", mapOf("card" to cardId, "round" to round.toString(), "decision" to decision.javaClass.simpleName))
             when (decision) {
                 ValidationDecision.Staged, is ValidationDecision.Returned -> return
-                ValidationDecision.Held -> return block(cardId, "gates_failed: " + failed.joinToString(",") { it.name })
+                ValidationDecision.Held -> return block(cardId, "gates_failed: " + results.failedNames.joinToString(","))
                 ValidationDecision.Malformed -> Unit
             }
         }
