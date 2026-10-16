@@ -8,5 +8,6 @@ object StagePrompt {
         append("\n\n## Esta sessão\n\n")
         append("- Card desta sessão: `").append(cardId).append("` (use este id em todas as ferramentas que pedem `cardId`).\n")
         if (role != null) append("- Seu papel nesta sessão: ").append(role).append(".\n")
+        StageSkills.specTemplate(stage)?.let { append("\n## Modelo da spec\n\n```markdown\n").append(it.trimEnd()).append("\n```\n") }
     }
 }

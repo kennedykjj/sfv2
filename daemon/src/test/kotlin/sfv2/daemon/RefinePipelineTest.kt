@@ -160,6 +160,18 @@ class RefinePipelineTest {
     }
 
     @Test
+    fun `AC-1 the refine session prompt carries the skill, the card and the spec template`() {
+        card("c1")
+        val runtime = succeeding(1)
+
+        pipeline(runtime, RefineFixtures.ScriptedGates(listOf(RefineFixtures.green))).run("c1")
+
+        val prompt = runtime.launched.single().prompt
+        assertThat(prompt).startsWith(StageSkills.load("refine").trimEnd()).contains("`c1`")
+        assertThat(prompt).contains("## Modelo da spec").contains("- **AC-1** —").contains("| AC | Layer | Test file |")
+    }
+
+    @Test
     fun `AC-3 the agent saying done does not advance the card while a gate is red`() {
         card("c1")
         val runtime = succeeding(1)
