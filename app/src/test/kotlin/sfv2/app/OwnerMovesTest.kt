@@ -30,6 +30,11 @@ import sfv2.core.Column
  * `MoveOutcome`, `NotSentCause`, `BoardEdits`, `OwnerMoveState`, `MoveNotice`, `OwnerMoveController`) and
  * `OwnerCommands.kt` (`OwnerCommands`, `ownerMoveRequest`, `SocketOwnerCommands`). No UI, no sleeps.
  *
+ * Closure screen (#71), socket contract in `OwnerCommands.kt`: `closureDraftRequest(cardId)`,
+ * `closureConfirmRequest(cardId, draftHash, proof)` and `SocketClosureCommands(socket, token)`. A confirm answered with
+ * `ok:false` and an error starting with "draft changed" is `ConfirmOutcome.DraftChanged`; any other error is
+ * `ConfirmOutcome.Failed(error)`. A draft error is `DraftOutcome.Refused(error)`.
+ *
  * Card view actions (#67), also in `OwnerMoves.kt`: `SpecReviewController(commands: OwnerCommands, io: CoroutineDispatcher)`
  * with `state: StateFlow<SpecReviewState(notePending, sending, sent, notice)>`; `suspend approve(cardId)`;
  * `suspend requestChange(cardId, note: String?)` (a blank note opens the note field and sends nothing); `cancel()`;
@@ -280,6 +285,123 @@ class OwnerMovesTest {
             Files.writeString(token, "  \n")
             assertThat(SocketOwnerCommands(socket, token).move("a", Column.STAGED, Column.READY_FOR_PROD, null))
                 .isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_OWNER_PROOF))
+            assertThat(daemon.requests).isEmpty()
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-1 the draft request names the card and the socket commands read the draft from the daemon answer`() {
+        val request = Json.parseToJsonElement(closureDraftRequest("c1")).jsonObject
+        assertThat(request["cmd"]?.jsonPrimitive?.content).isEqualTo("card.close.draft")
+        assertThat(request["id"]?.jsonPrimitive?.content).isEqualTo("c1")
+
+        val dir = Files.createTempDirectory("sfv2m")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) {
+            """{"ok":true,"result":{"status":"Entregue","summary":"Resumo","prLink":"https://github.com/o/r/pull/7","draftHash":"h1"}}"""
+        }
+        try {
+            val outcome = SocketClosureCommands(dir.resolve("daemon.sock"), dir.resolve("owner.token")).draft("c1")
+
+            assertThat(outcome).isEqualTo(DraftOutcome.Drafted("Entregue", "Resumo", "https://github.com/o/r/pull/7", "h1"))
+            assertThat(Json.parseToJsonElement(daemon.requests.single()).jsonObject["cmd"]?.jsonPrimitive?.content)
+                .isEqualTo("card.close.draft")
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a draft the daemon refuses carries the daemon reason`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":false,"error":"no_pr_recorded"}""" }
+        try {
+            val outcome = SocketClosureCommands(dir.resolve("daemon.sock"), dir.resolve("owner.token")).draft("c1")
+
+            assertThat(outcome).isEqualTo(DraftOutcome.Refused("no_pr_recorded"))
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-3 the confirm request carries the owner actor, the proof and the displayed draft hash`() {
+        val request = Json.parseToJsonElement(closureConfirmRequest("c1", "h1", "tok-123")).jsonObject
+
+        assertThat(request["cmd"]?.jsonPrimitive?.content).isEqualTo("card.close.confirm")
+        assertThat(request["id"]?.jsonPrimitive?.content).isEqualTo("c1")
+        assertThat(request["actor"]?.jsonPrimitive?.content).isEqualTo("owner")
+        assertThat(request["draftHash"]?.jsonPrimitive?.content).isEqualTo("h1")
+        assertThat(request["proof"]?.jsonPrimitive?.content).isEqualTo("tok-123")
+    }
+
+    @Test
+    fun `AC-3 the socket confirm reads the token at every send and is closed when the daemon accepts`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":true,"result":{"status":"closed"}}""" }
+        try {
+            val commands = SocketClosureCommands(dir.resolve("daemon.sock"), token)
+
+            Files.writeString(token, "first-token\n")
+            val first = commands.confirm("c1", "h1")
+            Files.writeString(token, "second-token\n")
+            val second = commands.confirm("c1", "h1")
+
+            assertThat(first).isEqualTo(ConfirmOutcome.Closed)
+            assertThat(second).isEqualTo(ConfirmOutcome.Closed)
+            val sent = daemon.requests.map { Json.parseToJsonElement(it).jsonObject }
+            assertThat(sent.map { it["proof"]?.jsonPrimitive?.content }).containsExactly("first-token", "second-token")
+            assertThat(sent.map { it["draftHash"]?.jsonPrimitive?.content }).containsExactly("h1", "h1")
+            assertThat(sent.map { it["actor"]?.jsonPrimitive?.content }).containsOnly("owner")
+            assertThat(sent.map { it["cmd"]?.jsonPrimitive?.content }).containsOnly("card.close.confirm")
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-4 a tracker error is a failure with the daemon reason and a changed draft is told apart`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "secret-token\n")
+        var answer = """{"ok":false,"error":"tracker unavailable"}"""
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { answer }
+        try {
+            val commands = SocketClosureCommands(dir.resolve("daemon.sock"), token)
+
+            assertThat(commands.confirm("c1", "h1")).isEqualTo(ConfirmOutcome.Failed("tracker unavailable"))
+
+            answer = """{"ok":false,"error":"draft changed for card c1: request a new draft"}"""
+            assertThat(commands.confirm("c1", "h1")).isEqualTo(ConfirmOutcome.DraftChanged)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-5 a missing or empty token sends nothing and an absent daemon is reported as unavailable`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val socket = dir.resolve("daemon.sock")
+        val token = dir.resolve("owner.token")
+
+        // Token present, nothing listening.
+        Files.writeString(token, "tok\n")
+        assertThat(SocketClosureCommands(socket, token).confirm("c1", "h1"))
+            .isEqualTo(ConfirmOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE))
+        assertThat(SocketClosureCommands(socket, token).draft("c1"))
+            .isEqualTo(DraftOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE))
+
+        // Token missing or empty, daemon up: nothing is sent.
+        val daemon = FakeDaemon(socket) { """{"ok":true,"result":{}}""" }
+        try {
+            Files.delete(token)
+            assertThat(SocketClosureCommands(socket, token).confirm("c1", "h1"))
+                .isEqualTo(ConfirmOutcome.NotSent(NotSentCause.NO_OWNER_PROOF))
+            Files.writeString(token, "  \n")
+            assertThat(SocketClosureCommands(socket, token).confirm("c1", "h1"))
+                .isEqualTo(ConfirmOutcome.NotSent(NotSentCause.NO_OWNER_PROOF))
             assertThat(daemon.requests).isEmpty()
         } finally {
             daemon.close()
