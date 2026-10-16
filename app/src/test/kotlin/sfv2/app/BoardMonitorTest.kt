@@ -91,6 +91,74 @@ class BoardMonitorTest {
         assertThat(fx.source.fetched).containsExactly("n")
     }
 
+    @Test
+    fun `AC-1 resync reads the snapshot again and the board shows exactly the returned cards`() = withMonitor { fx ->
+        fx.source.snapshot = listOf(BoardFixtures.aCard("a", Column.CODING), BoardFixtures.aCard("b", Column.INBOX))
+        fx.connect()
+        fx.source.snapshot = listOf(BoardFixtures.aCard("a", Column.DONE), BoardFixtures.aCard("c", Column.INBOX))
+
+        val result = fx.monitor.resync()
+
+        val board = requireNotNull(fx.monitor.view.value).board
+        assertThat(result).isEqualTo(ResyncResult.Reloaded)
+        assertThat(fx.source.snapshotCalls).isEqualTo(2)
+        assertThat(board.cards.map { it.id }).containsExactlyInAnyOrder("a", "c")
+        assertThat(board.cardsIn(Column.DONE).map { it.id }).containsExactly("a")
+        assertThat(board.cardsIn(Column.CODING)).isEmpty()
+        assertThat(board.cardsIn(Column.INBOX).map { it.id }).containsExactly("c")
+    }
+
+    @Test
+    fun `AC-2 an event that arrives while the resync snapshot is read is applied after it`() = withMonitor { fx ->
+        fx.source.snapshot = listOf(BoardFixtures.aCard("a", Column.CODING))
+        fx.connect()
+        fx.source.onSnapshot = { fx.source.deliver(BoardFixtures.aMove(5, "a", Column.DONE)) }
+
+        val result = fx.monitor.resync()
+
+        val board = requireNotNull(fx.monitor.view.value).board
+        assertThat(result).isEqualTo(ResyncResult.Reloaded)
+        assertThat(board.cards).hasSize(1)
+        assertThat(board.cardsIn(Column.DONE).map { it.id }).containsExactly("a")
+        assertThat(board.cardsIn(Column.CODING)).isEmpty()
+        assertThat(board.lastSeq).isEqualTo(5L)
+    }
+
+    @Test
+    fun `AC-3 a failed snapshot read keeps the board, applies the held events and reports Failed`() = withMonitor { fx ->
+        fx.source.snapshot = listOf(BoardFixtures.aCard("a", Column.CODING), BoardFixtures.aCard("b", Column.INBOX))
+        fx.connect()
+        fx.source.snapshotFailure = IOException("daemon not responding")
+        fx.source.onSnapshot = { fx.source.deliver(BoardFixtures.aMove(5, "b", Column.SPEC_REVIEW)) }
+
+        val result = fx.monitor.resync()
+
+        val board = requireNotNull(fx.monitor.view.value).board
+        assertThat(result).isEqualTo(ResyncResult.Failed)
+        assertThat(board.cards.map { it.id }).containsExactlyInAnyOrder("a", "b")
+        assertThat(board.cardsIn(Column.CODING).map { it.id }).containsExactly("a")
+        assertThat(board.cardsIn(Column.SPEC_REVIEW).map { it.id }).containsExactly("b")
+    }
+
+    @Test
+    fun `AC-4 a resync while another is running starts no second snapshot read`() = withMonitor { fx ->
+        fx.source.snapshot = listOf(BoardFixtures.aCard("a", Column.CODING))
+        fx.connect()
+        var nested: ResyncResult? = null
+        fx.source.onSnapshot = {
+            fx.source.onSnapshot = {}
+            nested = runBlocking { fx.monitor.resync() }
+        }
+
+        val outer = fx.monitor.resync()
+        val afterwards = fx.monitor.resync()
+
+        assertThat(nested).isEqualTo(ResyncResult.Busy)
+        assertThat(outer).isEqualTo(ResyncResult.Reloaded)
+        assertThat(afterwards).isEqualTo(ResyncResult.Reloaded)
+        assertThat(fx.source.snapshotCalls).isEqualTo(3)
+    }
+
     private fun withMonitor(body: suspend (MonitorFixtures) -> Unit) = runBlocking {
         val fx = MonitorFixtures()
         val job = CoroutineScope(Dispatchers.Unconfined).launch { fx.monitor.run() }
@@ -110,9 +178,19 @@ class FakeBoardSource : BoardSource {
     val fetched = mutableListOf<String>()
     var snapshotCalls = 0
         private set
+    var onSnapshot: () -> Unit = {}
+    var snapshotFailure: IOException? = null
+    private var listener: ((BoardEvent) -> Unit)? = null
+
+    /** Delivers an event through the listener the monitor registered on its last subscription. */
+    fun deliver(event: BoardEvent) {
+        requireNotNull(listener) { "no subscription yet" }(event)
+    }
 
     override fun snapshot(): List<BoardCard> {
         snapshotCalls += 1
+        onSnapshot()
+        snapshotFailure?.let { throw it }
         return snapshot
     }
 
@@ -123,6 +201,7 @@ class FakeBoardSource : BoardSource {
 
     override fun subscribe(after: Long?, onEvent: (BoardEvent) -> Unit) {
         afters += after
+        listener = onEvent
         sessions.removeFirstOrNull().orEmpty().forEach(onEvent)
         throw IOException("connection closed")
     }
