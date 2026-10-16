@@ -7,6 +7,7 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import java.util.UUID
+import sfv2.core.AcceptancePatterns
 import sfv2.core.Actor
 import sfv2.core.Event
 import sfv2.core.EventId
@@ -15,7 +16,22 @@ import sfv2.store.CardEventStore
 import sfv2.store.StoredEvent
 
 /** What to run: [command] is executed without a shell in [workingDir], killed after [timeout]. */
-data class GateSpec(val name: String, val command: List<String>, val workingDir: Path, val timeout: Duration)
+data class GateSpec(
+    val name: String,
+    val command: List<String>,
+    val workingDir: Path,
+    val timeout: Duration,
+    val check: GateCheck = GateCheck.ExitCode,
+)
+
+/** How the verdict is derived once the process ends. */
+sealed interface GateCheck {
+    data object ExitCode : GateCheck
+
+    data class Red(val patterns: AcceptancePatterns) : GateCheck
+
+    data class Green(val patterns: AcceptancePatterns) : GateCheck
+}
 
 /** Raw outcome of a gate process: no exit code and not timed out means it could not start. */
 data class GateRun(val exitCode: Int?, val timedOut: Boolean)
