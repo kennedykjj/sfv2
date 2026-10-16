@@ -3,6 +3,7 @@ package sfv2.app
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -17,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
@@ -27,6 +30,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -111,14 +115,16 @@ private fun openNoticePorts(requests: MutableSharedFlow<WindowRequest>): NoticeP
     return NoticePorts(tray, notifier)
 }
 
-/** [commands] and [closure] are null without a daemon; the card view then shows no owner action. */
+/** [commands] and [closure] are null without a daemon; the card panel then shows no owner action. */
 @Composable
 private fun OpenCard(
     cardId: String,
     source: CardDetailSource?,
     commands: OwnerCommands?,
     closure: ClosureCommands?,
-    onBack: () -> Unit,
+    panel: SidePanelState,
+    width: Dp,
+    update: ((SidePanelState) -> SidePanelState) -> Unit,
 ) {
     val model = remember(cardId) {
         CardDetailModel(cardId, source ?: CardDetailSource { throw IOException("no runtime dir") })
@@ -135,7 +141,17 @@ private fun OpenCard(
             withContext(Dispatchers.IO) { model.refresh() }
         }
     }
-    CardDetailScreen(cardId, state, onBack, specReview = specReview, closure = controller)
+    CardSidePanel(
+        cardId,
+        state,
+        tab = panel.tab,
+        width = width,
+        onTab = { tab -> update { it.selectTab(tab) } },
+        onResize = { px -> update { it.resize(px) } },
+        onClose = { update { it.close() } },
+        specReview = specReview,
+        closure = controller,
+    )
 }
 
 private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
@@ -199,7 +215,8 @@ fun main() {
         val pulseView by (pulse?.view ?: noPulse).collectAsState()
         val connected = state == ConnectionState.Connected
         var showFeed by remember { mutableStateOf(false) }
-        var openCardId by remember { mutableStateOf<String?>(null) }
+        var panel by remember { mutableStateOf(SidePanelState()) }
+        val escapeClaim = remember { EscapeClaim() }
         var palette by remember { mutableStateOf(PaletteState()) }
         val paletteList = remember(view, palette.query) {
             paletteEntries(view?.board?.cards.orEmpty(), PaletteView.entries, palette.query)
@@ -207,9 +224,9 @@ fun main() {
 
         fun choose(entry: PaletteEntry?) {
             when (entry) {
-                is PaletteEntry.Card -> openCardId = entry.card.id
+                is PaletteEntry.Card -> panel = panel.open(entry.card.id)
                 is PaletteEntry.View -> {
-                    openCardId = null
+                    panel = panel.close()
                     showSettings = entry.view == PaletteView.SETTINGS && settingsClient != null
                     showFeed = entry.view == PaletteView.FEED
                 }
@@ -222,6 +239,12 @@ fun main() {
             return when {
                 shortcut -> {
                     if (event.type == KeyEventType.KeyDown) palette = palette.toggle()
+                    true
+                }
+                event.key == Key.Escape && !palette.open && panel.cardId != null && !escapeClaim.textFieldFocused -> {
+                    if (event.type == KeyEventType.KeyDown) {
+                        panel = panel.escape(paletteOpen = false, textFieldFocused = false)
+                    }
                     true
                 }
                 !palette.open || event.key !in PALETTE_KEYS -> false
@@ -269,7 +292,7 @@ fun main() {
                         is WindowRequest.Open -> {
                             window.isMinimized = false
                             window.toFront()
-                            openCardId = request.cardId
+                            request.cardId?.let { panel = panel.open(it) }
                         }
                         WindowRequest.Quit -> exitApplication()
                     }
@@ -277,10 +300,9 @@ fun main() {
             }
             val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
+            CompositionLocalProvider(LocalEscapeClaim provides escapeClaim) {
             Box(Modifier.fillMaxSize()) {
                 when {
-                    openCardId != null ->
-                        OpenCard(requireNotNull(openCardId), cardSource, ownerCommands, closureCommands) { openCardId = null }
                     showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
                     feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                         val feedState by feed.client.state.collectAsState()
@@ -293,8 +315,38 @@ fun main() {
                     view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
                         Column(Modifier.fillMaxSize()) {
                             PulseStrip(pulseView, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
-                            Box(Modifier.weight(1f)) {
-                                BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings, onReload = board?.let { monitor -> monitor::resync })
+                            BoxWithConstraints(Modifier.weight(1f)) {
+                                val openId = panel.cardId
+                                val panelWidth = minOf(panel.width.dp, maxWidth)
+                                val boardScreen: @Composable () -> Unit = {
+                                    BoardScreen(
+                                        view,
+                                        connected = connected,
+                                        controller = owner,
+                                        onOpenSettings = openSettings,
+                                        onReload = board?.let { monitor -> monitor::resync },
+                                        openCardId = openId,
+                                        focusReturnCardId = panel.focusReturnCardId,
+                                        onOpenCard = { panel = panel.open(it) },
+                                    )
+                                }
+                                val sidePanel: @Composable () -> Unit = {
+                                    if (openId != null) {
+                                        OpenCard(openId, cardSource, ownerCommands, closureCommands, panel, panelWidth) { change ->
+                                            panel = change(panel)
+                                        }
+                                    }
+                                }
+                                when (panelPlacement(maxWidth.value.toInt())) {
+                                    PanelPlacement.SIDE_BY_SIDE -> Row(Modifier.fillMaxSize()) {
+                                        Box(Modifier.weight(1f)) { boardScreen() }
+                                        sidePanel()
+                                    }
+                                    PanelPlacement.OVERLAY -> Box(Modifier.fillMaxSize()) {
+                                        boardScreen()
+                                        Box(Modifier.align(Alignment.CenterEnd)) { sidePanel() }
+                                    }
+                                }
                             }
                         }
                     }
@@ -313,6 +365,7 @@ fun main() {
                         onClose = { palette = palette.close() },
                     )
                 }
+            }
             }
         }
     }

@@ -5,32 +5,48 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -55,9 +71,10 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import sfv2.core.Column as BoardColumn
 
-private val COMPACT_WIDTH = 860.dp
 private val OWNER_DECISIONS = setOf("OWNER_APPROVED", "OWNER_CHANGE_REQUESTED")
 private const val DONE_COLUMN = "DONE"
 private const val PASS = "PASS"
@@ -87,128 +104,280 @@ private fun body(color: Color = Tokens.soft) = TextStyle(fontFamily = sans, font
 private fun meta(color: Color = Tokens.muted) = TextStyle(fontFamily = sans, fontSize = 13.sp, color = color)
 private fun tabular(style: TextStyle) = style.copy(fontFeatureSettings = "tnum")
 
+/** Tells the window that a text field (or the move chooser) owns Esc while it has focus. */
+class EscapeClaim {
+    var textFieldFocused by mutableStateOf(false)
+}
+
+val LocalEscapeClaim = compositionLocalOf { EscapeClaim() }
+
+/** Marks the node as an Esc owner while it is focused, so the window does not close the side panel under it. */
+@Composable
+fun Modifier.claimsEscape(): Modifier {
+    val claim = LocalEscapeClaim.current
+    DisposableEffect(claim) { onDispose { claim.textFieldFocused = false } }
+    return onFocusChanged { claim.textFieldFocused = it.isFocused }
+}
+
+private const val PANEL_ID_LENGTH = 8
+private const val RESIZE_STEP = 16
+private val RESIZE_HANDLE = 8.dp
+private val FOOTER_MAX_HEIGHT = 280.dp
+
 /**
- * [specReview] is null without a daemon; the owner's actions show only for a card in `SPEC_REVIEW`.
- * [closure] is the closure screen's controller; without it (no daemon socket) a Done card has no closing action.
+ * The card as a side panel of the board, [width] wide. [specReview] is null without a daemon; the owner's decision
+ * shows in the footer only for a card in `SPEC_REVIEW`. [closure] is the closure screen's controller; without it
+ * (no daemon socket) a Done card has no closing action. All text is drawn as plain text.
  */
 @Composable
-fun CardDetailScreen(
+fun CardSidePanel(
     cardId: String,
     state: CardDetailState,
-    onBack: () -> Unit,
+    tab: PanelTab,
+    width: Dp,
+    onTab: (PanelTab) -> Unit,
+    onResize: (Int) -> Unit,
+    onClose: () -> Unit,
     zone: ZoneId = ZoneId.systemDefault(),
     specReview: SpecReviewController? = null,
     closure: ClosureController? = null,
 ) {
-    when (state) {
-        CardDetailState.Disconnected -> ConnectionScreen(ConnectionState.Disconnected(DisconnectReason.NOT_RESPONDING))
-        CardDetailState.NotFound -> NotFound(cardId, onBack)
-        CardDetailState.Loading -> Page { Header(cardId, null, null); Section(Texts.SPEC) { Muted(Texts.LOADING_CARD) } }
-        is CardDetailState.Loaded -> {
-            LaunchedEffect(state.detail) { specReview?.onDetail(state.detail) }
-            Page { Detail(state.detail, zone, specReview.takeIf { specReviewActionsVisible(state) }, closure) }
-        }
-    }
-}
-
-@Composable
-private fun Page(content: @Composable () -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxSize().background(Tokens.ground)) {
-        val gap = if (maxWidth < COMPACT_WIDTH) 16.dp else 24.dp
-        Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(gap),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column(Modifier.widthIn(max = 880.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                content()
+    val titleFocus = remember(cardId) { FocusRequester() }
+    LaunchedEffect(cardId) { titleFocus.requestFocus() }
+    val detail = (state as? CardDetailState.Loaded)?.detail
+    val column = detail?.let { found -> BoardColumn.entries.firstOrNull { it.name == found.column } }
+    if (state is CardDetailState.Loaded) LaunchedEffect(state.detail) { specReview?.onDetail(state.detail) }
+    Row(
+        Modifier
+            .fillMaxHeight()
+            .width(width)
+            .shadow(24.dp)
+            .background(Tokens.panel)
+            .semantics { paneTitle = Texts.panelTitle(cardId.take(PANEL_ID_LENGTH)) },
+    ) {
+        ResizeHandle(width.value.roundToInt(), onResize)
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            PanelHeader(cardId, detail, column, titleFocus, onClose)
+            if (detail != null) PanelTabs(tab, onTab)
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when (state) {
+                    CardDetailState.Disconnected -> Muted(Texts.PANEL_DISCONNECTED)
+                    CardDetailState.NotFound -> {
+                        BasicText(Texts.cardNotFound(cardId), style = body(Tokens.text))
+                        Muted(Texts.PANEL_NOT_FOUND_EXIT)
+                    }
+                    CardDetailState.Loading -> Muted(Texts.LOADING_CARD)
+                    is CardDetailState.Loaded -> PanelBody(state.detail, tab, zone, closure)
+                }
+            }
+            if (column != null && detail != null) {
+                PanelFooterBar(column, detail, specReview.takeIf { specReviewActionsVisible(state) })
             }
         }
     }
 }
 
+/** The 8 px left edge: drag it, or press Left/Right with the focus on it, to change the width. */
 @Composable
-private fun NotFound(cardId: String, onBack: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Tokens.ground).padding(16.dp), contentAlignment = Alignment.Center) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            BasicText(Texts.cardNotFound(cardId), style = body(Tokens.text).copy(fontSize = 15.sp))
+private fun ResizeHandle(widthPx: Int, onResize: (Int) -> Unit) {
+    val density = LocalDensity.current.density
+    val currentWidth by rememberUpdatedState(widthPx)
+    val currentResize by rememberUpdatedState(onResize)
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .width(RESIZE_HANDLE)
+            .fillMaxHeight()
+            .semantics { contentDescription = Texts.RESIZE_PANEL }
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .onKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> currentResize(currentWidth + RESIZE_STEP)
+                    Key.DirectionRight -> currentResize(currentWidth - RESIZE_STEP)
+                    else -> return@onKeyEvent false
+                }
+                true
+            }
+            .pointerInput(Unit) {
+                var dragged = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragged = currentWidth.toFloat() },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        dragged -= amount / density
+                        currentResize(dragged.roundToInt())
+                    },
+                )
+            },
+    ) {
+        Box(Modifier.width(1.dp).fillMaxHeight().background(Tokens.edgeHi))
+        if (focused) Box(Modifier.fillMaxSize().border(2.dp, Tokens.sand))
+    }
+}
+
+@Composable
+private fun PanelHeader(
+    cardId: String,
+    detail: CardDetail?,
+    column: BoardColumn?,
+    titleFocus: FocusRequester,
+    onClose: () -> Unit,
+) {
+    val hue = column?.let { hueColor(stageHue(it)) } ?: Tokens.text
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, end = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             BasicText(
-                Texts.BACK,
-                modifier = Modifier
-                    .heightIn(min = 24.dp)
-                    .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
-                    .clickable(onClick = onBack)
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                style = body(Tokens.text),
+                "#${cardId.take(PANEL_ID_LENGTH)}",
+                modifier = Modifier.focusRequester(titleFocus).focusable().semantics { heading() },
+                style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = hue),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                detail?.total?.let {
+                    BasicText(
+                        formatCost(it.costUsd),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        style = tabular(TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.text)),
+                    )
+                }
+                BasicText(
+                    Texts.CLOSE_PANEL,
+                    modifier = Modifier
+                        .heightIn(min = 24.dp)
+                        .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
+                        .clickable(role = Role.Button, onClick = onClose)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    style = meta(Tokens.text),
+                )
+            }
+        }
+        detail?.let {
+            BasicText(
+                it.title,
+                style = TextStyle(fontFamily = sans, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text),
             )
         }
+        if (column != null) CardPathRail(column)
     }
 }
 
+/** Ten marks in board order: filled for the columns already traveled, ringed and larger for the current, hollow for the next. */
 @Composable
-private fun Header(cardId: String, detail: CardDetail?, total: CostTotal?) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            BasicText("#$cardId", style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.text))
-            detail?.let {
-                BasicText(
-                    it.title,
-                    modifier = Modifier.semantics { heading() },
-                    style = TextStyle(fontFamily = sans, fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text),
-                )
-                BasicText(it.column, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
-            }
-        }
-        total?.let {
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
-                BasicText(
-                    formatCost(it.costUsd),
-                    style = tabular(TextStyle(fontFamily = sans, fontSize = 17.sp, color = Tokens.text)),
-                )
-                if (it.status != CostStatus.KNOWN) {
-                    BasicText(Texts.COST_UNKNOWN_REASON, style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.muted))
+private fun CardPathRail(column: BoardColumn) {
+    val description = cardPathDescription(column)
+    val hue = hueColor(stageHue(column))
+    Column(
+        Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = description },
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            cardPath(column).forEach { mark ->
+                val base = Modifier.weight(1f)
+                when (mark.step) {
+                    PathStep.TRAVELED -> Box(base.height(6.dp).background(Tokens.muted, RoundedCornerShape(3.dp)))
+                    PathStep.CURRENT -> Box(base.height(10.dp).background(hue, RoundedCornerShape(5.dp)).border(2.dp, Tokens.text, RoundedCornerShape(5.dp)))
+                    PathStep.NEXT -> Box(base.height(6.dp).border(1.dp, Tokens.muted, RoundedCornerShape(3.dp)))
                 }
             }
         }
+        BasicText(description, style = meta(Tokens.soft))
     }
 }
 
 @Composable
-private fun Detail(detail: CardDetail, zone: ZoneId, specReview: SpecReviewController?, closure: ClosureController?) {
-    Header(detail.id, detail, detail.total)
-    if (specReview != null) SpecReviewActions(detail.id, specReview)
-    if (closure != null && detail.column == DONE_COLUMN) ClosureEntry(detail, closure)
-    Section(Texts.SPEC) {
-        if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
-            Faint(Texts.NO_SPEC)
-        } else {
-            SelectionContainer { BasicText(detail.spec.text, modifier = Modifier.widthIn(max = 640.dp), style = body()) }
+private fun PanelTabs(selected: PanelTab, onSelect: (PanelTab) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        PanelTab.entries.forEach { tab ->
+            val active = tab == selected
+            Column(
+                Modifier.selectable(selected = active, role = Role.Tab) { onSelect(tab) },
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                BasicText(
+                    tabLabel(tab),
+                    style = TextStyle(
+                        fontFamily = sans,
+                        fontSize = 14.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (active) Tokens.text else Tokens.muted,
+                    ),
+                )
+                Box(Modifier.height(2.dp).fillMaxWidth().background(if (active) Tokens.text else Color.Transparent))
+            }
         }
     }
-    Section(Texts.GATES) {
-        if (detail.gates.isEmpty() && detail.criteria.isEmpty()) Faint(Texts.NO_GATES)
-        detail.gates.forEach { GateLine(it) }
-        if (detail.criteria.isNotEmpty()) {
-            BasicText(Texts.CRITERIA, style = meta(Tokens.soft).copy(fontWeight = FontWeight.SemiBold))
-            detail.criteria.forEach { CriterionLine(it) }
+}
+
+private fun tabLabel(tab: PanelTab): String =
+    when (tab) {
+        PanelTab.SUMMARY -> Texts.TAB_SUMMARY
+        PanelTab.SPEC -> Texts.TAB_SPEC
+        PanelTab.EVENTS -> Texts.TAB_EVENTS
+        PanelTab.RUNS -> Texts.TAB_RUNS
+    }
+
+/** The fixed foot of the panel: the owner's decision for a card that waits for it, and nothing for any other card. */
+@Composable
+private fun PanelFooterBar(column: BoardColumn, detail: CardDetail, specReview: SpecReviewController?) {
+    val footer = panelFooter(column) as? PanelFooter.Decision ?: return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = FOOTER_MAX_HEIGHT)
+            .border(1.dp, Tokens.edge)
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicText(Texts.FOOTER_DECISION, style = meta(Tokens.sand).copy(fontWeight = FontWeight.SemiBold))
+        BasicText(Texts.approveTo(footer.approveTo), style = meta(Tokens.soft))
+        if (specReview != null) SpecReviewActions(detail.id, specReview) else if (column == BoardColumn.STAGED) Muted(Texts.FOOTER_STAGED_HINT)
+    }
+}
+
+@Composable
+private fun PanelBody(detail: CardDetail, tab: PanelTab, zone: ZoneId, closure: ClosureController?) {
+    when (tab) {
+        PanelTab.SUMMARY -> {
+            if (closure != null && detail.column == DONE_COLUMN) ClosureEntry(detail, closure)
+            Section(Texts.GATES) {
+                if (detail.gates.isEmpty() && detail.criteria.isEmpty()) Faint(Texts.NO_GATES)
+                detail.gates.forEach { GateLine(it) }
+                if (detail.criteria.isNotEmpty()) {
+                    BasicText(Texts.CRITERIA, style = meta(Tokens.soft).copy(fontWeight = FontWeight.SemiBold))
+                    detail.criteria.forEach { CriterionLine(it) }
+                }
+            }
         }
-    }
-    Section(Texts.TIMELINE) {
-        BasicText(
-            "${detail.events.size}",
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.faint),
-        )
-        if (detail.eventsTruncated) Muted(Texts.EVENTS_TRUNCATED)
-        if (detail.events.isEmpty()) Faint(Texts.NO_EVENTS) else detail.events.forEach { EventRow(it, zone) }
-    }
-    Section(Texts.RUNS) {
-        if (detail.runs.isEmpty()) Faint(Texts.NO_RUNS)
-        detail.runs.forEach { RunLine(it) }
-        if (detail.runs.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                val bold = TextStyle(fontFamily = sans, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text)
-                BasicText(Texts.TOTAL, style = bold)
-                BasicText(formatCost(detail.total.costUsd), style = tabular(bold))
+        PanelTab.SPEC -> Section(Texts.SPEC) {
+            if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
+                Faint(Texts.NO_SPEC)
+            } else {
+                SelectionContainer { BasicText(detail.spec.text, modifier = Modifier.widthIn(max = 640.dp), style = body()) }
+            }
+        }
+        PanelTab.EVENTS -> Section(Texts.TIMELINE) {
+            BasicText(
+                "${detail.events.size}",
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.faint),
+            )
+            if (detail.eventsTruncated) Muted(Texts.EVENTS_TRUNCATED)
+            if (detail.events.isEmpty()) Faint(Texts.NO_EVENTS) else detail.events.forEach { EventRow(it, zone) }
+        }
+        PanelTab.RUNS -> Section(Texts.RUNS) {
+            if (detail.runs.isEmpty()) Faint(Texts.NO_RUNS)
+            detail.runs.forEach { RunLine(it) }
+            if (detail.runs.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    val bold = TextStyle(fontFamily = sans, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text)
+                    BasicText(Texts.TOTAL, style = bold)
+                    BasicText(formatCost(detail.total.costUsd), style = tabular(bold))
+                }
             }
         }
     }
@@ -320,6 +489,7 @@ private fun ChangeNote(enabled: Boolean, onSend: (String) -> Unit, onCancel: () 
                 .heightIn(min = 64.dp)
                 .border(1.dp, Tokens.edgeHi, RoundedCornerShape(6.dp))
                 .padding(8.dp)
+                .claimsEscape()
                 .focusRequester(focus)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

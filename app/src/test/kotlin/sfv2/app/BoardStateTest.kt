@@ -809,6 +809,104 @@ class BoardStateTest {
         assertThat(face.description).contains(title)
     }
 
+    @Test
+    fun `AC-1 opening another card swaps the card of the open panel without closing it`() {
+        val opened = SidePanelState().open("a1")
+        val swapped = opened.open("b2")
+
+        assertThat(opened.cardId).isEqualTo("a1")
+        assertThat(swapped.cardId).isEqualTo("b2")
+    }
+
+    @Test
+    fun `AC-2 the panel opens on Summary and the chosen tab survives a card swap`() {
+        val opened = SidePanelState().open("a1")
+        val onEvents = opened.selectTab(PanelTab.EVENTS).open("b2")
+
+        assertThat(PanelTab.entries.map { it.name }).containsExactly("SUMMARY", "SPEC", "EVENTS", "RUNS")
+        assertThat(opened.tab).isEqualTo(PanelTab.SUMMARY)
+        assertThat(onEvents.tab).isEqualTo(PanelTab.EVENTS)
+        assertThat(onEvents.close().open("c3").tab).isEqualTo(PanelTab.SUMMARY)
+    }
+
+    @Test
+    fun `AC-2 the path lists the ten columns in board order with the verbatim name and the step of each`() {
+        val path = cardPath(Column.READY_FOR_DEV)
+
+        assertThat(path.map { it.column }).isEqualTo(Column.entries.toList())
+        assertThat(path.map { it.name }).isEqualTo(Column.entries.map { it.displayName })
+        assertThat(path.map { it.step }).containsExactly(
+            PathStep.TRAVELED, PathStep.TRAVELED, PathStep.TRAVELED, PathStep.TRAVELED,
+            PathStep.CURRENT,
+            PathStep.NEXT, PathStep.NEXT, PathStep.NEXT, PathStep.NEXT, PathStep.NEXT,
+        )
+    }
+
+    @Test
+    fun `AC-2 the path of the first and last column has no traveled or no next marks and the description names the position`() {
+        assertThat(cardPath(Column.INBOX).map { it.step }.count { it == PathStep.TRAVELED }).isEqualTo(0)
+        assertThat(cardPath(Column.DONE).map { it.step }.count { it == PathStep.NEXT }).isEqualTo(0)
+        assertThat(cardPath(Column.DONE).last().step).isEqualTo(PathStep.CURRENT)
+        assertThat(cardPathDescription(Column.READY_FOR_DEV)).isEqualTo("etapa 5 de 10: Ready for Dev")
+        assertThat(cardPathDescription(Column.INBOX)).isEqualTo("etapa 1 de 10: Inbox")
+    }
+
+    @Test
+    fun `AC-3 the width is clamped between 360 and 680 and starts at 480`() {
+        val panel = SidePanelState().open("a1")
+
+        assertThat(SidePanelState.MIN_WIDTH).isEqualTo(360)
+        assertThat(SidePanelState.MAX_WIDTH).isEqualTo(680)
+        assertThat(panel.width).isEqualTo(480)
+        assertThat(panel.resize(500).width).isEqualTo(500)
+        assertThat(panel.resize(100).width).isEqualTo(360)
+        assertThat(panel.resize(5000).width).isEqualTo(680)
+        assertThat(panel.resize(360).width).isEqualTo(360)
+        assertThat(panel.resize(680).width).isEqualTo(680)
+    }
+
+    @Test
+    fun `AC-3 the width is kept when the panel closes and reopens`() {
+        val reopened = SidePanelState().open("a1").resize(600).close().open("b2")
+
+        assertThat(reopened.width).isEqualTo(600)
+    }
+
+    @Test
+    fun `AC-4 below 880 px the panel overlays the board and from 880 px it shares the row`() {
+        assertThat(panelPlacement(879)).isEqualTo(PanelPlacement.OVERLAY)
+        assertThat(panelPlacement(600)).isEqualTo(PanelPlacement.OVERLAY)
+        assertThat(panelPlacement(880)).isEqualTo(PanelPlacement.SIDE_BY_SIDE)
+        assertThat(panelPlacement(1600)).isEqualTo(PanelPlacement.SIDE_BY_SIDE)
+    }
+
+    @Test
+    fun `AC-5 Esc outside a text field closes the panel and hands the focus back to the card that opened it`() {
+        val opened = SidePanelState().open("a1").open("b2")
+
+        val closed = opened.escape(paletteOpen = false, textFieldFocused = false)
+
+        assertThat(closed.cardId).isNull()
+        assertThat(closed.focusReturnCardId).isEqualTo("b2")
+    }
+
+    @Test
+    fun `AC-5 Esc inside a text field or with the palette open leaves the panel open`() {
+        val opened = SidePanelState().open("a1")
+
+        assertThat(opened.escape(paletteOpen = false, textFieldFocused = true)).isEqualTo(opened)
+        assertThat(opened.escape(paletteOpen = true, textFieldFocused = false)).isEqualTo(opened)
+    }
+
+    @Test
+    fun `AC-6 the footer decides only in the owner columns and names where the approval goes`() {
+        assertThat(panelFooter(Column.SPEC_REVIEW)).isEqualTo(PanelFooter.Decision(Column.READY_FOR_DEV))
+        assertThat(panelFooter(Column.STAGED)).isEqualTo(PanelFooter.Decision(Column.READY_FOR_PROD))
+        Column.entries.filter { it !in OWNER_DECISION_COLUMNS }.forEach { column ->
+            assertThat(panelFooter(column)).isEqualTo(PanelFooter.None)
+        }
+    }
+
     private companion object {
         const val EPSILON = 1e-5f
     }
