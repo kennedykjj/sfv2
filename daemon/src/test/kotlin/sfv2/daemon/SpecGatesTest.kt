@@ -16,6 +16,8 @@ import sfv2.ports.SessionResult
 import sfv2.ports.SessionScript
 import sfv2.store.CardEventStore
 import sfv2.store.Database
+import sfv2.store.SpecRead
+import sfv2.store.SpecStore
 
 class SpecGatesTest {
 
@@ -263,6 +265,52 @@ class SpecGatesTest {
         }
     }
 
+    private fun registeredAfterGates(dir: Path, specText: String): SpecRead {
+        val database = Database.open(dir.resolve("gates.db"))
+        val events = EventStream(CardEventStore(database))
+        try {
+            val worktree = Files.createDirectories(dir.resolve("wt"))
+            val specFile = "docs/superpowers/specs/2026-10-16-x-design.md"
+            Files.createDirectories(worktree.resolve(specFile).parent)
+            Files.writeString(worktree.resolve(specFile), specText)
+            val changed = object : ChangedPaths {
+                override fun between(worktree: Path, base: String): List<String> = emptyList()
+
+                override fun untracked(worktree: Path): List<String> = listOf(specFile)
+            }
+            val specs = SpecStore(database, dir.resolve("specs"))
+            val store = CardEventStore(database)
+            val gates = SpecScopeRefineGates(
+                DevelopFixtures.project, store, EventRecorder(store, events), changed,
+                Clock.fixed(Instant.parse("2026-10-16T10:00:00Z"), ZoneOffset.UTC), specs = specs,
+            )
+
+            gates.evaluate("c1", worktree)
+
+            return specs.read("c1")
+        } finally {
+            events.close()
+            database.close()
+        }
+    }
+
+    @Test
+    fun `AC-5 a spec that passes the gates is registered for the card`(@TempDir dir: Path) {
+        val spec = aSpec()
+
+        val registered = registeredAfterGates(dir, spec)
+
+        assertThat(registered).isInstanceOf(SpecRead.Valid::class.java)
+        assertThat((registered as SpecRead.Valid).text).isEqualTo(spec)
+    }
+
+    @Test
+    fun `AC-5 a spec that fails a gate is not registered`(@TempDir dir: Path) {
+        val registered = registeredAfterGates(dir, aSpec(testPlan = ""))
+
+        assertThat(registered).isInstanceOf(SpecRead.NotRegistered::class.java)
+    }
+
     @Test
     fun `AC-2 the scripted runtime fills the refine template and the written spec raises no gate finding`(@TempDir dir: Path) {
         val resource = javaClass.classLoader.getResourceAsStream("skills/refine/spec-template.md")
@@ -292,7 +340,7 @@ class SpecGatesTest {
                 clock,
             )
             val specPath = "docs/superpowers/specs/2026-10-16-skill-de-refine-via-mcp-design.md"
-            val request = SessionRequest("refine", worktree, "model", dir.resolve("mcp.json"))
+            val request = SessionRequest("refine", worktree, "model", dir.resolve("mcp.json"), "prompt")
 
             ScriptedRefineAgent(tools, template).run(FakeRuntime(listOf(SessionScript.Succeed)), request, "c36", specPath)
 

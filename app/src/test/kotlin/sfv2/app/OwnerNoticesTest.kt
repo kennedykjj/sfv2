@@ -8,6 +8,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import sfv2.core.Column
 import sfv2.core.EventType
+import sfv2.core.OWNER_WAIT_COLUMNS
 
 object OwnerNoticeFixtures {
     const val A = "3f2a9c1e-1111-4222-8333-444455556666"
@@ -392,5 +393,33 @@ class OwnerNoticesTest {
 
         assertThat(notifications.sent).hasSize(1)
         assertThat(notifications.sent.single().body).isEqualTo("Card 3f2a9c1e espera sua decisão: Staged.")
+    }
+
+    // ---- unified owner wait set (card #227) ----
+
+    @Test
+    fun `AC-4 the snapshot waits on exactly the core owner wait columns`() {
+        val everyColumn = Column.entries.mapIndexed { index, column -> OwnerNoticeFixtures.aCard("card-$index", column) }
+
+        val waiting = WaitingCards.EMPTY.withSnapshot(everyColumn, OwnerNoticeFixtures.noon)
+
+        assertThat(OWNER_WAIT_COLUMNS).isNotEmpty()
+        assertThat(waiting.ordered.map { it.column }).containsExactlyInAnyOrderElementsOf(OWNER_WAIT_COLUMNS)
+    }
+
+    @Test
+    fun `AC-4 a move into each core owner wait column puts the card in the waiting set and a move out takes it off`() {
+        assertThat(OWNER_WAIT_COLUMNS).isNotEmpty()
+        OWNER_WAIT_COLUMNS.forEach { column ->
+            val into = WaitingCards.EMPTY.withEvent(
+                OwnerNoticeFixtures.moved(1, OwnerNoticeFixtures.A, column), null, OwnerNoticeFixtures.noon,
+            )
+            val out = into.withEvent(
+                OwnerNoticeFixtures.moved(2, OwnerNoticeFixtures.A, Column.CODING), null, OwnerNoticeFixtures.noon,
+            )
+
+            assertThat(into.contains(OwnerNoticeFixtures.A)).describedAs(column.name).isTrue()
+            assertThat(out.contains(OwnerNoticeFixtures.A)).describedAs(column.name).isFalse()
+        }
     }
 }

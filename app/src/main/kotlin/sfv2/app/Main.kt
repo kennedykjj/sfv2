@@ -46,6 +46,7 @@ private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
 private const val OWNER_TOKEN_FILE = "owner.token"
 private const val REQUEST_BUFFER = 8
 private const val TICK_EVERY_MILLIS = 60_000L
+private const val SENT_REFRESH_MILLIS = 2_000L
 
 /** What a click on the tray or on a notification asks of the window. */
 private sealed interface WindowRequest {
@@ -98,14 +99,24 @@ private fun openNoticePorts(requests: MutableSharedFlow<WindowRequest>): NoticeP
     return NoticePorts(tray, notifier)
 }
 
+/** [commands] is null without a daemon; the card view then shows no owner action. */
 @Composable
-private fun OpenCard(cardId: String, source: CardDetailSource?, onBack: () -> Unit) {
+private fun OpenCard(cardId: String, source: CardDetailSource?, commands: OwnerCommands?, onBack: () -> Unit) {
     val model = remember(cardId) {
         CardDetailModel(cardId, source ?: CardDetailSource { throw IOException("no runtime dir") })
     }
     val state by model.state.collectAsState()
+    val specReview = remember(cardId, commands) { commands?.let { SpecReviewController(it, Dispatchers.IO) } }
     LaunchedEffect(model) { withContext(Dispatchers.IO) { model.refresh() } }
-    CardDetailScreen(cardId, state, onBack)
+    // The column only changes when the daemon event reaches the detail: after an accepted command, keep reading it.
+    val sent = specReview?.state?.collectAsState()?.value?.sent == true
+    LaunchedEffect(model, sent) {
+        while (sent) {
+            delay(SENT_REFRESH_MILLIS)
+            withContext(Dispatchers.IO) { model.refresh() }
+        }
+    }
+    CardDetailScreen(cardId, state, onBack, specReview = specReview)
 }
 
 private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
@@ -148,10 +159,11 @@ fun main() {
         PulseMonitor(SocketPulseSource(socket), SocketCostSummarySource(socket), Clock.systemUTC(), ZoneId.systemDefault(), Dispatchers.IO)
     }
 
-    val owner = board?.let {
-        val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
-        OwnerMoveController(SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE)), it, Dispatchers.IO)
+    val ownerCommands = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE))
     }
+    val owner = board?.let { monitor -> ownerCommands?.let { OwnerMoveController(it, monitor, Dispatchers.IO) } }
 
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
     val noPulse: StateFlow<PulseView> = MutableStateFlow(PulseView.loading())
@@ -197,7 +209,7 @@ fun main() {
             val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
             when {
-                openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource) { openCardId = null }
+                openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource, ownerCommands) { openCardId = null }
                 showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
                 feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                     val feedState by feed.client.state.collectAsState()
