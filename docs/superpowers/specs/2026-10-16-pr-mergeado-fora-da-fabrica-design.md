@@ -15,6 +15,9 @@ _Product Owner_
 - **AC-3** — Dado um PR achado aberto que é mergeado fora entre a consulta e o merge da fábrica (resposta NotOpen ou Merged), quando a entrega trata essa resposta, então o resultado é o mesmo do AC-1 e AC-2.
 - **AC-4** — Dado um PR mergeado pela própria fábrica, quando a entrega termina, então o evento de merge não é marcado como externo (comportamento atual preservado).
 - **AC-5** — Dado um PR fechado sem merge, quando a entrega o encontra, então o card volta a Staged com motivo `pr_not_open`.
+- **AC-7** — Dado um PR mergeado fora da fábrica com head diferente do aprovado, quando a entrega o encontra, então o card não vai a Done: volta a Staged com `merged_head_differs` e os dois shas.
+- **AC-8** — Dado um PR mergeado fora da fábrica com `mergedBy` válido, quando o card chega a Done, então o evento externo registra quem mergeou; com login fora do formato, o campo é omitido e o card segue a Done.
+- **AC-9** — Dado o adapter real, quando consulta o PR mergeado de uma branch, então devolve número, commit de merge, head e `mergedBy`, recusa branch ou repo inválidos sem chamar o `gh`, e `mergeCommit.oid` ausente lança `ForgeException`.
 - **AC-6** — Dado que o forge falha ao consultar o PR, quando a entrega roda, então o card volta a Staged com motivo `forge_failed` e não fica travado em Ready for Prod.
 **Out of scope:** Detectar merge externo fora do momento da entrega (sem polling nem sincronização contínua); entrega no PR (modo sem merge da fábrica); fechar issue ou ticket externo; mudanças de UI; reabrir ou reverter PR.
 **Product fit:** Serve "A fábrica é dona do próprio estado" e "Toda ação é um evento com ator": o merge externo fica registrado como tal, sem atribuí-lo à fábrica. Não contradiz o posicionamento nem o que está fora de escopo; a consulta ao forge ocorre só no momento da entrega, sem sincronização contínua.
@@ -26,12 +29,12 @@ _UX/UI Designer_ — n/a
 ## Architecture
 _Tech Lead_
 
-**Contrato (porta `Forge`):** novo `fun findMergedPullRequest(branch: String): MergedPullRequest?` e `data class MergedPullRequest(val number: Int, val mergeCommit: String)`. Devolve o PR mais recente da branch já mergeado, ou `null`. Falha do forge lança `ForgeException`.
+**Contrato (porta `Forge`):** novo `fun findMergedPullRequest(branch: String): MergedPullRequest?` e `data class MergedPullRequest(val number: Int, val mergeCommit: String, val head: String, val mergedBy: String?)` (`head` = SHA do PR na hora do merge; `mergedBy` = login de quem mergeou, só se casar `^[A-Za-z0-9-]{1,39}$`, senão nulo). Devolve o PR mais recente da branch já mergeado, ou `null`. Falha do forge lança `ForgeException`.
 
 **Camadas e arquivos:**
 - `ports`: `ports/src/main/kotlin/sfv2/ports/Forge.kt` (método e data class); `ports/src/main/kotlin/sfv2/ports/FakeForge.kt` (acha entrada `MERGED` pela branch, devolve `merge-<n>`, respeita `failNext("findMergedPullRequest")`).
-- `adapters`: `adapters/src/main/kotlin/sfv2/adapters/GhForge.kt` — `gh pr list --head <branch> --state merged --limit 1 --json number,mergeCommit`, mesma validação de repo/branch do `findOpenPullRequest`; `mergeCommit.oid` ausente → `ForgeException`.
-- `daemon`: `daemon/src/main/kotlin/sfv2/daemon/AutonomousDelivery.kt` — nos dois pontos que hoje devolvem `pr_not_open` (nenhum PR aberto; `MergeResult.NotOpen`), consulta `findMergedPullRequest(branch)`. Se achar: grava `PR_MERGED` com `pr`, `merge_commit` e `origin=external`, move o card a `DONE` com `merge_commit`, `origin=external` e `reason=merged_outside_factory`, loga `delivery_done` com `origin=external` e devolve `DeliveryOutcome.Done`. Não segue o CI da main. Se não achar: `pr_not_open`, como hoje. `ForgeException` na consulta: `forge_failed`. `daemon/src/main/kotlin/sfv2/daemon/ProjectDelivery.kt` — `UnavailableForge` implementa o método lançando a mesma exceção dos demais.
+- `adapters`: `adapters/src/main/kotlin/sfv2/adapters/GhForge.kt` — `gh pr list --head <branch> --state merged --limit 1 --json number,mergeCommit,headRefOid,mergedBy`, mesma validação de repo/branch do `findOpenPullRequest`; `mergeCommit.oid` ausente → `ForgeException`.
+- `daemon`: `daemon/src/main/kotlin/sfv2/daemon/AutonomousDelivery.kt` — nos dois pontos que hoje devolvem `pr_not_open` (nenhum PR aberto; `MergeResult.NotOpen`), consulta `findMergedPullRequest(branch)`. Se achar e `head` for igual ao head aprovado (o do Staged do validate): grava `PR_MERGED` com `pr`, `merge_commit`, `head`, `origin=external` e `merged_by` (quando houver; só no evento, nunca no log), move o card a `DONE` com `merge_commit`, `origin=external` e `reason=merged_outside_factory`, loga `delivery_done` com `origin=external` e devolve `DeliveryOutcome.Done`. Não segue o CI da main. Se achar com `head` diferente do aprovado (alguém empurrou commits depois da aprovação e mergeou), não dá o card como entregue: volta a Staged com `merged_head_differs expected=<sha> actual=<sha>` e o `PR_MERGED` externo gravado, para o dono ver o que foi mergeado. Se não achar: `pr_not_open`, como hoje. `ForgeException` na consulta: `forge_failed`. `daemon/src/main/kotlin/sfv2/daemon/ProjectDelivery.kt` — `UnavailableForge` implementa o método lançando a mesma exceção dos demais.
 - O merge feito pela fábrica segue gravando `PR_MERGED` sem `origin` (AC-4); o `PR_MERGED` externo não é lido como merge da fábrica no replay, pois o card sai de Ready for Prod no mesmo passo.
 
 **Migração:** nenhuma (sem esquema novo; payload de evento é mapa livre).
@@ -47,6 +50,9 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AutonomousDeliveryTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AutonomousDeliveryTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AutonomousDeliveryTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AutonomousDeliveryTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/AutonomousDeliveryTest.kt` |
+| AC-9 | adapters | `adapters/src/test/kotlin/sfv2/adapters/GhForgeTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
