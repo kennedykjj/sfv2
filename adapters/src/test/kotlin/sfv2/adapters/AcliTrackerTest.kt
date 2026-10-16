@@ -93,8 +93,9 @@ class AcliTrackerTest {
         h: AcliHarness,
         acli: String = h.acli.toString(),
         site: String = AcliTrackerFixtures.SITE,
+        project: String = "PROJ",
         timeout: Duration = Duration.ofSeconds(30),
-    ) = AcliTracker(site, acli, h.workDir, h.tmpDir, timeout)
+    ) = AcliTracker(site, project, acli, h.workDir, h.tmpDir, timeout)
 
     @Test
     fun `AC-1 fetch returns title body labels https url and open state`() {
@@ -110,6 +111,38 @@ class AcliTrackerTest {
         assertThat(item.url).isEqualTo("https://acme.atlassian.net/browse/PROJ-1")
         assertThat(item.state).isEqualTo(TrackerItemState.OPEN)
         assertThat(h.callsTo("view").single()).contains("PROJ-1")
+    }
+
+    @Test
+    fun `a search, blank or not, is scoped to the project and never lists the whole site`() {
+        val h = AcliHarness(tmp)
+        h.on("search", "[${AcliTrackerFixtures.issue("PROJ-3", "A")}]")
+        val t = tracker(h)
+
+        t.search("")
+        t.search("bug")
+
+        val calls = h.callsTo("search")
+        assertThat(calls).hasSize(2)
+        assertThat(calls[0]).contains("project = \"PROJ\" AND statusCategory != Done")
+        assertThat(calls[1]).contains("project = \"PROJ\" AND text ~ \"bug\"")
+    }
+
+    @Test
+    fun `a key of another project or an invalid project is refused without calling acli`() {
+        val h = AcliHarness(tmp)
+        h.on("view", AcliTrackerFixtures.issue("OTHER-1"))
+        h.on("search", "[]")
+
+        val t = tracker(h)
+        assertThrows<TrackerException> { t.fetch("OTHER-1") }
+        assertThrows<TrackerException> { t.writeMilestone("OTHER-1", "m") }
+        assertThrows<TrackerException> { t.close("OTHER-1", "c") }
+        listOf("proj", "P", "PROJ\" OR project = \"X").forEach { bad ->
+            assertThrows<TrackerException> { tracker(h, project = bad).search("") }
+        }
+
+        assertThat(h.calls()).isEmpty()
     }
 
     @Test

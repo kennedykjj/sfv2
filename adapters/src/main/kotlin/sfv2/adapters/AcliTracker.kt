@@ -23,12 +23,14 @@ import sfv2.ports.TrackerItemState
 import sfv2.ports.UnknownTrackerItemException
 
 /**
- * [Tracker] on top of the Atlassian CLI (`acli`), for tickets of the Jira [site]. The credential lives in `acli`'s own
+ * [Tracker] on top of the Atlassian CLI (`acli`), for tickets of the Jira [project] on [site]: every search is scoped to the
+ * project and every ticket key must belong to it, so a blank query never lists the whole site. The credential lives in `acli`'s own
  * config and is never read here; the child gets a filtered environment. Everything that comes from a ticket leaves as
  * [ExternalText]. Failures carry the operation and the ticket key only, never `acli` output or ticket text.
  */
 class AcliTracker(
     private val site: String,
+    private val project: String,
     private val acli: String = "acli",
     private val workDir: Path,
     private val tmpDir: Path,
@@ -38,7 +40,7 @@ class AcliTracker(
 
     override fun fetch(id: String): TrackerItem? {
         val subject = "id=$id"
-        requireValid("fetch", subject, validSite() && ISSUE_KEY.matches(id))
+        requireValid("fetch", subject, validSite() && validProject() && ownKey(id))
         val out = try {
             call("fetch", subject, "jira", "workitem", "view", id, "--fields", FIELDS, "--json")
         } catch (e: UnknownTrackerItemException) {
@@ -49,9 +51,10 @@ class AcliTracker(
 
     override fun search(query: String): List<TrackerItem> {
         val subject = "query"
-        requireValid("search", subject, validSite() && validQuery(query))
+        requireValid("search", subject, validSite() && validProject() && validQuery(query))
         // A blank query lists the open tickets (what the board import asks for); any other query searches all states.
-        val jql = if (query.isBlank()) "statusCategory != Done" else "text ~ \"${escape(query)}\""
+        val scope = "project = \"$project\" AND "
+        val jql = scope + if (query.isBlank()) "statusCategory != Done" else "text ~ \"${escape(query)}\""
         val out = call(
             "search",
             subject,
@@ -65,13 +68,13 @@ class AcliTracker(
 
     override fun writeMilestone(id: String, milestone: String) {
         val subject = "id=$id"
-        requireValid("writeMilestone", subject, validSite() && ISSUE_KEY.matches(id))
+        requireValid("writeMilestone", subject, validSite() && validProject() && ownKey(id))
         comment("writeMilestone", subject, id, milestone)
     }
 
     override fun close(id: String, comment: String): CloseResult {
         val subject = "id=$id"
-        requireValid("close", subject, validSite() && ISSUE_KEY.matches(id))
+        requireValid("close", subject, validSite() && validProject() && ownKey(id))
         val view = call("close", subject, "jira", "workitem", "view", id, "--fields", FIELDS, "--json")
         val state = parse("close", subject) { toItem(JSON.parseToJsonElement(view).jsonObject).state }
         if (state == TrackerItemState.CLOSED) return CloseResult.AlreadyClosed
@@ -194,6 +197,10 @@ class AcliTracker(
 
     private fun validSite(): Boolean = SITE.matches(site)
 
+    private fun validProject(): Boolean = PROJECT.matches(project)
+
+    private fun ownKey(id: String): Boolean = ISSUE_KEY.matches(id) && id.startsWith("$project-")
+
     private fun validQuery(query: String): Boolean = !query.startsWith("-") && query.none { it.isISOControl() }
 
     private fun escape(query: String): String = query.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -202,6 +209,7 @@ class AcliTracker(
         val JSON = Json { ignoreUnknownKeys = true }
         val ISSUE_KEY = Regex("^[A-Z][A-Z0-9_]{1,19}-[0-9]{1,9}$")
         val SITE = Regex("^[a-z0-9][a-z0-9.-]{0,62}$")
+        val PROJECT = Regex("^[A-Z][A-Z0-9_]{1,19}$")
         val BLOCK_TYPES = setOf("paragraph", "heading", "codeBlock", "blockquote", "listItem", "rule")
         const val FIELDS = "key,summary,description,labels,status"
         const val DONE_STATUS = "Done"
