@@ -1,0 +1,1 @@
+{"issue": 21, "slug": "interface-runtime-e-fake", "pipeline": "validate", "started_at": "2026-10-16T03:55:00Z", "finished_at": "2026-10-16T04:03:00Z", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": ["green ports sfv2.ports.RuntimeTest"], "amendments": [], "manual_edit": false}
