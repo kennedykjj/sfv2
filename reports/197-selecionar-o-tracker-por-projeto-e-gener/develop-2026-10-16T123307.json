@@ -1,0 +1,11 @@
+{
+  "issue": 197,
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer", "engineer (core)", "engineer (daemon)"],
+  "rounds": 0,
+  "failed_gates": [],
+  "amendments": [],
+  "flaky": [],
+  "gates_reused": []
+}
