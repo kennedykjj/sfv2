@@ -20,8 +20,12 @@ data class ConflictLimits(val maxFiles: Int = 5, val maxHunks: Int = 20, val max
 }
 
 sealed interface ConflictOutcome {
-    /** The worktree holds a clean merge of main at [head]; it only counts once the gates are green on it. */
-    data class Resolved(val head: String) : ConflictOutcome
+    /**
+     * The worktree holds a clean merge of main at [head]; it only counts once the gates are green on it.
+     * [cleanFrom] is the head the branch had before a merge that needed no conflict resolution at all (main only
+     * moved ahead); null when an agent had to resolve conflicts.
+     */
+    data class Resolved(val head: String, val cleanFrom: String? = null) : ConflictOutcome
 
     /** More files or hunks than the limits; no run started and the merge was dropped. */
     data object OverLimit : ConflictOutcome
@@ -62,9 +66,10 @@ class ConflictResolution(
 ) : ConflictResolver {
 
     override fun resolve(cardId: String, worktree: Path): ConflictOutcome {
+        val before = head.of(worktree)
         val attempt = branchSync.mergeMainKeepingConflicts(worktree)
         val conflict = when (attempt) {
-            ConflictAttempt.Merged -> return headOutcome(cardId, worktree)
+            ConflictAttempt.Merged -> return headOutcome(cardId, worktree, cleanFrom = before)
             ConflictAttempt.Failed -> return ConflictOutcome.Failed
             is ConflictAttempt.Conflicted -> attempt
         }
@@ -91,13 +96,13 @@ class ConflictResolution(
         return headOutcome(cardId, worktree)
     }
 
-    private fun headOutcome(cardId: String, worktree: Path): ConflictOutcome {
+    private fun headOutcome(cardId: String, worktree: Path, cleanFrom: String? = null): ConflictOutcome {
         val current = head.of(worktree)
         if (current == null) {
             log.log("conflict_head_unreadable", mapOf("card" to cardId))
             return ConflictOutcome.Failed
         }
-        return ConflictOutcome.Resolved(current)
+        return ConflictOutcome.Resolved(current, cleanFrom)
     }
 
     private fun roundsDone(cardId: String): Int = store.events(cardId).count { isRound(it) }
