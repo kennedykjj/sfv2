@@ -1,0 +1,1 @@
+{"issue": 86, "slug": "gate-de-dor-na-importacao", "pipeline": "refine", "started_at": "2026-10-16T12:00:00Z", "finished_at": "2026-10-16T12:20:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 15901, "duration_s": 12}], "rounds": {"po": 1, "publish": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
