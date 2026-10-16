@@ -1,0 +1,1 @@
+{"issue":8,"slug":"card-e-colunas","pipeline":"develop","started_at":"2026-10-15T22:10:00Z","finished_at":"2026-10-15T22:25:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":19299,"duration_s":25}],"rounds":{"qa":1,"engineer":0},"gates_failed":[],"flaky":[],"gates_reused":[],"amendments":[],"manual_edit":null}
