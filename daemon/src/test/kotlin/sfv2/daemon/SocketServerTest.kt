@@ -5,6 +5,8 @@ import java.io.IOException
 import java.time.Duration
 import java.time.ZoneId
 import java.util.concurrent.locks.LockSupport
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.StandardProtocolFamily
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.CompletableFuture
@@ -1150,5 +1152,247 @@ class SocketServerTest {
         server.close()
 
         assertThat(Files.exists(socketPath())).isFalse()
+    }
+
+    private val tcpLog = RecordingLog()
+
+    private val authenticated = """{"ok":true,"result":"authenticated"}"""
+
+    private fun tcpFile(name: String): Path = socketPath().resolveSibling(name)
+
+    private fun tcpToken(): String = Files.readString(tcpFile("tcp.token")).trim()
+
+    private fun tcpPort(): Int = Files.readString(tcpFile("tcp.port")).trim().toInt()
+
+    private fun authLine(token: String): String = """{"cmd":"auth","token":"$token"}"""
+
+    private fun openTransport(): TcpTransport = TcpTransport.open(socketPath().parent, 0, SecureRandom())
+
+    private fun startTcpServer(commands: CardCommands? = null): TcpTransport {
+        val transport = openTransport()
+        servers.add(SocketServer.start(socketPath(), log = tcpLog, commands = commands, tcp = transport))
+        return transport
+    }
+
+    /** A card server with the TCP transport on a free port; the unix socket keeps serving the owner helpers. */
+    private fun withTcpCardServer(block: (CardEventStore) -> Unit) {
+        Database.open(runtimeDir.resolve("cards.db")).use { db ->
+            val store = CardEventStore(db)
+            val ownerProof = OwnerProof.create(tokenPath, SecureRandom())
+            proof = Files.readString(tokenPath).trim()
+            startTcpServer(CardCommands(store, clock, ownerProof, cardLog))
+            block(store)
+        }
+    }
+
+    private class TcpClient(port: Int) : AutoCloseable {
+        private val channel = SocketChannel.open(InetSocketAddress(InetAddress.getLoopbackAddress(), port))
+        private val reader = Channels.newInputStream(channel).bufferedReader(Charsets.UTF_8)
+
+        fun send(text: String) {
+            val out = Channels.newOutputStream(channel)
+            out.write(text.toByteArray(Charsets.UTF_8))
+            out.flush()
+        }
+
+        fun sendLine(line: String) = send(line + "\n")
+
+        /** The next line, or null once the server closed the connection (a reset counts as closed). */
+        fun nextLine(): String? = CompletableFuture.supplyAsync {
+            try {
+                reader.readLine()
+            } catch (e: IOException) {
+                null
+            }
+        }.get(10, TimeUnit.SECONDS)
+
+        override fun close() = channel.close()
+    }
+
+    private fun tcpClient(): TcpClient = TcpClient(tcpPort())
+
+    @Test
+    fun `AC-1 tcp transport listens on loopback at the requested port and records the effective port beside the socket`() {
+        val transport = startTcpServer()
+
+        val port = tcpPort()
+
+        assertThat(port).isGreaterThan(0)
+        assertThat(transport.localAddress.address.isLoopbackAddress).isTrue()
+        assertThat(transport.localAddress.address.hostAddress).isEqualTo("127.0.0.1")
+        assertThat(transport.localAddress.port).isEqualTo(port)
+        assertThat(tcpFile("tcp.port").parent).isEqualTo(socketPath().parent)
+        tcpClient().use { client ->
+            client.sendLine(authLine(tcpToken()))
+            assertThat(client.nextLine()).isEqualTo(authenticated)
+        }
+    }
+
+    @Test
+    fun `AC-2 tcp the right token authenticates and later commands work as on the unix socket`() {
+        startTcpServer()
+
+        tcpClient().use { client ->
+            client.sendLine(authLine(tcpToken()))
+            val auth = client.nextLine()
+            client.sendLine("""{"cmd":"ping"}""")
+            val pong = client.nextLine()
+            client.sendLine("""{"cmd":"nope"}""")
+            val unknown = client.nextLine()
+
+            assertThat(auth).isEqualTo(authenticated)
+            assertThat(pong).isEqualTo("""{"ok":true,"result":"pong"}""")
+            assertThat(unknown).startsWith("""{"ok":false,"error":"""")
+        }
+        assertThat(exchange("""{"cmd":"ping"}""")).isEqualTo("""{"ok":true,"result":"pong"}""")
+    }
+
+    @Test
+    fun `AC-3 tcp a first line without a valid token gets one fixed error, closes the connection and executes nothing`() =
+        withTcpCardServer { store ->
+            val wrong = "f".repeat(64)
+            val firstLines = listOf(
+                """{"cmd":"auth"}""",
+                """{"cmd":"auth","token":""}""",
+                """{"cmd":"auth","token":"$wrong"}""",
+                """{"cmd":"card.create","actor":"owner","proof":"$proof","title":"Forged"}""",
+                """{"cmd":"ping"}""",
+            )
+
+            val replies = firstLines.map { line ->
+                tcpClient().use { client ->
+                    client.sendLine(line)
+                    val first = client.nextLine()
+                    val afterwards = client.nextLine()
+                    assertThat(afterwards).isNull()
+                    first
+                }
+            }
+
+            assertThat(replies.toSet()).hasSize(1)
+            val reply = requireNotNull(replies.first()) { "no reply to a rejected first line" }
+            assertThat(reply).startsWith("""{"ok":false,"error":"""")
+            assertThat(reply).doesNotContain(wrong).doesNotContain(tcpToken()).doesNotContain(proof).doesNotContain("Forged")
+            assertThat(store.cards()).isEmpty()
+        }
+
+    @Test
+    fun `AC-4 tcp a connection that never sends the auth line is closed after the deadline`() {
+        startTcpServer()
+
+        tcpClient().use { client ->
+            // No bytes sent: only the server deadline can end this; nextLine fails the test after 10 s.
+            assertThat(client.nextLine()).isNull()
+        }
+    }
+
+    @Test
+    fun `AC-4 tcp an auth line above 1 KiB closes the connection without running anything`() = withTcpCardServer { store ->
+        val padded = """{"cmd":"auth","token":"${tcpToken()}","pad":"${"x".repeat(2048)}"}"""
+        val forged = """{"cmd":"card.create","actor":"owner","proof":"$proof","title":"Forged","pad":"${"x".repeat(2048)}"}"""
+
+        for (first in listOf(padded, forged, "y".repeat(2048))) {
+            tcpClient().use { client ->
+                client.sendLine(first)
+                val lines = generateSequence { client.nextLine() }.toList()
+
+                assertThat(lines.joinToString("\n")).doesNotContain("authenticated").doesNotContain(tcpToken())
+            }
+        }
+        assertThat(store.cards()).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 tcp token is fresh random hex in a private file, new at each start and never shown`() {
+        val first = openTransport()
+        val firstToken = tcpToken()
+        first.close()
+        val second = openTransport()
+        val secondToken = tcpToken()
+        second.close()
+
+        assertThat(firstToken).matches("[0-9a-f]{64}")
+        assertThat(secondToken).matches("[0-9a-f]{64}").isNotEqualTo(firstToken)
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(tcpFile("tcp.token")))).isEqualTo("rw-------")
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(tcpFile("tcp.token").parent))).isEqualTo("rwx------")
+        assertThat(first.toString()).doesNotContain(firstToken)
+        assertThat(second.toString()).doesNotContain(secondToken)
+    }
+
+    @Test
+    fun `AC-5 tcp no reply or log carries the transport token`() = withTcpCardServer { _ ->
+        val token = tcpToken()
+        val replies = mutableListOf<String?>()
+
+        tcpClient().use { client ->
+            client.sendLine(authLine(token))
+            replies.add(client.nextLine())
+            for (line in listOf("""{"cmd":"ping"}""", """{"cmd":"auth","token":"$token"}""", """{"cmd":"card.list"}""", """{"cmd":"token"}""")) {
+                client.sendLine(line)
+                replies.add(client.nextLine())
+            }
+        }
+        tcpClient().use { client ->
+            client.sendLine(authLine("0".repeat(64)))
+            replies.add(client.nextLine())
+        }
+
+        assertThat(replies.first()).isEqualTo(authenticated)
+        for (text in replies) assertThat(text).doesNotContain(token)
+        for ((event, fields) in tcpLog.entries + cardLog.entries) {
+            assertThat(event).doesNotContain(token)
+            assertThat(fields.values.joinToString(" ")).doesNotContain(token)
+        }
+    }
+
+    @Test
+    fun `AC-6 tcp an authenticated connection still needs the owner proof and the transport token is not one`() =
+        withTcpCardServer { store ->
+            val id = createCard("Mine")
+            val before = store.card(id) to store.events(id)
+
+            tcpClient().use { client ->
+                client.sendLine(authLine(tcpToken()))
+                assertThat(client.nextLine()).isEqualTo(authenticated)
+                val refusals = listOf(
+                    """{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT"}""",
+                    """{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT","proof":"${tcpToken()}"}""",
+                    """{"cmd":"card.create","actor":"owner","title":"Forged"}""",
+                    """{"cmd":"card.create","actor":"owner","title":"Forged","proof":"${tcpToken()}"}""",
+                )
+
+                for (line in refusals) {
+                    client.sendLine(line)
+                    val refused = Json.parseToJsonElement(requireNotNull(client.nextLine())).jsonObject
+
+                    assertThat(ok(refused)).isFalse()
+                    assertThat(refused.str("error")).isEqualTo("owner proof missing or invalid")
+                }
+                assertThat(store.card(id) to store.events(id)).isEqualTo(before)
+                assertThat(store.cards()).hasSize(1)
+
+                client.sendLine("""{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT","proof":"$proof"}""")
+                val moved = Json.parseToJsonElement(requireNotNull(client.nextLine())).jsonObject
+                assertThat(ok(moved)).isTrue()
+                assertThat(store.card(id)?.column).isEqualTo(Column.READY_FOR_REFINEMENT)
+            }
+        }
+
+    @Test
+    fun `AC-8 tcp closing the server closes the listener and the connections and removes the port file`() {
+        val server = SocketServer.start(socketPath(), log = tcpLog, tcp = openTransport()).also { servers.add(it) }
+        val port = tcpPort()
+        val client = tcpClient()
+        client.sendLine(authLine(tcpToken()))
+        assertThat(client.nextLine()).isEqualTo(authenticated)
+
+        server.close()
+
+        assertThat(client.nextLine()).isNull()
+        client.close()
+        assertThat(Files.exists(tcpFile("tcp.port"))).isFalse()
+        assertThrows(IOException::class.java) {
+            SocketChannel.open(InetSocketAddress(InetAddress.getLoopbackAddress(), port)).close()
+        }
     }
 }
