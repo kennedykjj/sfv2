@@ -12,6 +12,11 @@ forbidden: [build-logic/, gradle/wrapper/, .github/]
 acceptance_assertions: 'assert|assertThat|assertEquals|@Disabled|@Ignore|@Test\(enabled'
 # 0 = sem limite de WIP no projeto (sem o bloco, valem os padrões da fábrica: refine 2, develop 4).
 # Quantos runs rodam ao mesmo tempo continua limitado pelo pool da máquina (~/.shipfloor/config.yml).
+# Teto de custo da sfv2 (estimativa pela tabela de preços, em US$). Sem ele o dispatcher da sfv2 não lança.
+# Decidido pelo dono em 2026-10-16 para a primeira semana da Virada; rever depois de medir.
+cost:
+  per_card_usd: 30
+  per_day_usd: 300
 limits:
   refine: {wip: 0}
   develop: {wip: 0}
