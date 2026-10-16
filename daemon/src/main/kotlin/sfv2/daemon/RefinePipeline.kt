@@ -193,17 +193,20 @@ class RefinePipeline(
     }
 }
 
-/** Starts the refine pipeline on its own thread; the card's pool lock is released whatever the outcome. */
-class RefineStageLauncher(
-    private val pipelineFor: (String) -> RefinePipeline,
+/**
+ * Runs a stage pipeline on its own thread; the card's pool lock is released whatever the outcome.
+ * [stageName] names the thread and the failure log event (`<stageName>_failed`).
+ */
+class PipelineStageLauncher(
+    private val stageName: String,
     private val pool: RunPool,
     private val log: DaemonLog = StderrDaemonLog,
     private val onRunFinished: (String) -> Unit = {},
-) : StageLauncher {
+    private val run: (String) -> Unit,
+) {
 
-    override fun launch(stage: DispatchStage, cardId: String): LaunchedRun {
-        require(stage == DispatchStage.REFINE) { "RefineStageLauncher cannot launch stage $stage (card $cardId)" }
-        val thread = Thread({ execute(cardId) }, "refine-$cardId").apply { isDaemon = true }
+    fun start(cardId: String): LaunchedRun {
+        val thread = Thread({ execute(cardId) }, "$stageName-$cardId").apply { isDaemon = true }
         thread.start()
         val handle = ProcessHandle.current()
         return LaunchedRun(handle.pid(), handle.info().startInstant().orElse(Instant.now()))
@@ -212,9 +215,9 @@ class RefineStageLauncher(
     private fun execute(cardId: String) {
         try {
             awaitLock(cardId)
-            pipelineFor(cardId).run(cardId)
+            run(cardId)
         } catch (e: Exception) {
-            log.log("refine_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
+            log.log("${stageName}_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
         } finally {
             try {
                 onRunFinished(cardId)
@@ -235,5 +238,23 @@ class RefineStageLauncher(
     private companion object {
         const val LOCK_WAIT_NANOS = 5_000_000_000L
         const val LOCK_POLL_MILLIS = 5L
+    }
+}
+
+/** Starts the refine pipeline on its own thread; the card's pool lock is released whatever the outcome. */
+class RefineStageLauncher(
+    private val pipelineFor: (String) -> RefinePipeline,
+    pool: RunPool,
+    log: DaemonLog = StderrDaemonLog,
+    onRunFinished: (String) -> Unit = {},
+) : StageLauncher {
+
+    private val launcher = PipelineStageLauncher(
+        "refine", pool, log, onRunFinished,
+    ) { cardId -> pipelineFor(cardId).run(cardId) }
+
+    override fun launch(stage: DispatchStage, cardId: String): LaunchedRun {
+        require(stage == DispatchStage.REFINE) { "RefineStageLauncher cannot launch stage $stage (card $cardId)" }
+        return launcher.start(cardId)
     }
 }

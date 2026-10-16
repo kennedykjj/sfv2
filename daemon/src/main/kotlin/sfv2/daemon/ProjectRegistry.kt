@@ -9,7 +9,14 @@ import org.snakeyaml.engine.v2.exceptions.YamlEngineException
 import sfv2.core.InvalidPolicyException
 import sfv2.core.ProjectPolicies
 
-data class ProjectLayer(val name: String, val path: String)
+/** [build] and [test] are command tokens (split on spaces, no shell); [ran] is the text a passing test run prints. */
+data class ProjectLayer(
+    val name: String,
+    val path: String,
+    val build: List<String>? = null,
+    val test: List<String>? = null,
+    val ran: String? = null,
+)
 
 data class Project(
     val name: String,
@@ -103,7 +110,13 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
                 ?: throw InvalidProjectConfigException("$field.name", "$field.name must be a non-empty text")
             val path = (layer["path"] as? String)?.takeIf { it.isNotBlank() }
                 ?: throw InvalidProjectConfigException("$field.path", "$field.path must be a non-empty text")
-            ProjectLayer(name, path)
+            ProjectLayer(
+                name,
+                path,
+                build = optionalCommand(layer["build"], "$field.build"),
+                test = optionalCommand(layer["test"], "$field.test"),
+                ran = optionalText(layer["ran"], "$field.ran"),
+            )
         }
         val duplicated = layers.groupBy { it.name }.entries.firstOrNull { it.value.size > 1 }
         if (duplicated != null) {
@@ -112,6 +125,15 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         return layers
     }
 
+    private fun optionalText(raw: Any?, field: String): String? {
+        if (raw == null) return null
+        return (raw as? String)?.takeIf { it.isNotBlank() }
+            ?: throw InvalidProjectConfigException(field, "$field must be a non-empty text")
+    }
+
+    private fun optionalCommand(raw: Any?, field: String): List<String>? =
+        optionalText(raw, field)?.trim()?.split(WHITESPACE)
+
     private fun asMap(raw: Any?, field: String): Map<String, Any?> {
         val map = raw as? Map<*, *> ?: throw InvalidProjectConfigException(field, "$field must be a mapping")
         return map.entries.associate { (key, value) ->
@@ -119,9 +141,10 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         }
     }
 
-    // Keys the registry does not read (board, language, limits, layer build/test commands...) belong to the V0
+    // Keys the registry does not read (board, language, limits...) belong to the V0
     // factory.yml and are ignored here; the fields it does read are validated.
     private companion object {
+        val WHITESPACE = Regex(" +")
         const val CONFIG_FILE = ".shipfloor/factory.yml"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
