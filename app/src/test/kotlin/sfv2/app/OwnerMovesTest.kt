@@ -285,7 +285,9 @@ class OwnerMovesTest {
         val token = dir.resolve("owner.token")
         Files.writeString(token, "tok\n")
         val release = CountDownLatch(1)
+        val reached = CountDownLatch(1)
         val daemon = FakeDaemon(socket) {
+            reached.countDown()
             release.await()
             """{"ok":true,"result":{}}"""
         }
@@ -297,7 +299,8 @@ class OwnerMovesTest {
                 ThrowingSupplier { commands.move("a", Column.STAGED, Column.READY_FOR_PROD, null) },
             )
 
-            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(noAnswer))
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
+            assertThat(reached.await(3, TimeUnit.SECONDS)).isTrue()
             assertThat(daemon.requests).hasSize(1)
         } finally {
             release.countDown()
@@ -320,7 +323,7 @@ class OwnerMovesTest {
                 },
             )
 
-            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(noAnswer))
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
             assertThat(daemon.hungUp.await(3, TimeUnit.SECONDS)).isTrue()
             assertThat(daemon.requests).hasSize(1)
         } finally {
@@ -363,7 +366,7 @@ class OwnerMovesTest {
     @Test
     fun `AC-3 a move with no answer puts the card back and tells the owner to check the board`() = runBlocking {
         val fx = ControllerFixtures(BoardFixtures.aCard("a", Column.STAGED))
-        fx.commands.reply = { MoveOutcome.NotSent(noAnswer) }
+        fx.commands.reply = { MoveOutcome.NotSent(NotSentCause.NO_ANSWER) }
 
         fx.controller.hold("a")
         fx.controller.chooseTarget(Column.READY_FOR_PROD)
@@ -412,9 +415,6 @@ class OwnerMovesTest {
             daemon.close()
         }
     }
-
-    /** Looked up by name so the file compiles before the cause exists; red then fails on the assertion, not on compilation. */
-    private val noAnswer: NotSentCause get() = NotSentCause.valueOf("NO_ANSWER")
 }
 
 data class SentMove(val cardId: String, val from: Column, val to: Column, val note: String?)
