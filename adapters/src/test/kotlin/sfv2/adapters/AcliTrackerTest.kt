@@ -45,7 +45,7 @@ class AcliHarness(private val root: Path) {
     private fun script(): String =
         """
         rec="$rec"
-        echo "§*" >> "§rec/calls"
+        printf '%s\n' "§*" >> "§rec/calls"
         for a in "§@"; do
           if [ -f "§a" ]; then cp "§a" "§rec/body"; fi
         done
