@@ -40,7 +40,13 @@ class CardCommands(
         Request.CardList -> Response.CardsResult(visibleCards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(visibleCards()) { store.events(it) }))
-        Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm -> Response.Error("not a card command")
+        is Request.EventsRecent -> recent(request.limit)
+        Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
+    }
+
+    private fun recent(limit: Int): Response {
+        val newest = store.latestEvents(limit + 1L)
+        return Response.EventsRecentResult(newest.take(limit).reversed(), truncated = newest.size > limit)
     }
 
     /** Every card but the reserved one that carries the settings events. */

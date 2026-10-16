@@ -36,6 +36,7 @@ class SocketServer private constructor(
     private val closure: CardClosure?,
     private val milestones: ExternalMilestones?,
     private val settings: SettingsCommands?,
+    private val costSummary: CostSummaryQuery?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
 
@@ -105,8 +106,9 @@ class SocketServer private constructor(
         is Request.CardRebuild -> rebuild?.handle(request) ?: Response.Error("card rebuild is not available")
         is Request.CardImport, is Request.CardImportBoard -> importer?.handle(request) ?: Response.Error("card import is not available")
         is Request.CardCloseDraft, is Request.CardCloseConfirm -> closure?.handle(request) ?: Response.Error("card closure is not available")
+        is Request.CostSummary -> costSummary?.handle(request) ?: Response.Error("cost summary is not available")
         Request.MilestoneList, is Request.MilestoneConfirm -> milestones?.handle(request) ?: Response.Error("milestone commands are not available")
-        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, Request.ReportCsv ->
+        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, Request.ReportCsv, is Request.EventsRecent ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 
@@ -170,6 +172,7 @@ class SocketServer private constructor(
             closure: CardClosure? = null,
             milestones: ExternalMilestones? = null,
             settings: SettingsCommands? = null,
+            costSummary: CostSummaryQuery? = null,
         ): SocketServer {
             prepareDirectory(path)
             val lock = acquireLock(path)
@@ -191,7 +194,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {
