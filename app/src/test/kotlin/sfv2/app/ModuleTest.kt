@@ -3,6 +3,8 @@ package sfv2.app
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.nio.file.Files
+import java.nio.file.Path
 
 class ModuleTest {
     @Test
@@ -126,5 +128,44 @@ class ModuleTest {
         assertThat(copy.last()).isEqualTo("p119")
         registry.publish("more")
         assertThat(copy).hasSize(100).doesNotContain("more")
+    }
+
+    private fun buildScript(): String = Files.readString(Path.of("build.gradle.kts"))
+
+    private fun nativeDistributions(): String {
+        val script = buildScript()
+        val start = script.indexOf("nativeDistributions")
+        assertThat(start).describedAs("nativeDistributions block").isGreaterThanOrEqualTo(0)
+        return script.substring(start)
+    }
+
+    @Test
+    fun `AC-1 packaging declares Deb and Rpm formats and the sfv2 package name`() {
+        val block = nativeDistributions()
+
+        assertThat(block).contains("TargetFormat.Deb").contains("TargetFormat.Rpm")
+        assertThat(block).containsPattern("packageName\\s*=\\s*\"sfv2\"")
+    }
+
+    @Test
+    fun `AC-2 packaging version is MAJOR MINOR PATCH with description and vendor filled`() {
+        val block = nativeDistributions()
+
+        val version = Regex("packageVersion\\s*=\\s*\"([^\"]*)\"").find(block)?.groupValues?.get(1)
+        assertThat(version).matches("[0-9]+\\.[0-9]+\\.[0-9]+")
+        val description = Regex("description\\s*=\\s*\"([^\"]*)\"").find(block)?.groupValues?.get(1)
+        assertThat(description).isNotBlank()
+        val vendor = Regex("vendor\\s*=\\s*\"([^\"]*)\"").find(block)?.groupValues?.get(1)
+        assertThat(vendor).isNotBlank()
+    }
+
+    @Test
+    fun `AC-3 packaging main class is the same one used by the run task`() {
+        val script = buildScript()
+
+        val mainClasses = Regex("mainClass\\s*=\\s*\"([^\"]*)\"").findAll(script).map { it.groupValues[1] }.toList()
+        assertThat(mainClasses).isNotEmpty().containsOnly("sfv2.app.MainKt")
+        assertThat(script.indexOf("nativeDistributions")).isGreaterThanOrEqualTo(0)
+        assertThat(script).contains("mainClass = \"sfv2.app.MainKt\"")
     }
 }
