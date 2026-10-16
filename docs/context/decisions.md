@@ -29,6 +29,7 @@ Objetivo do produto: uma squad de desenvolvimento para cada desenvolvedor, tanto
 | 13 | **Toolchain JDK 25, bytecode Java 21** | A máquina do dono só tem o JRE 25 (pacote headless, sem `javac`); o foojay baixa o JDK do toolchain. Bytecode 21 roda em qualquer JVM 21+. | Exigir instalar o JDK no sistema. |
 | 14 | **Compose em XWayland, janelas transparentes em software** | Resultado do spike #7 (`docs/spikes/2026-wayland.md`): Wayland nativo não abre; transparente em OpenGL cai para 1 fps. Bandeja via StatusNotifierItem, notificação via `org.freedesktop.Notifications`. | WLToolkit; `TrayIcon` do AWT. |
 | 15 | **Projeto sem limite de WIP** | Escolha do dono. `limits` com `wip: 0` explícito, porque sem o bloco valem os padrões da V0 (refine 2, develop 4). | — |
+| 16 | **JSON com kotlinx.serialization** | Uma biblioteca para o projeto todo (eventos, protocolo do socket, MCP). Serializa tipo selado (`Actor`) sem montar a árvore à mão, sem reflexão e no mesmo versionamento do Kotlin. O plugin do compilador entra no classpath por `build-logic/`; o módulo aplica `id("org.jetbrains.kotlin.plugin.serialization")` sem versão e declara `libs.kotlinx.serialization.json`. Decidido ao auditar #9 e #15, que escolhiam Jackson em versões diferentes. | Jackson 2.x (árvore montada à mão, duas versões em paralelo); Jackson 3. |
 
 ## Propostas à espera do aceite do dono
 
