@@ -1,0 +1,3 @@
+{"issue":115,"slug":"daemon-ator-dono-prova","pipeline":"validate","started_at":"2026-10-16T03:12:00Z","finished_at":"2026-10-16T03:20:00Z","outcome":"ok",
+"agents":[{"role":"cybersec","tokens":19312,"duration_s":16}],
+"rounds":{"fix":0},"gates_failed":[],"flaky":[],"gates_reused":["build"],"manual_edit":false,"amendments":[]}
