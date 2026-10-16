@@ -3,7 +3,6 @@ package sfv2.daemon
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
-import java.time.Instant
 import java.util.UUID
 import sfv2.core.Actor
 import sfv2.core.Column
@@ -38,7 +37,7 @@ class ValidatePipeline(
     private val configDir: Path,
     private val clock: Clock,
     private val model: String,
-    private val maxRounds: Int = 3,
+    private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
 ) {
@@ -114,44 +113,17 @@ class ValidatePipeline(
 /** Starts the validate pipeline on its own thread; the card's pool lock is released whatever the outcome. */
 class ValidateStageLauncher(
     private val pipelineFor: (String) -> ValidatePipeline,
-    private val pool: RunPool,
-    private val log: DaemonLog = StderrDaemonLog,
-    private val onRunFinished: (String) -> Unit = {},
+    pool: RunPool,
+    log: DaemonLog = StderrDaemonLog,
+    onRunFinished: (String) -> Unit = {},
 ) : StageLauncher {
+
+    private val launcher = PipelineStageLauncher(
+        "validate", pool, log, onRunFinished,
+    ) { cardId -> pipelineFor(cardId).run(cardId) }
 
     override fun launch(stage: DispatchStage, cardId: String): LaunchedRun {
         require(stage == DispatchStage.VALIDATE) { "ValidateStageLauncher cannot launch stage $stage (card $cardId)" }
-        val thread = Thread({ execute(cardId) }, "validate-$cardId").apply { isDaemon = true }
-        thread.start()
-        val handle = ProcessHandle.current()
-        return LaunchedRun(handle.pid(), handle.info().startInstant().orElse(Instant.now()))
-    }
-
-    private fun execute(cardId: String) {
-        try {
-            awaitLock(cardId)
-            pipelineFor(cardId).run(cardId)
-        } catch (e: Exception) {
-            log.log("validate_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
-        } finally {
-            try {
-                onRunFinished(cardId)
-            } catch (e: Exception) {
-                log.log("run_finished_hook_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
-            } finally {
-                pool.release(cardId)
-            }
-        }
-    }
-
-    /** The dispatcher takes the lock right after [launch] returns; releasing before that would leak it. */
-    private fun awaitLock(cardId: String) {
-        val deadline = System.nanoTime() + LOCK_WAIT_NANOS
-        while (!pool.isLocked(cardId) && System.nanoTime() < deadline) Thread.sleep(LOCK_POLL_MILLIS)
-    }
-
-    private companion object {
-        const val LOCK_WAIT_NANOS = 5_000_000_000L
-        const val LOCK_POLL_MILLIS = 5L
+        return launcher.start(cardId)
     }
 }

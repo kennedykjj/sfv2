@@ -20,6 +20,9 @@ import sfv2.ports.SessionRequest
 import sfv2.ports.SessionResult
 import sfv2.store.CardEventStore
 
+/** Single source of the default number of review/fix rounds for the refine, develop and validate pipelines. */
+const val DEFAULT_MAX_ROUNDS = 3
+
 data class GateResult(val name: String, val passed: Boolean, val reason: String?)
 
 /** Judges the worktree after a refine run; the verdict is the gates', never the agent's report. */
@@ -118,7 +121,7 @@ class RefinePipeline(
     private val configDir: Path,
     private val clock: Clock,
     private val model: String,
-    private val maxRounds: Int = 3,
+    private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
 ) {
