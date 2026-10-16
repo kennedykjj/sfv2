@@ -721,6 +721,7 @@ class ValidatePipelineTest {
             when {
                 type == PullRequestDelivery::class.java -> null
                 type == ConflictResolver::class.java -> null
+                type == ExternalMilestones::class.java -> null
                 type.isPrimitive -> 4317
                 else -> values.first { type.isInstance(it) }
             }

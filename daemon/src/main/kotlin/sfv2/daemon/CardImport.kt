@@ -132,6 +132,11 @@ class CardImport private constructor(
             payload = payload,
         )
         recorder.record(current.id, card, event)
+        if (changed) {
+            TextChangeWarning.warnIfChanged(
+                store, recorder, clock, current.id, card, item.id, oldRef.textHash.value, item.textHash,
+            )
+        }
         log.log("card_reimported", mapOf("card" to current.id, "externalId" to item.id, "changed" to changed.toString()))
         return CardView(current.id, card.title, card.column)
     }
