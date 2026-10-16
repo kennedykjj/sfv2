@@ -211,6 +211,20 @@ class RefinePipelineTest {
     }
 
     @Test
+    fun `the second run carries what the red gates said and the first run carries none`() {
+        card("c1")
+        val runtime = succeeding(2)
+        val weightRed = listOf(GateResult("weight", false, "peso declarado light abaixo do calculado standard"))
+        val gates = RefineFixtures.ScriptedGates(listOf(weightRed, RefineFixtures.green))
+
+        pipeline(runtime, gates, maxRounds = 3).run("c1")
+
+        val (first, second) = runtime.launched.map { it.prompt }
+        assertThat(first).doesNotContain("Gates que falharam")
+        assertThat(second).contains("Gates que falharam").contains("weight: peso declarado light abaixo do calculado standard")
+    }
+
+    @Test
     fun `AC-5 red gates after the last round block the card with the failed gates as reason and start no new run`() {
         card("c1")
         val runtime = succeeding(5)
