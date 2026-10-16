@@ -293,8 +293,10 @@ fun main() {
                     view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
                         Column(Modifier.fillMaxSize()) {
                             PulseStrip(pulseView, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
-                            TimeSplit.of(view.columnTimes)?.let { split ->
-                                FlowBar(split, dimmed = !view.live, modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                            view?.let { shown ->
+                                TimeSplit.of(shown.columnTimes)?.let { split ->
+                                    FlowBar(split, dimmed = !shown.live, modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                                }
                             }
                             Box(Modifier.weight(1f)) {
                                 BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings, onReload = board?.let { monitor -> monitor::resync })

@@ -63,7 +63,7 @@ internal fun FlowBar(split: TimeSplit, dimmed: Boolean, modifier: Modifier = Mod
                 BasicText(phrase(split), style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
             }
             Bar(split)
-            if (maxWidth >= LEGEND_HIDDEN_BELOW) Legend(split)
+            if (this@BoxWithConstraints.maxWidth >= LEGEND_HIDDEN_BELOW) Legend(split)
         }
     }
 }
