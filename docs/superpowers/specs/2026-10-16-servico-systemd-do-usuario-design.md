@@ -17,6 +17,10 @@ _Product Owner_
 - AC-4: Dado o serviço instalado, quando rodo `sfv2 service uninstall`, então o serviço é parado, desabilitado e a unit removida, sem arquivo da unit restante.
 - AC-5: Dado o serviço não instalado, quando rodo `sfv2 service uninstall`, então termina com sucesso, sem erro e sem alterar nada.
 - AC-6: Dado o serviço rodando, quando consulto o journal do usuário por `SyslogIdentifier=sfv2`, então vejo os logs do daemon.
+- AC-8: Dado o serviço instalado pela primeira vez, quando rodo `sfv2 service install`, então existe `~/.config/sfv2/service.env` (modo 0600, só comentários explicando `SFV2_DISPATCHER_ENABLED`, `PATH` e `JAVA_HOME`), a unit o lê com `EnvironmentFile=-` e uma segunda instalação nunca o sobrescreve nem o altera: sem ele o dono não teria como ligar o dispatcher sob o systemd, já que a habilitação e o teto de custo só vêm de variável de ambiente.
+- AC-9: Dado a unit gerada, quando a leio, então traz `NoNewPrivileges=true` e `UMask=0077` (arquivos e pastas de dados do daemon nascem só do dono) e nenhum segredo, token ou valor de ambiente.
+- AC-10: Dado um caminho de launcher com espaço, quebra de linha, `%`, `$` ou aspas, quando o instalador renderiza a unit, então recusa com `Failed` sem escrever nada (o caminho entra no `ExecStart` e quebraria ou injetaria linhas na unit).
+- AC-11: Dado o usuário sem `linger` (`loginctl show-user --property=Linger` diferente de `yes`), quando termino o `service install`, então a saída avisa que o serviço só sobe no login e como habilitar (`loginctl enable-linger`), sem habilitar sozinho.
 - AC-7: Dado um sistema que não é Linux, quando rodo `sfv2 service install`, então o comando recusa com mensagem clara de que só Linux é suportado.
 
 **Fora do escopo:** macOS (launchd) e Windows (fase 8); serviço de sistema (root); rotação ou configuração do journal; migração de estado.
@@ -32,7 +36,7 @@ _UX/UI Designer_ — n/a
 _Tech Lead_
 
 **Contratos:** sem mudança em protocolo, eventos ou banco. Novos, em `daemon`:
-- `ServiceUnit.render(launcher: Path): String` (pura): gera a unit com `ExecStart=<launcher>`, `Restart=on-failure`, `RestartSec=5`, `SyslogIdentifier=sfv2`, `WantedBy=default.target`.
+- `ServiceUnit.render(launcher: Path): String` (pura): gera a unit com `ExecStart=<launcher>`, `Restart=on-failure`, `RestartSec=5`, `SyslogIdentifier=sfv2`, `NoNewPrivileges=true`, `UMask=0077`, `EnvironmentFile=-%h/.config/sfv2/service.env`, `WantedBy=default.target`. `launcher` precisa ser absoluto e sem espaço, quebra de linha, `%`, `$` ou aspas, senão `render` lança e o `install` devolve `Failed` (AC-10).
 - `interface SystemctlRunner { fun run(vararg args: String): SystemctlResult }` (`SystemctlResult(exitCode, output)`), com implementação por processo (`systemctl --user ...`) e fake nos testes.
 - `ServiceInstaller(unitDir: Path, launcher: Path, systemctl: SystemctlRunner, osName: String)` com `install()` e `uninstall()`, ambos retornando `ServiceOutcome` (sealed: `Installed`, `AlreadyInstalled`, `Removed`, `NotInstalled`, `Unsupported(os)`, `Failed(reason)`).
 - `runServiceCommand(args, env, out, err): Int` — interpreta `service install|uninstall` e devolve o exit code.
@@ -59,6 +63,10 @@ _Tech Lead_
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
+| AC-10 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
+| AC-11 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ServiceInstallerTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
