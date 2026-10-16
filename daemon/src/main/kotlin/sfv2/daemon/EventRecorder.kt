@@ -20,3 +20,25 @@ class EventRecorder(
         return stored
     }
 }
+
+/**
+ * The run pool's view of the store: the card lookup and the write of one change. The pool writes events only
+ * through [EventRecorder]; this seam lets tests make a write fail. It lives here because this file is the only
+ * place allowed to call `recordChange`.
+ */
+interface LockEventRecorder {
+    fun card(id: String): Card?
+
+    fun recordChange(id: String, card: Card, event: Event): Long
+}
+
+/** [LockEventRecorder] over the real store. */
+internal class StoreLockEventRecorder(private val store: CardEventStore) : LockEventRecorder {
+    override fun card(id: String): Card? = store.card(id)
+
+    override fun recordChange(id: String, card: Card, event: Event): Long = store.recordChange(id, card, event)
+}
+
+/** Writes one change through the seam and reports it, without publishing (test and tooling use only). */
+internal fun LockEventRecorder.store(id: String, card: Card, event: Event): StoredEvent =
+    StoredEvent(recordChange(id, card, event), id, event)

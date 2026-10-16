@@ -4,10 +4,12 @@ import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 import sfv2.core.Actor
+import sfv2.core.Card
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
+import sfv2.store.StoredEvent
 
 data class RunLock(val cardId: String, val pid: Long, val startedAt: Instant)
 
@@ -17,15 +19,41 @@ sealed interface StartDecision {
     data class CardLocked(val holder: RunLock) : StartDecision
 }
 
-/** Bounded set of run slots with one lock per card; locks of dead owners are released by [sweep]. */
-class RunPool(
+/**
+ * Bounded set of run slots with one lock per card; locks of dead owners are released by [sweep].
+ * Every release is written through an [EventRecorder] (the single event writer), so subscribers see it in order.
+ */
+class RunPool private constructor(
     private val capacity: Int,
-    private val store: CardEventStore,
+    private val lookup: (String) -> Card?,
+    private val write: (String, Card, Event) -> StoredEvent,
     private val clock: Clock,
     private val probe: ProcessProbe,
-    private val log: DaemonLog = StderrDaemonLog,
-    private val recorder: EventRecorder,
+    private val log: DaemonLog,
 ) {
+    /** The production wiring: the card comes from [store] and the release goes through [recorder]. */
+    constructor(
+        capacity: Int,
+        store: CardEventStore,
+        clock: Clock,
+        probe: ProcessProbe,
+        log: DaemonLog = StderrDaemonLog,
+        recorder: EventRecorder,
+    ) : this(capacity, store::card, recorder::record, clock, probe, log)
+
+    /**
+     * Test seam: the writes go through [events], which a test makes fail; [onEvent] sees each stored release.
+     * Production code uses the [EventRecorder] constructor, so nothing here publishes.
+     */
+    constructor(
+        capacity: Int,
+        events: LockEventRecorder,
+        clock: Clock,
+        probe: ProcessProbe,
+        log: DaemonLog = StderrDaemonLog,
+        onEvent: (StoredEvent) -> Unit = {},
+    ) : this(capacity, events::card, { id, card, event -> events.store(id, card, event).also(onEvent) }, clock, probe, log)
+
     private val locks = linkedMapOf<String, RunLock>()
 
     init {
@@ -49,18 +77,23 @@ class RunPool(
     @Synchronized
     fun sweep(): List<RunLock> {
         val dead = locks.values.filter { !probe.isAlive(it.pid, it.startedAt) }
-        dead.forEach { lock ->
+        return dead.filter { lock ->
+            try {
+                recordRelease(lock)
+            } catch (e: RuntimeException) {
+                log.log("lock_release_failed", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
+                return@filter false
+            }
             locks.remove(lock.cardId)
-            recordRelease(lock)
+            true
         }
-        return dead
     }
 
     @Synchronized
     fun active(): List<RunLock> = locks.values.toList()
 
     private fun recordRelease(lock: RunLock) {
-        val card = store.card(lock.cardId)
+        val card = lookup(lock.cardId)
         if (card == null) {
             log.log("lock_release_orphan_card", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
             return
@@ -72,7 +105,7 @@ class RunPool(
             type = EventType.LOCK_RELEASED,
             payload = mapOf("reason" to "owner_dead", "pid" to lock.pid.toString()),
         )
-        recorder.record(lock.cardId, card, event)
+        write(lock.cardId, card, event)
         log.log("lock_released", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
     }
 }
