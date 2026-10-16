@@ -1,0 +1,1 @@
+{"issue":46,"slug":"entrega-autonoma","pipeline":"validate","started_at":"2026-10-16T11:30:00Z","finished_at":"2026-10-16T11:40:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green core sfv2.core.MoveRulesTest","green daemon sfv2.daemon.AutonomousDeliveryTest","green daemon sfv2.daemon.DispatcherTest"],"manual_edit":false}
