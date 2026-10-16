@@ -619,11 +619,11 @@ class SocketServerTest {
 
                     h.clock.advance(grace.minusMillis(1))
                     h.commands.events.sweep()
-                    assertThat(openFds()).isEqualTo(open)
+                    assertThat(settledFds()).isEqualTo(open)
 
                     h.clock.advance(Duration.ofMillis(1))
                     h.commands.events.sweep()
-                    assertThat(openFds()).isLessThan(open)
+                    assertThat(settledFds()).isLessThan(open)
                     slow.close()
                 }
             }
