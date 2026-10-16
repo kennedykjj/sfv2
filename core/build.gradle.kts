@@ -1,7 +1,8 @@
 plugins {
     id("sfv2.kotlin-jvm")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
-    implementation(libs.jackson.databind)
+    implementation(libs.kotlinx.serialization.json)
 }
