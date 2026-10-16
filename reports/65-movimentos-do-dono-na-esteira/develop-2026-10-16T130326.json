@@ -1,0 +1,1 @@
+{"issue":65,"slug":"movimentos-do-dono-na-esteira","pipeline":"develop","started_at":"2026-10-16T16:00:00Z","finished_at":"2026-10-16T16:20:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":55845,"duration_s":106}],"rounds":{"plan":1,"acceptance":1,"implementation":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
