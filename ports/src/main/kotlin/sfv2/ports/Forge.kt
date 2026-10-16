@@ -11,7 +11,13 @@ interface Forge {
     fun findOpenPullRequest(branch: String): PullRequestRef?
 
     fun state(pr: PullRequestRef): PullRequestState
+
+    /** Most recent merged PR of [branch], or null. Throws [ForgeException] on forge failure. */
+    fun findMergedPullRequest(branch: String): MergedPullRequest?
 }
+
+/** [head] is the PR head SHA at merge time; [mergedBy] is the merger login only when it is a valid login, else null. */
+data class MergedPullRequest(val number: Int, val mergeCommit: String, val head: String, val mergedBy: String?)
 
 data class PullRequestRequest(val branch: String, val base: String, val title: String, val body: String)
 

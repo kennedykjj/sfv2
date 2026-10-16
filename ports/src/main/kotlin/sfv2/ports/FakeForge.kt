@@ -96,6 +96,12 @@ class FakeForge : Forge {
         return entries.firstOrNull { it.status == Status.OPEN && it.request.branch == branch }?.let { refOf(it) }
     }
 
+    override fun findMergedPullRequest(branch: String): MergedPullRequest? {
+        failIf("findMergedPullRequest", "branch $branch")
+        return entries.lastOrNull { it.status == Status.MERGED && it.request.branch == branch }
+            ?.let { MergedPullRequest(it.number, "merge-${it.number}", it.head, null) }
+    }
+
     override fun state(pr: PullRequestRef): PullRequestState {
         failIf("state", "PR #${pr.number}")
         return stateOf(find(pr.number))
