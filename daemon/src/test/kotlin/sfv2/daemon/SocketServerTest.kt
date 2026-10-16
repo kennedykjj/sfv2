@@ -1268,21 +1268,36 @@ class SocketServerTest {
         reply(withProof("""{"cmd":"card.unblock","actor":"$actor","id":"$id"}""", proofValue))
 
     @Test
-    fun `AC-2 unblock records CARD_UNBLOCKED by the owner, keeps the column and answers with the card`() =
+    fun `AC-2 unblock records CARD_UNBLOCKED by the owner and returns a card blocked mid-work to the queue of its stage`() =
         withCardServer { store ->
             seedBlocked(store, "stuck", Column.CODING)
+            seedBlocked(store, "refining", Column.REFINEMENT)
 
             val unblocked = unblock("stuck")
+            val refining = unblock("refining")
 
             assertThat(ok(unblocked)).isTrue()
             val result = unblocked.getValue("result").jsonObject
             assertThat(result.str("id")).isEqualTo("stuck")
-            assertThat(result.str("column")).isEqualTo("CODING")
-            assertThat(store.card("stuck")?.column).isEqualTo(Column.CODING)
-            val last = store.events("stuck").last()
-            assertThat(last.type.name).isEqualTo("CARD_UNBLOCKED")
-            assertThat(last.actor).isEqualTo(Actor.Owner)
-            assertThat(last.at).isEqualTo(fixedNow)
+            assertThat(result.str("column")).isEqualTo("READY_FOR_DEV")
+            assertThat(store.card("stuck")?.column).isEqualTo(Column.READY_FOR_DEV)
+            val events = store.events("stuck").takeLast(2)
+            assertThat(events.map { it.type.name }).containsExactly("CARD_UNBLOCKED", "CARD_MOVED")
+            assertThat(events.map { it.actor }).containsOnly(Actor.Owner)
+            assertThat(events.last().at).isEqualTo(fixedNow)
+            assertThat(refining.getValue("result").jsonObject.str("column")).isEqualTo("READY_FOR_REFINEMENT")
+            assertThat(result.getValue("blocked").toString()).isEqualTo("false")
+        }
+
+    @Test
+    fun `unblock keeps the column of a card blocked in a column the dispatcher already picks`() =
+        withCardServer { store ->
+            seedBlocked(store, "waiting", Column.READY_FOR_DEV)
+
+            val result = unblock("waiting").getValue("result").jsonObject
+
+            assertThat(result.str("column")).isEqualTo("READY_FOR_DEV")
+            assertThat(store.events("waiting").last().type.name).isEqualTo("CARD_UNBLOCKED")
         }
 
     @Test
@@ -1339,7 +1354,7 @@ class SocketServerTest {
 
             val shownAfter = reply("""{"cmd":"card.show","id":"stuck"}""").getValue("result").jsonObject
             assertThat(shownAfter.getValue("blocked").jsonPrimitive.boolean).isFalse()
-            assertThat(shownAfter.str("column")).isEqualTo("CODING")
+            assertThat(shownAfter.str("column")).isEqualTo("READY_FOR_DEV")
         }
 
     @Test

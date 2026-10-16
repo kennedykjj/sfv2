@@ -185,7 +185,7 @@ class CardCommands(
         return Response.CardResult(CardView(id, moved.title, moved.column))
     }
 
-    /** Owner release of an open block: the event is recorded and the column stays where the work stopped. */
+    /** Owner release of an open block: the event is recorded; a card blocked mid-work returns to the queue of its stage. */
     private fun unblock(request: Request.CardUnblock): Response {
         if (request.actor != Actor.Owner || !ownerProof.matches(request.proof)) {
             log.log("card_command_refused", mapOf("cmd" to "card.unblock", "card" to request.id))
@@ -204,8 +204,24 @@ class CardCommands(
             payload = emptyMap(),
         )
         recorder.record(request.id, current, event)
+        val queue = QUEUE_OF[current.column]
+        val result = if (queue != null) requeue(request, current, queue) else current
         log.log("card_command", mapOf("cmd" to "card.unblock", "card" to request.id))
-        return Response.CardResult(viewOf(request.id, current))
+        return Response.CardResult(viewOf(request.id, result))
+    }
+
+    /** The dispatcher only picks the ready columns, so a card blocked mid-work goes back to the queue of its stage. */
+    private fun requeue(request: Request.CardUnblock, current: Card, queue: Column): Card {
+        val moved = current.movedTo(queue)
+        val event = Event(
+            id = EventId(UUID.randomUUID().toString()),
+            at = clock.instant(),
+            actor = request.actor,
+            type = EventType.CARD_MOVED,
+            payload = mapOf("from" to current.column.name, "to" to queue.name, "reason" to "unblock"),
+        )
+        recorder.record(request.id, moved, event)
+        return moved
     }
 
     private fun viewOf(id: String, card: Card): CardView =
@@ -232,6 +248,7 @@ class CardCommands(
     private fun notFound(id: String): Response = Response.Error("card not found: $id")
 
     private companion object {
+        val QUEUE_OF = mapOf(Column.REFINEMENT to Column.READY_FOR_REFINEMENT, Column.CODING to Column.READY_FOR_DEV)
         const val MAX_NOTE_BYTES = 2048
         const val OWNER_PROOF_ERROR = "owner proof missing or invalid"
     }
