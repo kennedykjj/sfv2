@@ -1,8 +1,5 @@
 package sfv2.daemon
 
-import com.fasterxml.jackson.core.JsonProcessingException
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -19,22 +16,8 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** The daemon cannot start, for instance because the runtime directory is not configured. */
-class DaemonStartException(message: String) : RuntimeException(message)
-
 /** Another daemon is already serving on the socket. */
 class DaemonAlreadyRunningException(message: String) : RuntimeException(message)
-
-private const val RUNTIME_DIR_VARIABLE = "XDG_RUNTIME_DIR"
-private const val SOCKET_DIR_NAME = "sfv2"
-private const val SOCKET_FILE_NAME = "daemon.sock"
-
-/** Resolves the daemon socket path under the user's runtime directory. */
-fun resolveSocketPath(env: Map<String, String>): Path {
-    val runtimeDir = env[RUNTIME_DIR_VARIABLE]?.takeIf { it.isNotBlank() }
-        ?: throw DaemonStartException("$RUNTIME_DIR_VARIABLE is not set; the daemon needs it to place its socket")
-    return Path.of(runtimeDir).resolve(SOCKET_DIR_NAME).resolve(SOCKET_FILE_NAME)
-}
 
 /** Serves the line-delimited JSON protocol on a Unix domain socket. */
 class SocketServer private constructor(
@@ -73,7 +56,7 @@ class SocketServer private constructor(
                     val line = when (val read = readLine(input)) {
                         LineRead.EndOfStream -> return
                         LineRead.TooLong -> {
-                            reply(output, errorReply("line exceeds the $MAX_LINE_BYTES byte limit"))
+                            reply(output, render(Response.Error("line exceeds the $MAX_LINE_BYTES byte limit")))
                             drain(input)
                             return
                         }
@@ -96,23 +79,12 @@ class SocketServer private constructor(
         output.flush()
     }
 
-    private fun handle(line: String): String {
-        val node: JsonNode = try {
-            MAPPER.readTree(line)
-        } catch (e: JsonProcessingException) {
-            return errorReply("invalid JSON")
-        } ?: return errorReply("invalid JSON")
-        if (!node.isObject) return errorReply("message must be a JSON object")
-        val cmd = node.get("cmd")
-        if (cmd == null || !cmd.isTextual) return errorReply("missing cmd")
-        return when (cmd.asText()) {
-            "ping" -> MAPPER.writeValueAsString(linkedMapOf("ok" to true, "result" to "pong"))
-            else -> errorReply("unknown cmd")
-        }
-    }
+    private fun handle(line: String): String = render(dispatch(parseRequest(line)))
 
-    private fun errorReply(message: String): String =
-        MAPPER.writeValueAsString(linkedMapOf("ok" to false, "error" to message))
+    private fun dispatch(request: Request): Response = when (request) {
+        Request.Ping -> Response.Pong
+        is Request.Rejected -> Response.Error(request.message)
+    }
 
     /** Stops accepting, closes the channel and removes the socket file. Idempotent. */
     override fun close() {
@@ -155,7 +127,6 @@ class SocketServer private constructor(
         private const val MAX_DRAIN_BYTES = 1024 * 1024
         private const val DIR_PERMISSIONS = "rwx------"
         private const val FILE_PERMISSIONS = "rw-------"
-        private val MAPPER = ObjectMapper()
 
         /** Binds the socket at [path] and starts serving. */
         fun start(path: Path): SocketServer {
