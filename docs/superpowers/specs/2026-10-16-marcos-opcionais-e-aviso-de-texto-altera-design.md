@@ -18,6 +18,8 @@ _Product Owner_
 - AC-4: Dado um marco desligado (padrão), quando o gatilho ocorre, então nada é escrito no tracker.
 - AC-5: Dado que o tracker falha ao escrever um marco, quando o gatilho ocorre, então o card segue sem bloqueio, o marco não é dado como escrito e é tentado de novo no próximo gatilho.
 - AC-6: Dada a política do projeto, então ela aceita a lista de marcos ligados (`started`, `pr_opened`); sem a lista, todos ficam desligados.
+- AC-8: Dado dois gatilhos do mesmo marco ao mesmo tempo, quando ambos chamam `reached`, então o tracker recebe uma única escrita e há um único `MILESTONE_WRITTEN`.
+- AC-9: Dado um erro inesperado (não só `TrackerException`) ao escrever o marco, quando o gatilho ocorre dentro do pipeline, então o pipeline segue e termina como se o marco estivesse desligado.
 - AC-7: Dado um hash novo diferente, quando ocorre a reimportação ou antes de escrever um marco, então o aviso de texto alterado é emitido uma vez por hash novo, e nunca contém o texto externo (só ids e hashes).
 
 **Fora de escopo:** fechamento (#56), porta única de texto (#57), CLI, UI, sincronização contínua.
@@ -37,7 +39,7 @@ _Tech Lead_
 **Contratos**
 - `core/ProjectPolicies.kt`: novo `enum class Milestone(val key: String) { STARTED("started"), PR_OPENED("pr_opened") }` e campo `milestones: Set<Milestone>` em `ProjectPolicies` (padrão: vazio). `from(raw)` lê a chave `milestones` (lista de strings); valor que não é lista, ou chave desconhecida, lança `InvalidPolicyException("milestones", ...)`.
 - `core/Event.kt`: dois `EventType` novos, `MILESTONE_WRITTEN` (payload `milestone`, `externalId`) e `EXTERNAL_TEXT_CHANGED` (payload `externalId`, `previousHash`, `newHash`; nunca texto).
-- `daemon/ExternalMilestones.kt` (novo): `class ExternalMilestones(store, recorder, trackerOf, policiesOf, clock, log)` com `fun reached(cardId: String, milestone: Milestone, detail: String? = null)`. Passos: marco fora de `policies.milestones` → retorna; já existe `MILESTONE_WRITTEN` do mesmo `milestone` no card → retorna (uma vez); card sem referência `github` → retorna; `tracker.fetch` e, se o hash difere da referência, registra `EXTERNAL_TEXT_CHANGED` (uma vez por `newHash`); `tracker.writeMilestone`; registra `MILESTONE_WRITTEN` (ator `Actor.Adapter("github")`) só depois do sucesso. `TrackerException` é capturada: log `milestone_failed card=<id> milestone=<key>`, sem evento, sem propagar.
+- `daemon/ExternalMilestones.kt` (novo): `class ExternalMilestones(store, recorder, trackerOf, policiesOf, clock, log)` com `fun reached(cardId: String, milestone: Milestone, detail: String? = null)`. Passos: marco fora de `policies.milestones` → retorna; já existe `MILESTONE_WRITTEN` do mesmo `milestone` no card → retorna (uma vez); card sem referência `github` → retorna; `tracker.fetch` e, se o hash difere da referência, registra `EXTERNAL_TEXT_CHANGED` (uma vez por `newHash`); `tracker.writeMilestone`; registra `MILESTONE_WRITTEN` (ator `Actor.Adapter("github")`) só depois do sucesso. `TrackerException` é capturada: log `milestone_failed card=<id> milestone=<key>`, sem evento, sem propagar. `reached` é `@Synchronized` (a verificação de "já escrito" e a escrita não podem correr em paralelo para o mesmo card; dois gatilhos simultâneos comentariam duas vezes na issue) e nunca lança: qualquer `RuntimeException` (tracker, store) é capturada e logada com o id do card, porque é chamado dentro do `DevelopPipeline` e do `ValidatePipeline`, e um marco opcional não pode derrubar a rodada nem prender o lock do pool.
 - Texto do marco: `started` → `started`; `pr_opened` → link do PR `<base da url da referência>/pull/<número>`, onde a base é a url da referência sem o sufixo `/issues/<id>` (o `Forge` não expõe a url do PR).
 - `daemon/CardImport.kt`: ao reimportar com hash diferente, além do `CARD_REIMPORTED`, registra `EXTERNAL_TEXT_CHANGED` (mesma regra de uma vez por `newHash`; a lógica fica numa função compartilhada com `ExternalMilestones`).
 - Gatilhos: `daemon/DevelopPipeline.kt` chama `reached(cardId, STARTED)` após a movimentação Ready for Dev → Coding; `daemon/ValidatePipeline.kt` chama `reached(cardId, PR_OPENED, "<número>")` quando `deliver` devolve `CiResult.Green`; `daemon/Main.kt` monta `ExternalMilestones` com o `trackerOf` e as políticas do projeto do card.
@@ -56,6 +58,8 @@ _Tech Lead_
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ExternalMilestonesTest.kt` |
 | AC-6 | core | `core/src/test/kotlin/sfv2/core/ProjectPoliciesTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ExternalMilestonesTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ExternalMilestonesTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ExternalMilestonesTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
