@@ -1,0 +1,3 @@
+{"issue":51,"slug":"reconstruir-card-a-partir-de-branch-e-pr","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:30:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":178217,"duration_s":425},{"role":"engineer:ports","tokens":28962,"duration_s":51},{"role":"engineer:adapters","tokens":34301,"duration_s":47},{"role":"engineer:daemon","tokens":63466,"duration_s":123},{"role":"engineer:cli","tokens":24106,"duration_s":32}],
+"rounds":{"qa":2,"implementation":1},"gates_failed":["scope qa (stubs em src/main; corrigido pelo QA)"],"flaky":[],"gates_reused":[],"manual_edit":false}
