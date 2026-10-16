@@ -466,6 +466,28 @@ class ModuleTest {
     }
 
     @Test
+    fun `recordChange returns the stored seq and eventsAfter lists later events in order`() = withStore { store, file ->
+        val e1 = anEvent("e1")
+        val e2 = anEvent("e2", EventType.CARD_MOVED)
+        val e3 = anEvent("e3", EventType.CARD_MOVED)
+
+        val s1 = store.recordChange("c1", Card.create("A", Column.INBOX), e1)
+        val s2 = store.recordChange("c2", Card.create("B", Column.INBOX), e2)
+        val s3 = store.recordChange("c1", Card.create("A", Column.CODING), e3)
+
+        assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(s1, s2, s3)
+        assertThat(s1).isLessThan(s2)
+        assertThat(s2).isLessThan(s3)
+        assertThat(store.eventsAfter(0)).containsExactly(
+            StoredEvent(s1, "c1", e1),
+            StoredEvent(s2, "c2", e2),
+            StoredEvent(s3, "c1", e3),
+        )
+        assertThat(store.eventsAfter(s2)).containsExactly(StoredEvent(s3, "c1", e3))
+        assertThat(store.eventsAfter(s3)).isEmpty()
+    }
+
+    @Test
     fun `AC-5 public API has no way to alter or delete an event`() {
         val names = CardEventStore::class.java.methods
             .filter { it.declaringClass == CardEventStore::class.java }

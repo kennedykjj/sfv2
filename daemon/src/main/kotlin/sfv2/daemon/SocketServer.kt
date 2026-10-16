@@ -45,22 +45,30 @@ class SocketServer private constructor(
     }
 
     private fun serve(client: SocketChannel) {
+        var handedOver = false
         try {
-            client.use {
-                val input = Channels.newInputStream(it).buffered()
-                val output = Channels.newOutputStream(it)
-                while (true) {
-                    val line = when (val read = readLine(input)) {
-                        LineRead.EndOfStream -> return
-                        LineRead.TooLong -> {
-                            reply(output, render(Response.Error("line exceeds the $MAX_LINE_BYTES byte limit")))
-                            drain(input)
-                            return
-                        }
-                        is LineRead.Line -> read.text
+            val input = Channels.newInputStream(client).buffered()
+            val output = Channels.newOutputStream(client)
+            while (true) {
+                val line = when (val read = readLine(input)) {
+                    LineRead.EndOfStream -> return
+                    LineRead.TooLong -> {
+                        reply(output, render(Response.Error("line exceeds the $MAX_LINE_BYTES byte limit")))
+                        drain(input)
+                        return
                     }
-                    reply(output, handle(line))
+                    is LineRead.Line -> read.text
                 }
+                val request = parseRequest(line)
+                val stream = commands?.events
+                if (request is Request.Subscribe && stream != null) {
+                    reply(output, """{"ok":true,"result":"subscribed"}""")
+                    // From here the stream owns the connection and closes it.
+                    handedOver = true
+                    stream.subscribe(client, request.after) { clients.remove(client) }
+                    return
+                }
+                reply(output, render(dispatch(request)))
             }
         } catch (e: IOException) {
             // A failing client only ends its own connection.
@@ -69,7 +77,10 @@ class SocketServer private constructor(
             // Same: never let one client affect the accept loop.
             log.log("client_error", mapOf("error" to e.javaClass.simpleName))
         } finally {
-            clients.remove(client)
+            if (!handedOver) {
+                runCatching { client.close() }
+                clients.remove(client)
+            }
         }
     }
 
@@ -78,12 +89,10 @@ class SocketServer private constructor(
         output.flush()
     }
 
-    private fun handle(line: String): String = render(dispatch(parseRequest(line)))
-
     private fun dispatch(request: Request): Response = when (request) {
         Request.Ping -> Response.Pong
         is Request.Rejected -> Response.Error(request.message)
-        is Request.CardCreate, is Request.CardMove, Request.CardList, is Request.CardShow ->
+        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, Request.CardList, is Request.CardShow ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 

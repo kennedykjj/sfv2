@@ -27,6 +27,20 @@ class ProtocolTest {
     }
 
     @Test
+    fun `subscribe parses an optional non-negative numeric after`() {
+        assertThat(parseRequest("""{"cmd":"events.subscribe"}""")).isEqualTo(Request.Subscribe(null))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":7}""")).isEqualTo(Request.Subscribe(7))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":"7"}""")).isEqualTo(Request.Rejected("invalid after"))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":-1}""")).isEqualTo(Request.Rejected("invalid after"))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":1.5}""")).isEqualTo(Request.Rejected("invalid after"))
+    }
+
+    @Test
+    fun `stream error is a line with only the error`() {
+        assertThat(renderStreamError("subscriber too slow")).isEqualTo("""{"error":"subscriber too slow"}""")
+    }
+
+    @Test
     fun `AC-1 proof is parsed on create and move and never printed by toString`() {
         val create = parseRequest("""{"cmd":"card.create","actor":"owner","title":"T","proof":"s3cr3tvalue"}""")
         val move = parseRequest("""{"cmd":"card.move","actor":"owner","id":"x","to":"CODING","proof":"s3cr3tvalue"}""")
