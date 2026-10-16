@@ -72,26 +72,26 @@ class RunPool(
     fun sweep(): List<RunLock> {
         val dead = locks.values.filter { !probe.isAlive(it.pid, it.startedAt) }
         return dead.filter { lock ->
-            val recorded = try {
+            val outcome = try {
                 recordRelease(lock)
-                true
             } catch (e: RuntimeException) {
                 log.log("lock_release_failed", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-                false
+                return@filter false
             }
-            if (recorded) locks.remove(lock.cardId)
-            recorded
+            locks.remove(lock.cardId)
+            outcome?.let(onEvent)
+            true
         }
     }
 
     @Synchronized
     fun active(): List<RunLock> = locks.values.toList()
 
-    private fun recordRelease(lock: RunLock) {
+    private fun recordRelease(lock: RunLock): StoredEvent? {
         val card = store.card(lock.cardId)
         if (card == null) {
             log.log("lock_release_orphan_card", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-            return
+            return null
         }
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
@@ -102,6 +102,6 @@ class RunPool(
         )
         val seq = store.recordChange(lock.cardId, card, event)
         log.log("lock_released", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-        onEvent(StoredEvent(seq, lock.cardId, event))
+        return StoredEvent(seq, lock.cardId, event)
     }
 }
