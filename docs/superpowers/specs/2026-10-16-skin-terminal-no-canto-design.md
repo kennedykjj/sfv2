@@ -12,6 +12,8 @@ _Product Owner_
 **Acceptance criteria**
 - **AC-1** — Dado um histórico de frases do assistente, quando a skin terminal monta a janela, então ela mostra só as últimas frases, no máximo N linhas e com largura máxima de M colunas (frase longa é cortada), da mais antiga para a mais recente.
 - **AC-2** — Dado a skin terminal ativa, quando o dono troca para outra skin registrada, então a skin nova passa a ser a ativa sem reiniciar e já recebe o histórico de frases acumulado.
+- **AC-4** — Dado uma frase com caractere de controle ou quebra de linha, ou uma frase cujo corte em M colunas cairia no meio de um caractere de dois códigos UTF-16 (emoji), quando a skin monta a janela, então os controles viram espaço e o corte respeita o caractere inteiro (conta pontos de código, não `char`), sem deixar metade de um par substituto.
+- **AC-5** — Dado `publish` e `activate` chamados de threads diferentes (a leitura do daemon e a interface), quando acontecem ao mesmo tempo, então o histórico e a skin ativa ficam consistentes: nenhuma frase se perde e `show` nunca recebe um histórico pela metade.
 - **AC-3** — Dado uma skin ativa, quando chega uma frase nova, então só a skin ativa a recebe e a janela passa a incluir essa frase como a mais recente.
 **Out of scope:** renderização Compose; conexão com o socket/daemon (#63); modo silencioso; skin pop-up (#76); decisão do cartum (#77); geração das frases (#74) e do estado (core).
 **Product fit:** serve ao assistente da fase 7 (personalidade sem rosto, com skins) descrito em Brand Commitments. Não contradiz o posicionamento nem o que está fora de escopo; é só apresentação, não altera estado da fábrica.
@@ -39,8 +41,8 @@ Camada `app`, pacote `sfv2.app`; só `core` como dependência (sem Compose, sem 
 
 - `app/src/main/kotlin/sfv2/app/AssistantSkins.kt` (novo):
   - `interface AssistantSkin { val id: String; fun show(history: List<String>) }` — a skin recebe o histórico completo de frases (da mais antiga para a mais recente) e o apresenta.
-  - `data class TerminalWindow(val lines: List<String>)` e `class TerminalSkin(maxLines: Int = 5, maxColumns: Int = 40) : AssistantSkin` com `fun window(history: List<String>): TerminalWindow`: últimas `maxLines` frases, cada uma prefixada com `> ` e cortada em `maxColumns` colunas (o prefixo conta; corte termina em `…`, que conta); histórico vazio vira uma linha `> aguardando…`. O construtor recusa `maxLines < 1` e `maxColumns < 4`. `show` guarda a janela atual em `current`.
-  - `class SkinRegistry(skins: List<AssistantSkin>, initial: String)` com `val active: AssistantSkin`, `fun activate(id: String)` (id desconhecido lança `UnknownSkinException` com o id), `fun publish(phrase: String)` (acrescenta ao histórico e chama `show` só na skin ativa, com o histórico inteiro) e `val history: List<String>`. A troca chama `show(history)` na skin nova. O histórico guarda no máximo 100 frases (as mais antigas saem).
+  - `data class TerminalWindow(val lines: List<String>)` e `class TerminalSkin(maxLines: Int = 5, maxColumns: Int = 40) : AssistantSkin` com `fun window(history: List<String>): TerminalWindow`: últimas `maxLines` frases, cada uma prefixada com `> ` e cortada em `maxColumns` colunas (o prefixo conta; corte termina em `…`, que conta; a contagem e o corte são por ponto de código, nunca no meio de um par substituto); histórico vazio vira uma linha `> aguardando…`. O construtor recusa `maxLines < 1` e `maxColumns < 4`. `show` guarda a janela atual em `current`.
+  - `class SkinRegistry(skins: List<AssistantSkin>, initial: String)` com `val active: AssistantSkin`, `fun activate(id: String)` (id desconhecido lança `UnknownSkinException` com o id), `fun publish(phrase: String)` (acrescenta ao histórico e chama `show` só na skin ativa, com o histórico inteiro) e `val history: List<String>`. `publish`, `activate` e a leitura de `history` são `@Synchronized` (o #63 liga a leitura do daemon, numa thread, à interface, em outra); `history` devolve uma cópia. `publish` normaliza a frase antes de guardá-la: controles e quebras de linha viram espaço. A troca chama `show(history)` na skin nova. O histórico guarda no máximo 100 frases (as mais antigas saem).
 - Fiação com o socket e renderização Compose ficam para o #63; o daemon ainda não expõe a frase no protocolo (ver Open questions).
 
 ## Test plan
@@ -51,6 +53,8 @@ _Tech Lead_
 | AC-1 | app | `app/src/test/kotlin/sfv2/app/ModuleTest.kt` |
 | AC-2 | app | `app/src/test/kotlin/sfv2/app/ModuleTest.kt` |
 | AC-3 | app | `app/src/test/kotlin/sfv2/app/ModuleTest.kt` |
+| AC-4 | app | `app/src/test/kotlin/sfv2/app/ModuleTest.kt` |
+| AC-5 | app | `app/src/test/kotlin/sfv2/app/ModuleTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
