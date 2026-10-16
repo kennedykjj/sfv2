@@ -1,0 +1,4 @@
+{"issue":40,"slug":"pipeline-de-develop","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:30:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":91536,"duration_s":173},{"role":"engineer","tokens":36400,"duration_s":83},{"role":"engineer","tokens":118280,"duration_s":247},{"role":"qa-engineer","tokens":28307,"duration_s":46}],
+"rounds":{"4":1},"gates_failed":["green daemon DispatcherTest (test-wrong, amended by QA)"],"flaky":[],"gates_reused":[],"manual_edit":false,
+"amendments":[{"file":"daemon/src/test/kotlin/sfv2/daemon/DispatcherTest.kt","reason":"O teste do AC-6 esperava o evento LOCK_RELEASED, que o spec não exige; agora afirma que as threads de run do card terminaram (lock liberado no finally)."}]}
