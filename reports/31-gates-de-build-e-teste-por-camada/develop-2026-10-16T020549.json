@@ -1,0 +1,11 @@
+{
+  "issue": 31,
+  "pipeline": "develop",
+  "outcome": "ok",
+  "rounds": {"qa": 2, "core": 1, "daemon": 1},
+  "failed_gates": ["red daemon (compile error: production types missing, fixed by skeleton task)"],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "agents": ["qa-engineer x2", "engineer x3 (core skeleton, daemon skeleton, core, daemon)"]
+}
