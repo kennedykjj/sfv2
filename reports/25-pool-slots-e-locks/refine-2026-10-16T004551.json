@@ -1,0 +1,1 @@
+{"issue": 25, "slug": "pool-slots-e-locks", "pipeline": "refine", "started_at": "2026-10-16T00:00:00Z", "finished_at": "2026-10-16T00:10:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 17824, "duration_s": 11}], "rounds": {"po": 1, "techlead": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
