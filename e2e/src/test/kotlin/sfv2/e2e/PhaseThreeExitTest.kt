@@ -21,7 +21,6 @@ import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.core.ProjectPolicies
 import sfv2.daemon.AutonomousDelivery
-import sfv2.daemon.CardRebuild
 import sfv2.daemon.DaemonLog
 import sfv2.daemon.EventRecorder
 import sfv2.daemon.EventStream
@@ -143,8 +142,13 @@ class PhaseThreeExitTest {
         val proof = OwnerProof.create(dir.resolve("run").resolve("owner.token"), SecureRandom())
         val token = Files.readString(dir.resolve("run").resolve("owner.token"))
 
-        val response = CardRebuild(lost.store, lost.recorder, registry, forge, proof, clock, silent)
-            .handle(parseRequest("""{"cmd":"card.rebuild","actor":"owner","proof":"$token"}"""))
+        // Looked up by name so a missing class fails an assertion, not the compilation.
+        val type = runCatching { Class.forName("sfv2.daemon.CardRebuild") }.getOrNull()
+        assertThat(type).describedAs("class sfv2.daemon.CardRebuild exists").isNotNull()
+        val instance = requireNotNull(type).constructors.single { it.parameterCount == 7 }
+            .newInstance(lost.store, lost.recorder, registry, forge, proof, clock, silent)
+        val handle = instance.javaClass.methods.single { it.name == "handle" }
+        val response = handle.invoke(instance, parseRequest("""{"cmd":"card.rebuild","actor":"owner","proof":"$token"}"""))
 
         assertThat(response).isInstanceOf(Response.CardsResult::class.java)
         assertThat(lost.store.card(autonomous)?.column).isEqualTo(Column.DONE)

@@ -23,7 +23,6 @@ import sfv2.ports.FakeForge
 import sfv2.ports.Forge
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
-import sfv2.ports.PullRequestSummary
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 
@@ -44,7 +43,25 @@ class CardRebuildTest {
     private var sequence = 0
 
     /** Scripted forge: only the listing and the login matter to a rebuild; every other call is a test bug. */
-    private fun scripted(prs: List<PullRequestSummary>, login: String): Forge =
+    /** Looks a production class up by name so a missing one fails an assertion, not the compilation. */
+    private fun production(name: String): Class<*> {
+        val found = runCatching { Class.forName(name) }.getOrNull()
+        assertThat(found).describedAs("class $name exists").isNotNull()
+        return requireNotNull(found)
+    }
+
+    /** A `PullRequestSummary(number, branch, title, state, author, fromFork)`. */
+    private fun summary(number: Int, branch: String, title: String, state: PullRequestState, author: String, fromFork: Boolean): Any =
+        production("sfv2.ports.PullRequestSummary").constructors.single().newInstance(number, branch, title, state, author, fromFork)
+
+    private fun rebuilder(forge: Forge): (String) -> Response {
+        val constructor = production("sfv2.daemon.CardRebuild").constructors.single { it.parameterCount == 7 }
+        val instance = constructor.newInstance(store, recorder, registry, forge, proof, clock, DaemonLog { _, _ -> })
+        val handle = instance.javaClass.methods.single { it.name == "handle" }
+        return { line -> handle.invoke(instance, parseRequest(line)) as Response }
+    }
+
+    private fun scripted(prs: List<Any>, login: String): Forge =
         Proxy.newProxyInstance(Forge::class.java.classLoader, arrayOf(Forge::class.java)) { _, method, _ ->
             when (method.name) {
                 "listPullRequests" -> prs
@@ -78,8 +95,7 @@ class CardRebuildTest {
 
     /** The request goes through the wire parser, as `sfv2 card rebuild` sends it. */
     private fun rebuild(forge: Forge): Response =
-        CardRebuild(store, recorder, registry, forge, proof, clock, DaemonLog { _, _ -> })
-            .handle(parseRequest("""{"cmd":"card.rebuild","actor":"owner","proof":"$token"}"""))
+        rebuilder(forge)("""{"cmd":"card.rebuild","actor":"owner","proof":"$token"}""")
 
     private fun branch(id: String, title: String) = WorktreeManager.branchName("feat/{id}-{slug}", id, title)
 
@@ -91,7 +107,7 @@ class CardRebuildTest {
         author: String = login,
         fromFork: Boolean = false,
         branch: String = branch(id, title),
-    ) = PullRequestSummary(number, branch, title, state, author, fromFork)
+    ) = summary(number, branch, title, state, author, fromFork)
 
     private fun created(response: Response): List<CardView> = (response as Response.CardsResult).cards
 
