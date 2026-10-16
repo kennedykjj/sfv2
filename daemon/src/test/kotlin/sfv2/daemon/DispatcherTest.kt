@@ -21,9 +21,13 @@ import org.junit.jupiter.api.io.TempDir
 import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
+import sfv2.core.DeliveryMode
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
+import sfv2.core.ProjectPolicies
+import sfv2.ports.FakeForge
+import sfv2.ports.PullRequestRequest
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.StoredEvent
@@ -73,14 +77,34 @@ object DispatcherFixtures {
         clock: Clock,
         log: DaemonLog,
         guard: LaunchGuard = LaunchGuard.Open,
+        deliveries: DeliveryTrigger = DeliveryTrigger { },
     ): Dispatcher {
-        val constructor = Dispatcher::class.java.constructors.firstOrNull { c ->
-            c.parameterTypes.size == 11 && c.parameterTypes.last() == Set::class.java
-        }
+        val constructor = Dispatcher::class.java.constructors
+            .filter { c -> !c.isSynthetic && Set::class.java in c.parameterTypes }
+            .maxByOrNull { it.parameterCount }
         assertThat(constructor).`as`("Dispatcher has a `stages: Set<DispatchStage>` constructor parameter").isNotNull()
-        return requireNotNull(constructor).newInstance(
+        val byType = listOf<Any>(
             store, pool, launcher, pause, schedule, DispatchLimits(emptyMap()), clock, Duration.ofHours(1), log, guard, stages,
-        ) as Dispatcher
+            deliveries,
+        )
+        val arguments = requireNotNull(constructor).parameterTypes.map { type -> byType.first { type.isInstance(it) } }
+        return constructor.newInstance(*arguments.toTypedArray()) as Dispatcher
+    }
+
+    /** The `deliveries` parameter is optional and its position is up to the implementation, so it is found by type. */
+    fun dispatcherWithDeliveries(
+        deliveries: DeliveryTrigger,
+        store: CardEventStore,
+        pool: RunPool,
+        launcher: StageLauncher,
+        pause: PauseSwitch,
+        schedule: WorkSchedule,
+        clock: Clock,
+        log: DaemonLog,
+    ): Dispatcher {
+        val accepts = Dispatcher::class.java.constructors.any { c -> !c.isSynthetic && DeliveryTrigger::class.java in c.parameterTypes }
+        assertThat(accepts).`as`("Dispatcher has a `deliveries: DeliveryTrigger` constructor parameter").isTrue()
+        return dispatcherFor(DispatchStage.entries.toSet(), store, pool, launcher, pause, schedule, clock, log, deliveries = deliveries)
     }
 
     class FakePause(@Volatile var paused: Boolean = false) : PauseSwitch {
@@ -207,6 +231,37 @@ class DispatcherTest {
 
         assertThat(started).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "a"))
         assertThat(launcher.launched).containsExactly(DispatchStage.DEVELOP to "a")
+    }
+
+    @Test
+    fun `AC-6 a card in Ready for Prod of a PR mode project is handed to the delivery, which neither merges nor touches the PR`() {
+        val forge = FakeForge()
+        forge.openPullRequest(PullRequestRequest("feat/p1-card", "main", "Card p1", "body"))
+        val delivery = AutonomousDelivery(
+            store, recorder, { forge }, { ProjectPolicies.DEFAULT.copy(deliveryMode = DeliveryMode.PR_HANDOFF) },
+            { }, 3, clock, log,
+        )
+        card("p1", Column.READY_FOR_PROD)
+        val outcomes = mutableListOf<DeliveryOutcome>()
+        val triggered = mutableListOf<String>()
+        val dispatcher = DispatcherFixtures.dispatcherWithDeliveries(
+            { id ->
+                triggered.add(id)
+                outcomes.add(delivery.deliver(id))
+            },
+            store, pool(), launcher, pause, schedule, clock, log,
+        ).also { toClose.add(it) }
+        val eventsBefore = store.events("p1").size
+
+        dispatcher.runCycle()
+        pause.paused = true
+        dispatcher.runCycle()
+
+        assertThat(triggered).containsExactly("p1")
+        assertThat(outcomes).containsExactly(DeliveryOutcome.Skipped)
+        assertThat(forge.merges).isEmpty()
+        assertThat(store.events("p1")).hasSize(eventsBefore)
+        assertThat(store.card("p1")?.column).isEqualTo(Column.READY_FOR_PROD)
     }
 
     @Test
