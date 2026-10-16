@@ -205,9 +205,19 @@ class RealDevelopGates(
     private fun testPlan(worktree: Path): TestPlan {
         val specDir = worktree.resolve(SPEC_DIR)
         if (!Files.isDirectory(specDir)) return TestPlan(emptyList())
-        val spec = Files.list(specDir).use { entries ->
+        val all = Files.list(specDir).use { entries ->
             entries.filter { it.fileName.toString().endsWith(".md") }.toList()
-        }.maxByOrNull { Files.getLastModifiedTime(it).toMillis() } ?: return TestPlan(emptyList())
+        }
+        // The card's own spec, not whichever spec file is newest: a merge of the base brings the specs of other cards in.
+        val own = try {
+            (changedPaths.between(worktree, baseRevision) + changedPaths.untracked(worktree)).distinct()
+                .filter { it.startsWith("$SPEC_DIR/") && it.endsWith(".md") }
+                .map { worktree.resolve(it) }
+                .filter { Files.isRegularFile(it) }
+        } catch (e: ChangedPathsException) {
+            emptyList()
+        }
+        val spec = own.ifEmpty { all }.maxByOrNull { Files.getLastModifiedTime(it).toMillis() } ?: return TestPlan(emptyList())
         return TestPlan.parse(Files.readString(spec))
     }
 
