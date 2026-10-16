@@ -1,5 +1,6 @@
 package sfv2.daemon
 
+import java.time.ZoneId
 import sfv2.core.Event
 import sfv2.store.CardEventStore
 
@@ -14,20 +15,31 @@ class CostSummaryQuery(private val store: CardEventStore, private val limitsOf: 
     fun handle(request: Request): Response {
         if (request !is Request.CostSummary) return Response.Error("not a cost summary request")
         val limits = limitsOf()
-        val byCard = store.costEventsBetween(request.from, request.to)
+        val events = store.costEventsBetween(request.from, request.to)
+        val byCard = events
             .groupBy({ it.cardId }, { it.event })
             .toSortedMap()
-        val spents = byCard.mapValues { (_, events) -> CostSums.sum(events) }
+        val spents = byCard.mapValues { (_, cardEvents) -> CostSums.sum(cardEvents) }
         val total = CostSums.total(spents.values)
         return Response.CostSummaryResult(
             totalUsd = total.usd,
             status = statusOf(byCard.values.flatten()),
-            cards = byCard.map { (card, events) -> CardCost(card, spents.getValue(card).usd, statusOf(events)) },
+            cards = byCard.map { (card, cardEvents) -> CardCost(card, spents.getValue(card).usd, statusOf(cardEvents)) },
             limits = limits,
             dayReached = total.reached(limits.perDayUsd),
             cardsReached = spents.filterValues { it.reached(limits.perCardUsd) }.keys.toList(),
+            stages = events.map { it.event }
+                .groupBy { it.payload["stage"] ?: UNKNOWN_STAGE }
+                .toSortedMap()
+                .map { (stage, stageEvents) -> StageCost(stage, CostSums.sum(stageEvents).usd, statusOf(stageEvents)) },
+            days = events.map { it.event }
+                .groupBy { dayOf(it, request.zone) }
+                .toSortedMap()
+                .map { (day, dayEvents) -> DayCost(day, CostSums.sum(dayEvents).usd, statusOf(dayEvents)) },
         )
     }
+
+    private fun dayOf(event: Event, zone: ZoneId): String = event.at.atZone(zone).toLocalDate().toString()
 
     private fun statusOf(events: List<Event>): CostStatus {
         val statuses = events.map { event -> CostStatus.entries.firstOrNull { it.name == event.payload["status"] } ?: CostStatus.UNKNOWN }.toSet()
@@ -36,5 +48,9 @@ class CostSummaryQuery(private val store: CardEventStore, private val limitsOf: 
             statuses.size == 1 -> statuses.single()
             else -> CostStatus.PARTIAL
         }
+    }
+
+    private companion object {
+        const val UNKNOWN_STAGE = "unknown"
     }
 }
