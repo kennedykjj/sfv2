@@ -1,0 +1,1 @@
+{"issue":9,"slug":"evento-e-ator","pipeline":"refine","started_at":"2026-10-15T21:40:00Z","finished_at":"2026-10-15T22:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15378,"duration_s":8}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
