@@ -17,6 +17,10 @@ _Product Owner_
 - **AC-5** — Given uma reimportação, when o texto externo não mudou, then o evento de reimportação é registrado e o card não é alterado.
 - **AC-6** — Given uma busca no tracker, when o dono importa o resultado, then cada resultado vira um card no Inbox, sem duplicar os já importados.
 - **AC-7** — Given uma issue inexistente ou falha do tracker, when a importação roda, then nenhum card é criado e o erro informa o id externo envolvido.
+- **AC-9** — Given duas issues com o mesmo número em projetos diferentes (repositórios diferentes), when o dono importa as duas, then nascem dois cards, um por projeto: a busca de card já importado é limitada aos cards do projeto escolhido, nunca global.
+- **AC-10** — Given um título de issue com caracteres de controle, quebras de linha, só espaços ou mais de 200 caracteres, when a issue é importada, then o título do card é normalizado (controles viram espaço, espaços repetidos viram um, corte em 200 caracteres) e, se ficar vazio, vira `Issue <id>`; a importação nunca falha por título.
+- **AC-11** — Given uma reimportação com texto alterado de um card que já passou de Ready for Dev (tem ou terá worktree e branch derivados do título), when roda, then o título do card não muda (a branch do PR deriva dele); o evento registra `changed=true` e `title_frozen=true` e a referência ganha o hash novo para o aviso de texto alterado (#55).
+- **AC-12** — Given uma busca que traz issues fechadas, when o dono importa o resultado, then as fechadas são puladas (importar por id continua aceitando uma fechada).
 - **AC-8** — Given um pedido de importação que não vem do dono, when chega ao daemon, then é recusado e nada é criado.
 **Out of scope:** CLI `sfv2 import` (card separado); sincronização contínua com o tracker; importação de comentários ou relações (ex.: Blocked by, tratado no #53); fechamento da issue externa; trackers além dos existentes (Jira etc.).
 **Product fit:** Serve "importar e fechar, sem sincronização contínua": o tracker é tocado só na importação; texto externo entra marcado como não confiável por uma porta só; toda ação é um evento com ator. Não contradiz posicionamento nem limites.
@@ -41,7 +45,7 @@ _Tech Lead_
 - `id`: `tracker.fetch(id)`; null → erro com o id. Sem card com a ref `(provider, externalId)` → `Card.create(title, INBOX).withReference(ExternalRef(provider, id, url, now, TextHash(item.textHash)))`, evento `CARD_CREATED` com ator `Actor.Adapter(provider)`, `store.assignProject`. Com card existente → reimporta: título e referência novos (reconstrói a ref trocando-a na lista, mantendo coluna e demais refs), evento `CARD_REIMPORTED` sempre, `changed=false` e card intacto quando o hash é igual.
 - `query`: `tracker.search(query)`; cada item sem card existente vira card como acima; itens já importados são pulados sem evento. Falha do tracker (`TrackerException`) antes de criar qualquer card encerra com erro; mensagem só com operação e id, nunca texto da issue.
 - O corpo da issue não é guardado no card (o `Card` só tem título): entra no hash da referência; guardá-lo é decisão da porta de texto externo (#57).
-- Provider fixo `github` (único tracker existente). Busca de duplicata por varredura de `store.cards()` sob `@Synchronized`.
+- Provider fixo `github` (único tracker existente). Busca de duplicata por varredura de `store.cards()` sob `@Synchronized`, só entre os cards do projeto escolhido (`store.projectOf(id) == project.repo` para o projeto escolhido; o número da issue só é único dentro do repositório). O título do card nasce de `normalizeTitle` (AC-10), pura e testável. A reimportação atualiza o título só nas colunas Inbox, Ready for Refinement, Refinement, Spec Review e Ready for Dev (AC-11); a busca pula `TrackerItemState.CLOSED` (AC-12).
 - Logs `key=value` só com ids; sem migração.
 
 ## Test plan
@@ -57,6 +61,10 @@ _Tech Lead_
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
 | AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
+| AC-10 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
+| AC-11 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
+| AC-12 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
