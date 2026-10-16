@@ -1,0 +1,32 @@
+{
+  "issue": 36,
+  "stage": "develop",
+  "outcome": "done",
+  "weight": "light",
+  "solo": true,
+  "agents": [
+    {"name": "sf:qa-engineer", "calls": 2, "mode": ["write", "amend"]}
+  ],
+  "rounds": {"qa_amend": 1, "implementation_fix": 0},
+  "commits": {
+    "plan": "3c305cf92cc4c4b16a5da222d31132f6c8efdffa",
+    "qa": "65a07f4b6cf856343c7d03ea4eb7bbef27870ad6",
+    "implementation": "48ae52f24edeca03e45cdac517a60a51f2cc0ac7",
+    "qa_amended": "0f5989c0252ecd518f5b69b749b5ffdef654058d"
+  },
+  "amendments": [
+    {"file": "daemon/src/test/kotlin/sfv2/daemon/SpecGatesTest.kt", "ac": "AC-2", "reason": "fixture Security body _Revisao_ — n/a counted as filled; changed to n/a as in the template"}
+  ],
+  "gates": {
+    "test-plan": "pass",
+    "scope": "pass",
+    "qa-commit": "pass",
+    "acceptance-intact": "pass",
+    "build": "FAIL once (AC-2 fixture, sent to QA), then pass",
+    "green": {"AC-1": "pass", "AC-2": "pass", "AC-3": "pass"},
+    "forbidden": "pass",
+    "migration": "pass"
+  },
+  "gates_reused": [],
+  "flaky": []
+}
