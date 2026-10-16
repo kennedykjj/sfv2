@@ -3,8 +3,7 @@ package sfv2.app
 import java.time.Instant
 import sfv2.core.Column
 import sfv2.core.EventType
-
-private val NOTICE_COLUMNS: Set<Column> = setOf(Column.SPEC_REVIEW, Column.STAGED)
+import sfv2.core.OWNER_WAIT_COLUMNS
 
 /** A card that waits for the owner's decision; [since] is when it started waiting. */
 data class WaitingCard(val id: String, val column: Column, val since: Instant, val externalId: String?)
@@ -17,7 +16,7 @@ class WaitingCards private constructor(private val byId: Map<String, WaitingCard
     fun contains(id: String): Boolean = id in byId
 
     fun withSnapshot(cards: List<BoardCard>, now: Instant): WaitingCards {
-        val next = cards.filter { it.column in NOTICE_COLUMNS }.associate { card ->
+        val next = cards.filter { it.column in OWNER_WAIT_COLUMNS }.associate { card ->
             val known = byId[card.id]
             card.id to WaitingCard(card.id, card.column, known?.since ?: now, known?.externalId)
         }
@@ -35,7 +34,7 @@ class WaitingCards private constructor(private val byId: Map<String, WaitingCard
         }
 
     private fun place(id: String, column: Column?, now: Instant, externalId: String?): WaitingCards {
-        if (column == null || column !in NOTICE_COLUMNS) {
+        if (column == null || column !in OWNER_WAIT_COLUMNS) {
             return if (id in byId) WaitingCards(byId - id) else this
         }
         val known = byId[id]
