@@ -1,0 +1,1 @@
+{"issue":70,"slug":"bandeja-pop-up-e-notificacao-no-linux","pipeline":"refine","started_at":null,"finished_at":null,"outcome":"ok","agents":[{"role":"product-owner","tokens":16943,"duration_s":20},{"role":"ux-designer","tokens":23278,"duration_s":29}],"rounds":{"po":1,"ux":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
