@@ -1,0 +1,1 @@
+{"issue":14,"slug":"spec-em-markdown-com-hash","pipeline":"refine","started_at":"2026-10-15T00:00:00Z","finished_at":"2026-10-15T00:30:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":17393,"duration_s":10}],"rounds":{"po":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
