@@ -4,9 +4,13 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import sfv2.store.CardEventStore
 import sfv2.store.StoredEvent
 
@@ -18,11 +22,43 @@ class EventStream(
     private val store: CardEventStore,
     private val queueLimit: Int = DEFAULT_QUEUE_LIMIT,
     private val log: DaemonLog = StderrDaemonLog,
-) {
+    private val clock: Clock = Clock.systemUTC(),
+    private val closeGrace: Duration = DEFAULT_CLOSE_GRACE,
+) : AutoCloseable {
     private val subscribers = ConcurrentHashMap.newKeySet<Subscriber>()
+
+    /** Subscribers removed for being slow whose connection is still open, waiting for [sweep] to close it. */
+    private val slowDropped = ConcurrentHashMap.newKeySet<Subscriber>()
+
+    @Volatile private var closed = false
 
     init {
         require(queueLimit > 0) { "queueLimit must be positive" }
+        require(!closeGrace.isNegative) { "closeGrace must not be negative" }
+        Thread.ofVirtual().start { sweepLoop() }
+    }
+
+    /** Stops the background sweep. Open subscriptions are left to end on their own. */
+    override fun close() {
+        closed = true
+    }
+
+    /** Closes the connection of every slow-dropped subscriber whose grace period has passed. */
+    internal fun sweep() {
+        val now = clock.instant()
+        slowDropped.forEach { if (!now.isBefore(it.droppedAt.plus(closeGrace))) it.finish() }
+    }
+
+    private fun sweepLoop() {
+        while (!closed) {
+            try {
+                Thread.sleep(POLL_MILLIS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+            sweep()
+        }
     }
 
     /** Hands [event] to every subscriber without blocking. A subscriber whose queue is full is dropped. */
@@ -56,7 +92,12 @@ class EventStream(
 
         @Volatile private var dropped = false
 
+        @Volatile var droppedAt: Instant = Instant.MAX
+            private set
+
         @Volatile private var stopped = false
+
+        private val finished = AtomicBoolean(false)
 
         @Volatile private var lastSent = 0L
 
@@ -68,6 +109,8 @@ class EventStream(
                 return
             }
             if (queue.size >= queueLimit) {
+                droppedAt = clock.instant()
+                slowDropped.add(this)
                 dropped = true
                 subscribers.remove(this)
                 log.log("stream_subscriber_dropped", mapOf("seq" to lastSent.toString()))
@@ -126,9 +169,12 @@ class EventStream(
             output.flush()
         }
 
-        private fun finish() {
+        /** Idempotent: the writer and [sweep] may both end the subscriber. */
+        fun finish() {
             stopped = true
             subscribers.remove(this)
+            slowDropped.remove(this)
+            if (!finished.compareAndSet(false, true)) return
             runCatching { connection.close() }
             runCatching { onClosed() }
         }
@@ -136,6 +182,7 @@ class EventStream(
 
     companion object {
         const val DEFAULT_QUEUE_LIMIT = 1000
+        val DEFAULT_CLOSE_GRACE: Duration = Duration.ofSeconds(5)
         private const val POLL_MILLIS = 50L
     }
 }
