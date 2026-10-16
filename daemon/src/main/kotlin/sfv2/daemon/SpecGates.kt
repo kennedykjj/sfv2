@@ -14,7 +14,7 @@ data class SpecCheck(val weight: SpecWeight, val findings: List<SpecFinding>)
 object SpecGates {
     private val criterion = Regex("""^\s*(?:-\s+)?\*{0,2}(AC-\d+)\*{0,2}\s*[—:]""")
     private val backticked = Regex("`([^`]+)`")
-    private val declaredWeight = Regex("""(?m)^\*\*Weight:\*\*\s*(\S+)""")
+    private val declaredWeight = Regex("""(?m)^\s*\*\*Weight:\*\*\s*(\S+)""")
     private val touchesUi = Regex("""\*\*Touches UI:\*\*\s*(\S+)""")
 
     fun check(specText: String, layers: List<SpecLayer>): SpecCheck {
@@ -106,11 +106,13 @@ object SpecGates {
         val lines = specText.lines()
         val start = lines.indexOfFirst { it.trim() == "## $title" }
         if (start < 0) return ""
-        return lines.drop(start + 1).takeWhile { !it.startsWith("## ") }.joinToString("\n")
+        return lines.drop(start + 1).takeWhile { !isSectionHeader(it) }.joinToString("\n")
     }
 
     private fun header(specText: String): String =
-        specText.lines().takeWhile { !it.startsWith("## ") }.joinToString("\n")
+        specText.lines().takeWhile { !isSectionHeader(it) }.joinToString("\n")
+
+    private fun isSectionHeader(line: String): Boolean = line.trimStart().startsWith("## ")
 
     private fun cells(line: String): List<String> =
         line.trim().trim('|').split('|').map { it.trim() }
