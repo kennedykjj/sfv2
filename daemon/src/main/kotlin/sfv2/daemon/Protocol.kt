@@ -15,8 +15,14 @@ import sfv2.store.StoredEvent
 sealed interface Request {
     data object Ping : Request
 
-    data class CardCreate(val actor: Actor, val title: String) : Request
-    data class CardMove(val actor: Actor, val id: String, val to: Column) : Request
+    data class CardCreate(val actor: Actor, val title: String, val proof: String? = null) : Request {
+        override fun toString(): String = "CardCreate(actor=$actor, title=$title, proof=${if (proof == null) "null" else "***"})"
+    }
+
+    data class CardMove(val actor: Actor, val id: String, val to: Column, val proof: String? = null) : Request {
+        override fun toString(): String = "CardMove(actor=$actor, id=$id, to=$to, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -58,14 +64,14 @@ fun parseRequest(line: String): Request {
         "card.create" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val title = stringField(obj, "title") ?: return Request.Rejected("missing title")
-            Request.CardCreate(actor, title)
+            Request.CardCreate(actor, title, stringField(obj, "proof"))
         }
         "card.move" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             val to = stringField(obj, "to") ?: return Request.Rejected("missing to")
             val column = Column.entries.firstOrNull { it.name == to } ?: return Request.Rejected("unknown column")
-            Request.CardMove(actor, id, column)
+            Request.CardMove(actor, id, column, stringField(obj, "proof"))
         }
         "card.list" -> Request.CardList
         "card.show" -> {

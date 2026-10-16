@@ -41,6 +41,19 @@ class ProtocolTest {
     }
 
     @Test
+    fun `AC-1 proof is parsed on create and move and never printed by toString`() {
+        val create = parseRequest("""{"cmd":"card.create","actor":"owner","title":"T","proof":"s3cr3tvalue"}""")
+        val move = parseRequest("""{"cmd":"card.move","actor":"owner","id":"x","to":"CODING","proof":"s3cr3tvalue"}""")
+
+        assertThat((create as Request.CardCreate).proof).isEqualTo("s3cr3tvalue")
+        assertThat((move as Request.CardMove).proof).isEqualTo("s3cr3tvalue")
+        assertThat(create.toString()).doesNotContain("s3cr3tvalue")
+        assertThat(move.toString()).doesNotContain("s3cr3tvalue")
+        assertThat((parseRequest("""{"cmd":"card.create","actor":"owner","title":"T"}""") as Request.CardCreate).proof)
+            .isNull()
+    }
+
+    @Test
     fun `invalid json is rejected without echoing the input`() {
         val request = parseRequest("secret-not-json")
 
