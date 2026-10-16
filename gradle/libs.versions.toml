@@ -5,6 +5,7 @@ assertj = "3.27.6"
 clikt = "5.0.3"
 kotlinx-serialization = "1.11.0"
 sqldelight = "2.4.1"
+snakeyaml-engine = "2.9"
 
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -16,6 +17,8 @@ clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
+
+snakeyaml-engine = { module = "org.snakeyaml:snakeyaml-engine", version.ref = "snakeyaml-engine" }
 
 [plugins]
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
