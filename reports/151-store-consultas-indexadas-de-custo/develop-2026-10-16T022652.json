@@ -1,0 +1,13 @@
+{
+  "issue": 151,
+  "slug": "store-consultas-indexadas-de-custo",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer", "engineer (store)", "engineer (daemon)"],
+  "rounds": 0,
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "deviations": ["índice event_card_type_actor criado com colunas (card_id, type, seq, actor) em vez de (card_id, type, actor, seq): com a ordem da spec o SQLite escolhia event_card_id para lastSeq sem ator"]
+}
