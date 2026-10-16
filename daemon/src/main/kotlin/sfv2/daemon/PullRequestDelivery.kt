@@ -9,7 +9,8 @@ import sfv2.ports.PullRequestRequest
 
 /** What the CI said about the head the daemon pushed. */
 sealed interface CiResult {
-    data object Green : CiResult
+    /** The CI approved the head of pull request [pr]. */
+    data class Green(val pr: Int) : CiResult
 
     /** [summary] is untrusted text: failed check names and summaries, cut at [MAX_CI_SUMMARY_BYTES] UTF-8 bytes. */
     data class Red(val summary: String) : CiResult
@@ -79,7 +80,8 @@ class PullRequestDelivery(
         }
         val local = head.of(worktree) ?: return CiResult.ForgeFailed
         return try {
-            var shown = forge.openPullRequest(PullRequestRequest(branch, base, title, body)).head
+            val opened = forge.openPullRequest(PullRequestRequest(branch, base, title, body))
+            var shown = opened.head
             var result: ChecksState = ChecksState.Pending
             for (poll in 1..maxPolls) {
                 if (poll > 1) shown = forge.findOpenPullRequest(branch)?.head ?: shown
@@ -89,7 +91,7 @@ class PullRequestDelivery(
             }
             when (val state = result) {
                 ChecksState.Pending -> CiResult.TimedOut
-                ChecksState.Passed -> CiResult.Green
+                ChecksState.Passed -> CiResult.Green(opened.number)
                 is ChecksState.Failed -> CiResult.Red(summaryOf(state))
             }
         } catch (e: ForgeException) {

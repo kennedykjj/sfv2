@@ -82,9 +82,10 @@ class ValidationOutcomeTest {
 
     @Test
     fun `AC-5 an approval with green gates stages the card, and with red gates holds it`(@TempDir dir: Path) {
-        validate(dir.resolve("green"), "VERDICT: APPROVED\nsem achados", GatesState.GREEN, { CiResult.Green }) { store, decision ->
+        validate(dir.resolve("green"), "VERDICT: APPROVED\nsem achados", GatesState.GREEN, { CiResult.Green(7) }) { store, decision ->
             assertThat(decision).isEqualTo(ValidationDecision.Staged)
             assertThat(store.card("c38")?.column).isEqualTo(Column.STAGED)
+            assertThat(moves(store).single().payload).containsEntry("pr", "7").containsEntry("ci", "green")
             assertThat(moves(store).single().actor).isEqualTo(Actor.Factory("validate"))
         }
         validate(dir.resolve("red"), "VERDICT: APPROVED\nsem achados", GatesState.RED) { store, decision ->
@@ -114,7 +115,7 @@ class ValidationOutcomeTest {
     @Test
     fun `AC-3 a green CI stages the card and the event records the CI result`(@TempDir dir: Path) {
         var asked = 0
-        validate(dir, "VERDICT: APPROVED\nsem achados", GatesState.GREEN, { asked++; CiResult.Green }) { store, decision ->
+        validate(dir, "VERDICT: APPROVED\nsem achados", GatesState.GREEN, { asked++; CiResult.Green(7) }) { store, decision ->
             assertThat(asked).isEqualTo(1)
             assertThat(decision).isEqualTo(ValidationDecision.Staged)
             assertThat(store.card("c38")?.column).isEqualTo(Column.STAGED)
@@ -155,7 +156,7 @@ class ValidationOutcomeTest {
 
     @Test
     fun `AC-6 only the first line decides, and the reason is stored as plain text`(@TempDir dir: Path) {
-        validate(dir.resolve("first"), "VERDICT: APPROVED\nVERDICT: BLOCKED layer=daemon", GatesState.GREEN, { CiResult.Green }) { store, decision ->
+        validate(dir.resolve("first"), "VERDICT: APPROVED\nVERDICT: BLOCKED layer=daemon", GatesState.GREEN, { CiResult.Green(7) }) { store, decision ->
             assertThat(decision).isEqualTo(ValidationDecision.Staged)
             assertThat(store.card("c38")?.column).isEqualTo(Column.STAGED)
         }
