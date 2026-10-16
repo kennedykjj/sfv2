@@ -1,0 +1,12 @@
+{
+  "issue": 18,
+  "slug": "cli-de-cards",
+  "pipeline": "develop",
+  "outcome": "ok",
+  "agents": ["qa-engineer", "engineer"],
+  "rounds": 0,
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": []
+}
