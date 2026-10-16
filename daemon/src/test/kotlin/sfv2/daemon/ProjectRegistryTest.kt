@@ -78,6 +78,33 @@ class ProjectRegistryTest {
     }
 
     @Test
+    fun `the factory yml of this repository registers despite the keys the registry does not read`() {
+        val repo = aRepo("self")
+        val real = Files.readString(Path.of("..", ".shipfloor", "factory.yml"))
+        val source = FakeSource().also { it.put(repo, real) }
+
+        val registered = ProjectRegistry(source).register(repo)
+
+        assertThat(registered.name).isEqualTo("sfv2")
+        assertThat(registered.layers.map { it.name }).contains("core", "store", "ports", "adapters", "daemon", "cli")
+        assertThat(registered.layers.first { it.name == "core" }.path).isEqualTo("core/")
+    }
+
+    @Test
+    fun `unknown keys are ignored but an invalid known field still names itself`() {
+        val ok = aRepo("extra-keys")
+        val bad = aRepo("extra-keys-bad")
+        val source = FakeSource().also {
+            it.put(ok, validYaml().replace("project:\n  name: alpha", "project:\n  name: alpha\n  repo: o/r") + "\nboard: {owner: o, number: 4}\n")
+            it.put(bad, validYaml().replace("close: policy", "close: nobody") + "\nboard: {owner: o, number: 4}\n")
+        }
+        val registry = ProjectRegistry(source)
+
+        assertThat(registry.register(ok).name).isEqualTo("alpha")
+        assertThat(assertThrows(InvalidProjectConfigException::class.java) { registry.register(bad) }.field).isEqualTo("signers.close")
+    }
+
+    @Test
     fun `AC-2 an invalid factory yml is refused and the reply names the invalid field`() {
         val repo = aRepo("bad-policy")
         val noName = aRepo("no-name")

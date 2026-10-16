@@ -61,9 +61,7 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
             throw InvalidProjectConfigException("factory.yml", "$CONFIG_FILE is not valid YAML")
         }
         val map = asMap(root, "factory.yml")
-        rejectUnknown(map, TOP_LEVEL_KEYS, null)
         val projectSection = asMap(map["project"], "project")
-        rejectUnknown(projectSection, setOf("name"), "project")
         val name = (projectSection["name"] as? String)?.takeIf { it.isNotBlank() }
             ?: throw InvalidProjectConfigException("project.name", "project.name must be a non-empty text")
         val layers = parseLayers(map["layers"])
@@ -81,7 +79,6 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         val layers = items.mapIndexed { index, item ->
             val field = "layers[$index]"
             val layer = asMap(item, field)
-            rejectUnknown(layer, setOf("name", "path"), field)
             val name = (layer["name"] as? String)?.takeIf { it.isNotBlank() }
                 ?: throw InvalidProjectConfigException("$field.name", "$field.name must be a non-empty text")
             val path = (layer["path"] as? String)?.takeIf { it.isNotBlank() }
@@ -102,17 +99,12 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         }
     }
 
-    private fun rejectUnknown(map: Map<String, Any?>, allowed: Set<String>, parent: String?) {
-        val unknown = map.keys.firstOrNull { it !in allowed } ?: return
-        val field = if (parent == null) unknown else "$parent.$unknown"
-        throw InvalidProjectConfigException(field, "unknown field $field")
-    }
-
+    // Keys the registry does not read (board, language, limits, layer build/test commands...) belong to the V0
+    // factory.yml and are ignored here; the fields it does read are validated.
     private companion object {
         const val CONFIG_FILE = ".shipfloor/factory.yml"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
         val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions")
-        val TOP_LEVEL_KEYS = POLICY_KEYS + setOf("project", "layers")
     }
 }
