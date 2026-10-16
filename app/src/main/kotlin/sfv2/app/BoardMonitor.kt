@@ -24,6 +24,9 @@ fun interface ColumnTimesSource {
     fun times(from: Instant, to: Instant): Map<Column, ColumnTime>
 }
 
+/** How a [BoardMonitor.resync] ended; Busy means another one was already running. */
+enum class ResyncResult { Reloaded, Failed, Busy }
+
 /** The board as the screen shows it; [live] is false while the event stream is not open. */
 data class BoardView(val board: Board, val live: Boolean, val columnTimes: Map<Column, ColumnTime> = emptyMap())
 
@@ -53,6 +56,7 @@ class BoardMonitor(
     private var live = false
     private var hasSnapshot = false
     private var waiting: MutableList<BoardEvent>? = null
+    private var resyncing = false
 
     override fun board(): Board? = synchronized(lock) { board.takeIf { hasSnapshot } }
 
@@ -62,6 +66,31 @@ class BoardMonitor(
             board = transform(board)
             publish()
         }
+    }
+
+    /**
+     * Reads the snapshot again while the subscription stays open. Events that arrive meanwhile wait and are applied
+     * after it. On a failed read the board stays as it was and the held events are still applied.
+     */
+    suspend fun resync(): ResyncResult {
+        val started = synchronized(lock) {
+            if (!hasSnapshot || resyncing || waiting != null) {
+                false
+            } else {
+                resyncing = true
+                waiting = mutableListOf()
+                true
+            }
+        }
+        if (!started) return ResyncResult.Busy
+        var reloaded = false
+        try {
+            reloaded = loadSnapshot()
+        } finally {
+            if (!reloaded) drainWaiting()
+            synchronized(lock) { resyncing = false }
+        }
+        return if (reloaded) ResyncResult.Reloaded else ResyncResult.Failed
     }
 
     suspend fun run() {

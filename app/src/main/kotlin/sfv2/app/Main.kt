@@ -294,7 +294,7 @@ fun main() {
                         Column(Modifier.fillMaxSize()) {
                             PulseStrip(pulseView, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
                             Box(Modifier.weight(1f)) {
-                                BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
+                                BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings, onReload = board?.let { monitor -> monitor::resync })
                             }
                         }
                     }
