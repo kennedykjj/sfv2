@@ -1,0 +1,1 @@
+{"issue": 30, "slug": "gates-de-escopo-e-caminhos-proibidos", "pipeline": "refine", "started_at": "2026-10-16T00:00:00Z", "finished_at": "2026-10-16T00:10:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 15874, "duration_s": 10}], "rounds": {"po": 1, "techlead": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
