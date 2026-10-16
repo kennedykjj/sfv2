@@ -511,6 +511,73 @@ class MainTest {
 
     private fun doctorLines(): List<String> = out.toString().lines().filter { it.isNotBlank() }
 
+    private fun runDoctorOnDesktop(desktop: String?, runCommand: (List<String>) -> String?): Int =
+        runCli(
+            listOf("doctor"),
+            "1.2.3",
+            { out.appendLine(it) },
+            { err.appendLine(it) },
+            env = buildMap {
+                put("XDG_RUNTIME_DIR", runtimeDir.toString())
+                put("XDG_DATA_HOME", dataHome().toString())
+                put("XDG_CONFIG_HOME", configHome().toString())
+                put("HOME", runtimeDir.resolve("home").toString())
+                put("PATH", binDir().toString())
+                if (desktop != null) put("XDG_CURRENT_DESKTOP", desktop)
+            },
+            runCommand = runCommand,
+        )
+
+    private fun extensions(enabled: String, installed: String = enabled): (List<String>) -> String? = { command ->
+        if (command.contains("--enabled")) enabled else installed
+    }
+
+    @Test
+    fun `AC-6 doctor warns that the tray will not appear when the GNOME AppIndicator extension is off`() {
+        healthyMachine()
+
+        val exit = runDoctorOnDesktop("ubuntu:GNOME", extensions(enabled = "other@example.org\n", installed = "other@example.org\n"))
+
+        assertThat(doctorLines().filter { it.startsWith("AVISO") }).hasSize(1)
+        val warning = doctorLines().single { it.startsWith("AVISO") }
+        assertThat(warning).contains("A bandeja não vai aparecer")
+        assertThat(warning).contains("gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com")
+        assertThat(exit).isZero()
+        assertThat(doctorLines().filter { it.startsWith("OK") || it.startsWith("FAIL") }).hasSize(checkNames.size)
+    }
+
+    @Test
+    fun `AC-6 the warning names the installed AppIndicator uuid when there is one`() {
+        healthyMachine()
+
+        runDoctorOnDesktop("GNOME", extensions(enabled = "", installed = "appindicatorsupport@ubuntu.com\nother@example.org\n"))
+
+        assertThat(doctorLines().filter { it.startsWith("AVISO") }).hasSize(1)
+        assertThat(doctorLines().single { it.startsWith("AVISO") }).contains("gnome-extensions enable appindicatorsupport@ubuntu.com")
+    }
+
+    @Test
+    fun `AC-6 no warning when the extension is on, outside GNOME, or without gnome-extensions`() {
+        healthyMachine()
+
+        runDoctorOnDesktop("GNOME", extensions(enabled = "appindicatorsupport@rgcjonas.gmail.com\n"))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(out.toString()).doesNotContain("AVISO").doesNotContain("appindicator")
+
+        out.clear()
+        runDoctorOnDesktop("KDE", extensions(enabled = ""))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+
+        out.clear()
+        runDoctorOnDesktop(null, extensions(enabled = ""))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+
+        out.clear()
+        val exit = runDoctorOnDesktop("GNOME") { null }
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(exit).isZero()
+    }
+
     private fun checkLine(name: String): String =
         doctorLines().singleOrNull { it.startsWith("OK $name") || it.startsWith("FAIL $name") }
             ?: error("no line for check '$name' in:\n$out")

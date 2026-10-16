@@ -31,6 +31,7 @@ class CliEnvironment(
     val env: Map<String, String>,
     val out: (String) -> Unit,
     val err: (String) -> Unit,
+    val runCommand: (List<String>) -> String? = ::runProcess,
 ) {
     /** Reports [message] on stderr and ends the command with exit code 1. */
     fun fail(message: String): Nothing {
