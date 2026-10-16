@@ -1,0 +1,1 @@
+{"issue": 49, "slug": "conflito-com-a-main-e-rodadas-de-correcao", "pipeline": "refine", "started_at": "2026-10-16T08:30:00-03:00", "finished_at": "2026-10-16T08:50:00-03:00", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 16204, "duration_s": 15}], "rounds": {"po": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
