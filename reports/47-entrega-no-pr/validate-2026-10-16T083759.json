@@ -1,0 +1,1 @@
+{"issue": 47, "slug": "entrega-no-pr", "pipeline": "validate", "started_at": "2026-10-16T11:40:00-03:00", "finished_at": "2026-10-16T12:00:00-03:00", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": ["green daemon sfv2.daemon.PullRequestHandoffTest"], "manual_edit": null}
