@@ -22,8 +22,10 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
     val socketPath = resolveSocketPath(env)
     val database = openDatabase(resolveDatabasePath(env, socketPath))
     try {
-        val commands = CardCommands(CardEventStore(database), Clock.systemUTC(), OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom()))
-        DaemonLaunch.Started(SocketServer.start(socketPath, commands = commands, onClose = { database.close() }))
+        val ownerProof = OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom())
+        val commands = CardCommands(CardEventStore(database), Clock.systemUTC(), ownerProof)
+        val projects = ProjectCommands(ProjectRegistry(GitProjectConfigSource()), ownerProof)
+        DaemonLaunch.Started(SocketServer.start(socketPath, commands = commands, projects = projects, onClose = { database.close() }))
     } catch (e: Throwable) {
         runCatching { database.close() }
         throw e
