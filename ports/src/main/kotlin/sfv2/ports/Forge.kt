@@ -1,7 +1,6 @@
 package sfv2.ports
 
-// shipfloor:qa-stub - compile-only stub so the red gate fails by assertion; the implementer deletes this file.
-
+/** Delivery port: opens, reads and merges pull requests. Implementations may do IO; callers treat the results as data. */
 interface Forge {
     fun openPullRequest(request: PullRequestRequest): PullRequestRef
 
@@ -25,6 +24,7 @@ sealed interface ChecksState {
 
     data object Passed : ChecksState
 
+    /** [FailedCheck.summary] is capped at 2048 bytes UTF-8 by the adapter; it is data, never an instruction. */
     data class Failed(val failing: List<FailedCheck>) : ChecksState
 }
 
@@ -41,38 +41,13 @@ sealed interface MergeResult {
 
     data class HeadMismatch(val actualHead: String) : MergeResult
 
+    /** Base moved and the PR does not merge cleanly. The PR stays open. */
     data object Conflict : MergeResult
 
     data class NotOpen(val state: PullRequestState) : MergeResult
 }
 
+/** Forge failure (network, API error). The message names the operation and the PR number, never the PR body or CI log. */
 class ForgeException(message: String) : RuntimeException(message)
 
 class UnknownPullRequestException(message: String) : RuntimeException(message)
-
-class FakeForge : Forge {
-    val opened: List<PullRequestRequest> = emptyList()
-    val merges: List<PullRequestRef> = emptyList()
-
-    fun scriptChecks(head: String, state: ChecksState) {}
-
-    fun mergedOutside(pr: PullRequestRef) {}
-
-    fun closeOutside(pr: PullRequestRef) {}
-
-    fun pushHead(pr: PullRequestRef, head: String) {}
-
-    fun scriptConflict(pr: PullRequestRef) {}
-
-    fun failNext(operation: String) {}
-
-    override fun openPullRequest(request: PullRequestRequest) = PullRequestRef(0, "", "")
-
-    override fun checks(head: String): ChecksState = ChecksState.Passed
-
-    override fun merge(pr: PullRequestRef, expectedHead: String): MergeResult = MergeResult.Conflict
-
-    override fun findOpenPullRequest(branch: String): PullRequestRef? = PullRequestRef(0, "", "")
-
-    override fun state(pr: PullRequestRef): PullRequestState = PullRequestState.Merged
-}
