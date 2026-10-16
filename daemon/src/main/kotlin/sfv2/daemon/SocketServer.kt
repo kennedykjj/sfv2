@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Another daemon is already serving on the socket. */
 class DaemonAlreadyRunningException(message: String) : RuntimeException(message)
 
-/** Serves the line-delimited JSON protocol on a Unix domain socket. */
+/** Serves the line-delimited JSON protocol on a Unix domain socket, and on loopback TCP when [tcp] is set. */
 class SocketServer private constructor(
     private val path: Path,
     private val server: ServerSocketChannel,
@@ -37,6 +37,7 @@ class SocketServer private constructor(
     private val milestones: ExternalMilestones?,
     private val settings: SettingsCommands?,
     private val costSummary: CostSummaryQuery?,
+    private val tcp: TcpTransport?,
     private val pulse: FactoryPulse?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
@@ -50,6 +51,24 @@ class SocketServer private constructor(
             Thread.ofVirtual().start { serve(client) }
         }
         Thread.ofPlatform().daemon().name("sfv2-daemon-accept").start { loop.run() }
+        if (tcp != null) {
+            val tcpLoop = AcceptLoop({ tcp.accept() }, log, pause) { client ->
+                clients.add(client)
+                Thread.ofVirtual().start { serveAuthenticated(tcp, client) }
+            }
+            Thread.ofPlatform().daemon().name("sfv2-daemon-tcp-accept").start { tcpLoop.run() }
+        }
+    }
+
+    /** A TCP client is served only after its first line carried the transport token. */
+    private fun serveAuthenticated(transport: TcpTransport, client: SocketChannel) {
+        if (transport.authenticate(client)) {
+            serve(client)
+        } else {
+            log.log("tcp_rejected", mapOf("reason" to "auth_failed"))
+            runCatching { client.close() }
+            clients.remove(client)
+        }
     }
 
     private fun serve(client: SocketChannel) {
@@ -114,10 +133,11 @@ class SocketServer private constructor(
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 
-    /** Stops accepting, closes the channel and removes the socket file. Idempotent. */
+    /** Stops accepting, closes the channels and removes the socket file. Idempotent. */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runCatching { server.close() }
+        runCatching { tcp?.close() }
         clients.forEach { runCatching { it.close() } }
         runCatching { Files.deleteIfExists(path) }
         runCatching { lock.release() }
@@ -161,7 +181,7 @@ class SocketServer private constructor(
 
         private const val LOCK_FILE_NAME = "daemon.lock"
 
-        /** Binds the socket at [path] and starts serving. */
+        /** Binds the socket at [path] and starts serving; the server owns [tcp] from here on. */
         fun start(
             path: Path,
             log: DaemonLog = StderrDaemonLog,
@@ -175,6 +195,7 @@ class SocketServer private constructor(
             milestones: ExternalMilestones? = null,
             settings: SettingsCommands? = null,
             costSummary: CostSummaryQuery? = null,
+            tcp: TcpTransport? = null,
             pulse: FactoryPulse? = null,
         ): SocketServer {
             prepareDirectory(path)
@@ -197,7 +218,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, pulse, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, tcp, pulse, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {

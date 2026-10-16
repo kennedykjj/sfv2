@@ -77,11 +77,31 @@ class ValidatePipeline(
             when (decision) {
                 ValidationDecision.Staged, is ValidationDecision.Returned -> return
                 is ValidationDecision.CiUnresolved -> return block(cardId, decision.reason)
-                ValidationDecision.Held -> return block(cardId, "gates_failed: " + results.failedNames.joinToString(","))
+                ValidationDecision.Held -> return holdOrRework(cardId, worktree.path, results)
                 ValidationDecision.Malformed -> Unit
             }
         }
         block(cardId, "review_malformed")
+    }
+
+    /**
+     * A build or test gate that failed (what a merge of the base can break) sends the card back to Coding with the
+     * gate output, up to [MAX_REWORKS] times; any other failed gate, or too many returns, blocks the card.
+     */
+    private fun holdOrRework(cardId: String, worktree: Path, results: ValidateGateResults) {
+        val failed = results.results.filter { !it.passed }
+        val reworkable = failed.isNotEmpty() && failed.all { it.name.startsWith("build-") || it.name.startsWith("test-") }
+        val returns = store.events(cardId).count {
+            it.type == EventType.CARD_MOVED && it.actor == Actor.Factory(STAGE) && it.payload["to"] == Column.CODING.name
+        }
+        if (reworkable && returns < MAX_REWORKS) {
+            val reason = "gates_failed:\n" + failed.joinToString("\n") { "${it.name}: ${it.reason.orEmpty().take(REWORK_CHARS)}" }
+            if (outcome.returnForGates(cardId, layerWithMostChanges(worktree), reason.take(REWORK_TOTAL_CHARS))) {
+                log.log("validate_rework", mapOf("card" to cardId, "gates" to results.failedNames.joinToString(",")))
+                return
+            }
+        }
+        block(cardId, "gates_failed: " + results.failedNames.joinToString(","))
     }
 
     /** Null when the conflict is resolved and the gates may run; otherwise the reason that blocks the card. */
@@ -167,6 +187,9 @@ class ValidatePipeline(
 
     private companion object {
         const val STAGE = "validate"
+        const val MAX_REWORKS = 3
+        const val REWORK_CHARS = 600
+        const val REWORK_TOTAL_CHARS = 1500
     }
 }
 

@@ -22,8 +22,11 @@ sealed interface DaemonLaunch {
 /** Starts the daemon from [env]; failures are reported on [err] and returned, never thrown. */
 fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try {
     val socketPath = resolveSocketPath(env)
+    val tcpPort = resolveTcpPort(env)
     val database = openDatabase(resolveDatabasePath(env, socketPath))
+    var tcp: TcpTransport? = null
     try {
+        tcp = tcpPort?.let { TcpTransport.open(requireNotNull(socketPath.parent) { "socket path has no parent directory" }, it, SecureRandom()) }
         val ownerProof = OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom())
         val clock = Clock.systemUTC()
         val store = CardEventStore(database)
@@ -76,6 +79,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 milestones = refine.milestones,
                 settings = settings,
                 costSummary = refine.costSummary,
+                tcp = tcp,
                 pulse = refine.pulse,
                 onClose = {
                     runCatching { refine.close() }
@@ -84,6 +88,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
             ),
         )
     } catch (e: Throwable) {
+        runCatching { tcp?.close() }
         runCatching { database.close() }
         throw e
     }
@@ -94,6 +99,15 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
     err.println(e.message)
     DaemonLaunch.Failed(exitCode = 1)
 }
+
+/** The opt-in TCP port from SFV2_TCP_PORT (0 picks a free port); null when the variable is unset or blank. */
+internal fun resolveTcpPort(env: Map<String, String>): Int? {
+    val raw = env[TCP_PORT_VARIABLE]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return raw.toIntOrNull()?.takeIf { it in 0..65535 }
+        ?: throw DaemonStartException("$TCP_PORT_VARIABLE must be a port number from 0 to 65535, got a value that is not one; fix or unset the variable")
+}
+
+private const val TCP_PORT_VARIABLE = "SFV2_TCP_PORT"
 
 private fun openDatabase(path: Path): Database = try {
     Files.createDirectories(path.parent)

@@ -74,6 +74,7 @@ class DevelopSkillTest {
 
         assertThat(registered).containsExactlyInAnyOrder(
             "card_get", "spec_get", "review_criteria_get", "policies_get", "layers_get", "completion_report", "file_write_request",
+            "file_edit_request",
         )
         assertThat(cited).contains("card_get", "spec_get", "layers_get", "file_write_request", "completion_report")
         assertThat(registered).containsAll(cited)
@@ -161,7 +162,7 @@ class DevelopSkillTest {
         assertThat(cited).contains("completion_report", "file_write_request")
         assertThat(registeredTools(dir)).containsAll(cited)
         assertThat(cited.filter { it.endsWith("_request") || it.endsWith("_report") })
-            .containsExactlyInAnyOrder("completion_report", "file_write_request")
+            .containsExactlyInAnyOrder("completion_report", "file_write_request", "file_edit_request")
     }
 
     @Test

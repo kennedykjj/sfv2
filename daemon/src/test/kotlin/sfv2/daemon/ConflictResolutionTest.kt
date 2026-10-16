@@ -146,7 +146,7 @@ class ConflictResolutionTest {
 
         val outcome = resolution(sync, runtime).resolve("c1", worktree)
 
-        assertThat(outcome).isInstanceOf(ConflictOutcome.Resolved::class.java)
+        assertThat(outcome).isEqualTo(ConflictOutcome.Resolved(head = "head-2", cleanFrom = "head-2"))
         assertThat(runtime.launched).isEmpty()
     }
 

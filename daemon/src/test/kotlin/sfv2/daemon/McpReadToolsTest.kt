@@ -299,6 +299,59 @@ class McpReadToolsTest {
     }
 
     @Test
+    fun `a rewrite that shrinks a large file under 40 percent is refused, a smaller edit and a stub reset pass`() {
+        val wt = requestFixture()
+        Files.createDirectories(wt.resolve("src"))
+        val big = "line of code\n".repeat(100)
+        requestTools.fileWriteRequest(OWN, "src/Big.kt", big)
+
+        assertThatThrownBy { requestTools.fileWriteRequest(OWN, "src/Big.kt", "package x\n") }
+            .isInstanceOf(McpToolException::class.java)
+            .hasMessageContaining("shrink").hasMessageContaining("file_edit_request")
+        assertThat(Files.readString(wt.resolve("src/Big.kt"))).isEqualTo(big)
+
+        requestTools.fileWriteRequest(OWN, "src/Big.kt", big.take(big.length / 2))
+        assertThat(Files.size(wt.resolve("src/Big.kt"))).isEqualTo(big.length / 2L)
+
+        requestTools.fileWriteRequest(OWN, "src/RedStubs.kt", big)
+        requestTools.fileWriteRequest(OWN, "src/RedStubs.kt", "package x\n// vazio\n")
+        assertThat(Files.readString(wt.resolve("src/RedStubs.kt"))).isEqualTo("package x\n// vazio\n")
+    }
+
+    @Test
+    fun `file edit replaces one exact passage and keeps the rest of the file`() {
+        val wt = requestFixture()
+        Files.createDirectories(wt.resolve("src"))
+        val original = "alpha\n".repeat(100) + "target = 1\n" + "omega\n".repeat(100)
+        requestTools.fileWriteRequest(OWN, "src/Edit.kt", original)
+
+        val view = requestTools.fileEditRequest(OWN, "src/Edit.kt", "target = 1", "target = 2")
+
+        assertThat(Files.readString(wt.resolve("src/Edit.kt"))).isEqualTo(original.replace("target = 1", "target = 2"))
+        assertThat(view.bytes).isEqualTo(original.length)
+        assertThat(agentEvents(OWN).last().payload).containsEntry("path", "src/Edit.kt")
+    }
+
+    @Test
+    fun `file edit is refused when the passage is missing, repeated, empty or the file is absent or protected`() {
+        val wt = requestFixture()
+        Files.createDirectories(wt.resolve("src"))
+        requestTools.fileWriteRequest(OWN, "src/Dup.kt", "x = 1\nx = 1\ny = 2\n")
+
+        listOf(
+            { requestTools.fileEditRequest(OWN, "src/Dup.kt", "x = 1", "x = 3") },
+            { requestTools.fileEditRequest(OWN, "src/Dup.kt", "absent", "z") },
+            { requestTools.fileEditRequest(OWN, "src/Dup.kt", "", "z") },
+            { requestTools.fileEditRequest(OWN, "src/Nope.kt", "a", "b") },
+            { requestTools.fileEditRequest(OWN, "../Dup.kt", "a", "b") },
+            { requestTools.fileEditRequest(OWN, ".github/workflows/ci.yml", "a", "b") },
+        ).forEach { call -> assertThatThrownBy { call() }.isInstanceOf(McpToolException::class.java) }
+
+        assertThat(Files.readString(wt.resolve("src/Dup.kt"))).isEqualTo("x = 1\nx = 1\ny = 2\n")
+        assertThat(Files.exists(wt.resolve("src/Nope.kt"))).isFalse()
+    }
+
+    @Test
     fun `AC-4 a write outside the card worktree is refused with a reason and nothing is written`() {
         val wt = requestFixture()
         val outside = Files.createDirectories(dir.resolve("outside"))
