@@ -83,6 +83,18 @@ internal object Texts {
     const val CANCEL = "Cancelar"
     const val DISMISS = "Entendi"
 
+    const val SPEC_DECISION = "Decisão sobre a spec"
+    const val APPROVE = "Aprovar"
+    const val REQUEST_CHANGE = "Pedir mudança"
+    const val SEND_NOTE = "Enviar"
+    const val SENDING = "Enviando…"
+    const val APPROVAL_SENT = "Aprovação enviada"
+    const val CHANGE_SENT = "Pedido de mudança enviado"
+    const val DISMISS_NOTICE = "Dispensar"
+    const val NOTICE_REFUSED = "Recusado"
+    const val NOTICE_NOT_SENT = "Não enviado"
+    const val NOTE_REQUIRED = "A nota é obrigatória para pedir mudança."
+
     fun holding(id: String): String = "Segurando #${id.take(8)}. Setas escolhem o destino, Enter confirma, Esc cancela."
 
     fun refused(reason: String): String = "Não movido: $reason"
