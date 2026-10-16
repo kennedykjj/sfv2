@@ -19,9 +19,11 @@ class ClaudeRuntime(
     private val transcriptDir: Path,
     private val timeout: Duration,
     private val clock: Clock = Clock.systemUTC(),
+    private val provider: RuntimeProvider = RuntimeProvider.Anthropic,
 ) : Runtime {
 
     override fun launch(request: SessionRequest): SessionResult {
+        val providerEnvironment = provider.environment()
         require(STAGE_PATTERN.matches(request.stage)) {
             "stage must match [a-z][a-z0-9-]*: '${request.stage}'"
         }
@@ -38,6 +40,10 @@ class ClaudeRuntime(
                 .directory(request.worktree.toFile())
                 .redirectErrorStream(true)
                 .redirectOutput(transcript.toFile())
+                .also {
+                    it.environment().keys.removeAll(PROVIDER_VARIABLES)
+                    it.environment().putAll(providerEnvironment)
+                }
                 .start()
         } catch (e: IOException) {
             Files.deleteIfExists(transcript)
@@ -68,5 +74,9 @@ class ClaudeRuntime(
 
     private companion object {
         val STAGE_PATTERN = Regex("[a-z][a-z0-9-]*")
+        val PROVIDER_VARIABLES = setOf(
+            "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "AWS_REGION", "AWS_PROFILE",
+            "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+        )
     }
 }

@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 
 private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
 private const val OWNER_TOKEN_FILE = "owner.token"
+private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
 
 fun main() {
     val runtimeDir = System.getenv("XDG_RUNTIME_DIR")?.takeIf { it.isNotBlank() }
@@ -48,6 +49,10 @@ fun main() {
     val feed = runtimeDir?.let { FeedRuntime(Path.of(it, SOCKET_RELATIVE_PATH), Clock.systemUTC(), ZoneId.systemDefault()) }
     val noRuntimeDir: StateFlow<ConnectionState> =
         MutableStateFlow(ConnectionState.Disconnected(DisconnectReason.NO_RUNTIME_DIR))
+
+    val settingsClient = runtimeDir?.let {
+        SocketSettingsClient(Path.of(it, SOCKET_RELATIVE_PATH), Path.of(it, TOKEN_RELATIVE_PATH))
+    }
 
     val board = runtimeDir?.let {
         BoardMonitor(SocketBoardSource(Path.of(it, SOCKET_RELATIVE_PATH)), monitor?.state ?: noRuntimeDir, Dispatchers.IO)
@@ -61,6 +66,7 @@ fun main() {
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
 
     application {
+        var showSettings by remember { mutableStateOf(false) }
         val state by (monitor?.state ?: noRuntimeDir).collectAsState()
         val view by (board?.view ?: noBoard).collectAsState()
         val connected = state == ConnectionState.Connected
@@ -71,11 +77,13 @@ fun main() {
         Window(
             onCloseRequest = ::exitApplication,
             title = "sfv2",
-            state = rememberWindowState(size = DpSize(640.dp, 400.dp), position = WindowPosition.PlatformDefault),
+            state = rememberWindowState(size = DpSize(960.dp, 640.dp), position = WindowPosition.PlatformDefault),
         ) {
             window.minimumSize = Dimension(360, 240)
+            val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
             when {
+                showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
                 feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                     val feedState by feed.client.state.collectAsState()
                     val scope = rememberCoroutineScope()
@@ -85,9 +93,9 @@ fun main() {
                 }
                 // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
                 view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
-                    BoardScreen(view, connected = connected, controller = owner)
+                    BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
                 }
-                else -> ConnectionScreen(state)
+                else -> ConnectionScreen(state, onOpenSettings = openSettings)
             }
         }
     }

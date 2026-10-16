@@ -2,6 +2,7 @@ package sfv2.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,104 +20,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import sfv2.core.Column as BoardColumn
-
-/** Every user-facing string of the shell, in one place for the future i18n. */
-internal object Texts {
-    const val TITLE = "sfv2"
-    const val CONNECTING = "Conectando ao daemon…"
-    const val CONNECTED = "Conectado ao daemon"
-    const val DISCONNECTED = "Desconectado do daemon"
-    const val BOARD = "Esteira"
-    const val WAITS_FOR_YOU = "Aguarda você"
-    const val EMPTY_COLUMN = "Vazia"
-    const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
-    const val LOADING_BOARD = "Carregando a esteira…"
-    const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
-
-    const val NO_OWNER_MOVE = "Este card não tem movimento seu."
-    const val NOTHING_SENT = "Nada enviado."
-    const val NOTE_LABEL = "Nota para a refinagem"
-    const val SEND_BACK = "Devolver"
-    const val CANCEL = "Cancelar"
-    const val DISMISS = "Entendi"
-
-    fun holding(id: String): String = "Segurando #${id.take(8)}. Setas escolhem o destino, Enter confirma, Esc cancela."
-
-    fun refused(reason: String): String = "Não movido: $reason"
-
-    fun notSent(cause: NotSentCause): String =
-        when (cause) {
-            NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
-            NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
-        }
-
-    /** What the move means to the owner, for the destination chooser and the drop button. */
-    fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
-        when {
-            from == BoardColumn.SPEC_REVIEW && to == BoardColumn.READY_FOR_DEV -> "Aprovar a spec"
-            to == BoardColumn.READY_FOR_REFINEMENT && from == BoardColumn.SPEC_REVIEW -> "Devolver à refinagem"
-            to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
-            else -> "Enviar à refinagem"
-        }
-
-    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
-
-    const val FEED_TITLE = "Feed do dia"
-    const val TODAY = "Hoje"
-    const val PREVIOUS_DAY = "Dia anterior"
-    const val NEXT_DAY = "Próximo dia"
-    const val CURRENT_DAY = "Este é o dia atual"
-    const val RECONNECTING = "Reconectando…"
-    const val COST_TITLE = "Custo do dia"
-    const val COST_BY_CARD = "Por card"
-    const val COST_TOTAL = "Total do dia"
-    const val ESTIMATE_TAG = "estimativa"
-    const val ESTIMATE_SUFFIX = "est."
-    const val PARTIAL = "parcial"
-    const val UNKNOWN = "desconhecido"
-    const val LIMIT_REACHED = "limite atingido"
-    const val LIMIT_EXCEEDED = "limite ultrapassado"
-    const val LIMIT_OF = "de"
-    const val LOADING = "Lendo o feed…"
-    const val EMPTY_DAY = "Nenhum evento neste dia."
-    const val FEED_ERROR = "Não consegui ler o feed. Tentando de novo."
-    const val PARTIAL_EXPLANATION = "Sem preço ou transcrição completa; o valor real pode ser maior."
-    const val EARLIER_HISTORY_UNAVAILABLE = "Histórico anterior indisponível"
-    const val FAILED = "falhou"
-
-    fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
-
-    /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
-    data class Explanation(val reason: String, val step: String, val command: String?)
-
-    fun explain(reason: DisconnectReason): Explanation =
-        when (reason) {
-            DisconnectReason.SERVICE_NOT_INSTALLED ->
-                Explanation("O serviço sfv2 não está instalado.", "Instale com", "sfv2 service install")
-            DisconnectReason.START_FAILED ->
-                Explanation("O serviço sfv2 não iniciou.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.START_TIMED_OUT ->
-                Explanation("O daemon não respondeu a tempo.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.NOT_RESPONDING ->
-                Explanation("O daemon parou de responder.", "A janela volta sozinha quando ele voltar.", null)
-            DisconnectReason.NO_RUNTIME_DIR ->
-                Explanation("Não encontrei o diretório de runtime do usuário (XDG_RUNTIME_DIR).", "Veja o estado com", "sfv2 doctor")
-        }
-}
-
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 
 @Composable
-fun ConnectionScreen(state: ConnectionState) {
+fun ConnectionScreen(state: ConnectionState, onOpenSettings: (() -> Unit)? = null) {
     Box(
         modifier = Modifier.fillMaxSize().background(Tokens.ground).padding(16.dp),
         contentAlignment = Alignment.Center,
@@ -142,8 +55,23 @@ fun ConnectionScreen(state: ConnectionState) {
                 BasicText(headline(state), style = TextStyle(fontFamily = sans, fontSize = 15.sp, color = Tokens.text))
             }
             if (state is ConnectionState.Disconnected) Explanation(Texts.explain(state.reason))
+            if (state == ConnectionState.Connected && onOpenSettings != null) {
+                SettingsButton(onOpenSettings)
+            }
         }
     }
+}
+
+@Composable
+internal fun SettingsButton(onClick: () -> Unit) {
+    BasicText(
+        Texts.OPEN_SETTINGS,
+        modifier = Modifier
+            .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.text),
+    )
 }
 
 @Composable

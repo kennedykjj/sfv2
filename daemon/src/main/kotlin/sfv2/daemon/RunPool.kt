@@ -19,23 +19,34 @@ sealed interface StartDecision {
 
 /** Bounded set of run slots with one lock per card; locks of dead owners are released by [sweep]. */
 class RunPool(
-    private val capacity: Int,
+    private val capacity: () -> Int,
     private val store: CardEventStore,
     private val clock: Clock,
     private val probe: ProcessProbe,
     private val log: DaemonLog = StderrDaemonLog,
     private val recorder: EventRecorder,
 ) {
+    /** A pool with a fixed [capacity]. */
+    constructor(
+        capacity: Int,
+        store: CardEventStore,
+        clock: Clock,
+        probe: ProcessProbe,
+        log: DaemonLog = StderrDaemonLog,
+        recorder: EventRecorder,
+    ) : this({ capacity }, store, clock, probe, log, recorder)
+
     private val locks = linkedMapOf<String, RunLock>()
 
     init {
-        require(capacity > 0) { "pool capacity must be positive, got $capacity" }
+        require(capacity() > 0) { "pool capacity must be positive, got ${capacity()}" }
     }
 
     @Synchronized
     fun tryStart(cardId: String, pid: Long, startedAt: Instant): StartDecision {
         locks[cardId]?.let { return StartDecision.CardLocked(it) }
-        if (locks.size >= capacity) return StartDecision.PoolFull(capacity)
+        val limit = capacity()
+        if (locks.size >= limit) return StartDecision.PoolFull(limit)
         val lock = RunLock(cardId, pid, startedAt)
         locks[cardId] = lock
         return StartDecision.Started(lock)
@@ -65,7 +76,7 @@ class RunPool(
     fun isLocked(cardId: String): Boolean = cardId in locks
 
     @Synchronized
-    fun hasRoom(): Boolean = locks.size < capacity
+    fun hasRoom(): Boolean = locks.size < capacity()
 
     @Synchronized
     fun active(): List<RunLock> = locks.values.toList()

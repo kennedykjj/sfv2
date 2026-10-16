@@ -56,7 +56,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,8 +65,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import sfv2.core.Column as BoardColumn
 
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 private const val ID_LENGTH = 8
 
 /**
@@ -76,7 +73,12 @@ private const val ID_LENGTH = 8
  * without one the belt is read only. Titles are external text: drawn as plain text, never interpreted.
  */
 @Composable
-fun BoardScreen(view: BoardView?, connected: Boolean, controller: OwnerMoveController? = null) {
+fun BoardScreen(
+    view: BoardView?,
+    connected: Boolean,
+    controller: OwnerMoveController? = null,
+    onOpenSettings: (() -> Unit)? = null,
+) {
     val scope = rememberCoroutineScope()
     val laneBounds = remember { mutableStateMapOf<BoardColumn, Rect>() }
     val move by (controller?.state ?: remember { MutableStateFlow(OwnerMoveState()) }).collectAsState()
@@ -85,6 +87,9 @@ fun BoardScreen(view: BoardView?, connected: Boolean, controller: OwnerMoveContr
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!connected) StaleBanner()
+        if (connected && onOpenSettings != null) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { SettingsButton(onOpenSettings) }
+        }
         move.status?.let { StatusLine(it) }
         move.notice?.let { notice -> NoticeLine(notice) { controller?.dismissNotice() } }
         val board = view?.board
