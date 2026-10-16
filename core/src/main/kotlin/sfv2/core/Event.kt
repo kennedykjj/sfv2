@@ -24,6 +24,7 @@ enum class EventType {
     RUN_COST_RECORDED,
     AGENT_REPORTED,
     AGENT_WRITE_REQUESTED,
+    PR_MERGED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */
