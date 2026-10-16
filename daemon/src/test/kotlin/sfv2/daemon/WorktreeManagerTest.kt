@@ -77,6 +77,18 @@ class WorktreeManagerTest {
     }
 
     @Test
+    fun `AC-2 the branch follows the configured branch_format with id and slug`() {
+        val configured = project.copy(
+            policies = ProjectPolicies.from(mapOf("conventions" to mapOf("branch_format" to "work/{id}/{slug}"))),
+        )
+
+        val worktree = manager().ensure(configured, "c1", "Fix the Login Bug!")
+
+        assertThat(worktree.branch).isEqualTo("work/c1/fix-the-login-bug")
+        assertThat(git.branches[worktree.path]).isEqualTo("work/c1/fix-the-login-bug")
+    }
+
+    @Test
     fun `AC-1 slug is limited to 40 safe characters`() {
         val worktree = manager().ensure(project, "c1", "Ação Única ".repeat(10))
 

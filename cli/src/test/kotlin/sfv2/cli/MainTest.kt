@@ -341,6 +341,88 @@ class MainTest {
         assertThat(requests).isEmpty()
     }
 
+    // ---- sfv2 project ----
+
+    private fun projectDir(): Path = Files.createDirectories(runtimeDir.resolve("repos").resolve("alpha"))
+
+    @Test
+    fun `AC-1 project add registers the canonical path with the owner proof and prints name and repo`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        val dir = projectDir()
+        val canonical = dir.toRealPath().toString()
+        fakeDaemon { line ->
+            if (line.contains("\"project.list\"")) {
+                listOf("""{"ok":true,"result":[]}""")
+            } else {
+                listOf("""{"ok":true,"result":{"name":"alpha","repo":"acme/alpha","layers":[{"name":"core"}]}}""")
+            }
+        }
+
+        assertThat(run("project", "add", dir.toString())).isZero()
+
+        assertThat(out.toString().trim()).isEqualTo("alpha  acme/alpha")
+        val add = requests.single { it.contains("\"project.add\"") }
+        assertThat(add).contains(canonical)
+            .containsPattern("\"proof\"\\s*:\\s*\"secret-token\"").containsPattern("\"actor\"\\s*:\\s*\"owner\"")
+    }
+
+    @Test
+    fun `AC-2 project add fails with the daemon message and a non-zero exit`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+        fakeDaemon { line ->
+            if (line.contains("\"project.list\"")) {
+                listOf("""{"ok":true,"result":[]}""")
+            } else {
+                listOf("""{"ok":false,"error":"factory.yml invalid: layers[0].test is required"}""")
+            }
+        }
+
+        assertThat(run("project", "add", runtimeDir.resolve("not-a-repo").toString())).isNotZero()
+
+        assertThat(err.toString()).contains("factory.yml invalid: layers[0].test is required")
+        assertThat(out).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 project add on an already registered path exits 0 without sending project add`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+        val dir = projectDir()
+        val canonical = dir.toRealPath().toString()
+        fakeDaemon { line ->
+            if (line.contains("\"project.list\"")) {
+                listOf("""{"ok":true,"result":[{"name":"alpha","repo":"$canonical","layers":[]}]}""")
+            } else {
+                listOf("""{"ok":false,"error":"project already registered: alpha"}""")
+            }
+        }
+
+        assertThat(run("project", "add", dir.toString())).isZero()
+
+        assertThat(out.toString().trim()).isEqualTo("alpha  $canonical")
+        assertThat(err).isEmpty()
+        assertThat(requests.none { it.contains("\"project.add\"") }).isTrue()
+    }
+
+    @Test
+    fun `AC-4 project list prints name and repo per project, without layers or the token`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        fakeDaemon {
+            listOf(
+                """{"ok":true,"result":[{"name":"alpha","repo":"acme/alpha","layers":[{"name":"core","test":"gradle test"}]},{"name":"beta","repo":"acme/beta","layers":[]}]}""",
+            )
+        }
+
+        assertThat(run("project", "list")).isZero()
+
+        assertThat(out.toString().lines().filter { it.isNotBlank() }).containsExactly("alpha  acme/alpha", "beta  acme/beta")
+        assertThat(out.toString()).doesNotContain("layers").doesNotContain("gradle test")
+        assertThat(requests.single()).contains("\"project.list\"").doesNotContain("secret-token")
+    }
+
     // ---- sfv2 doctor ----
 
     private val checkNames = listOf("java", "git", "gh", "claude", "socket", "banco", "serviço", "permissões", "ambiente do serviço")

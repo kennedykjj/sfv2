@@ -288,6 +288,8 @@ private fun projectJson(project: Project): JsonObject = buildJsonObject {
                 buildJsonObject {
                     put("commit_format", project.policies.conventions.commitFormat)
                     put("branch_format", project.policies.conventions.branchFormat)
+                    put("pr_template", project.policies.conventions.prTemplate)
+                    put("language", project.policies.conventions.language)
                 },
             )
         },
