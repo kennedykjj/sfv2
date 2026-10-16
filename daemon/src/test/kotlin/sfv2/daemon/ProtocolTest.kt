@@ -1,9 +1,25 @@
 package sfv2.daemon
 
+import java.nio.file.Path
+import java.security.SecureRandom
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import sfv2.core.Actor
+import sfv2.core.Card
 import sfv2.core.Column
+import sfv2.core.Event
+import sfv2.core.EventId
+import sfv2.core.EventType
+import sfv2.store.CardEventStore
+import sfv2.store.Database
 
 class ProtocolTest {
 
@@ -83,6 +99,36 @@ class ProtocolTest {
     @Test
     fun `pong renders as a single json line`() {
         assertThat(render(Response.Pong)).isEqualTo("""{"ok":true,"result":"pong"}""")
+    }
+
+    @Test
+    fun `AC-4 report csv request returns one csv line per Done card and nothing for the others`(@TempDir dir: Path) {
+        Database.open(dir.resolve("report.db")).use { db ->
+            val store = CardEventStore(db)
+            val t0 = Instant.parse("2026-10-16T10:00:00Z")
+            fun record(id: String, title: String, column: Column, vararg events: Event) =
+                events.forEach { store.recordChange(id, Card.create(title, column), it) }
+            record(
+                "done-1", "Shipped", Column.DONE,
+                Event(EventId("e1"), t0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Shipped")),
+                Event(EventId("e2"), t0.plusSeconds(90), Actor.Owner, EventType.CARD_MOVED, mapOf("from" to "INBOX", "to" to "DONE")),
+            )
+            record(
+                "open-1", "Still coding", Column.CODING,
+                Event(EventId("e3"), t0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Still coding")),
+            )
+            val commands = CardCommands(store, Clock.fixed(t0, ZoneOffset.UTC), OwnerProof.create(dir.resolve("owner.token"), SecureRandom()))
+
+            val reply = Json.parseToJsonElement(render(commands.handle(parseRequest("""{"cmd":"report.csv"}""")))).jsonObject
+            commands.events.close()
+
+            assertThat(reply.getValue("ok").jsonPrimitive.boolean).isTrue()
+            val lines = reply.getValue("csv").jsonPrimitive.content.trim().lines()
+            assertThat(lines).hasSize(2)
+            assertThat(lines[0]).startsWith("card_id,title,").endsWith("cost_usd_estimate,cost_status")
+            assertThat(lines[1]).startsWith("done-1,\"Shipped\",90,")
+            assertThat(lines[1].split(",")).hasSameSizeAs(lines[0].split(","))
+        }
     }
 
     @Test

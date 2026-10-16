@@ -1,5 +1,6 @@
 package sfv2.daemon
 
+import java.lang.reflect.Modifier
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
@@ -91,13 +92,51 @@ class PullRequestHandoffTest {
     fun `AC-1 the owner approval leaves the PR open, never merges and parks the card in Ready for Prod`() {
         val pr = stagedCard("c1")
 
-        handoff().approve("c1")
+        ownerApproves("c1")
 
         assertThat(column("c1")).isEqualTo(Column.READY_FOR_PROD)
         assertThat(forge.merges).isEmpty()
         assertThat(forge.findOpenPullRequest(pr.branch)).isEqualTo(pr)
         assertThat(handoff().reconcile("c1")).isEqualTo(HandoffOutcome.Waiting)
         assertThat(column("c1")).isEqualTo(Column.READY_FOR_PROD)
+    }
+
+    @Test
+    fun `AC-1 #178 the public API has no approve and keeps reconcile`() {
+        val publicMethods = PullRequestHandoff::class.java.declaredMethods
+            .filter { Modifier.isPublic(it.modifiers) }
+            .map { it.name }
+
+        assertThat(publicMethods).doesNotContain("approve").contains("reconcile")
+    }
+
+    @Test
+    fun `AC-2 #178 the owner card move to Ready for Prod lands with the owner event signed`() {
+        stagedCard("c1")
+
+        ownerApproves("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.READY_FOR_PROD)
+        assertThat(lastMove("c1").actor).isEqualTo(Actor.Owner)
+        assertThat(lastMove("c1").payload).containsEntry("from", "STAGED").containsEntry("to", "READY_FOR_PROD")
+    }
+
+    @Test
+    fun `AC-3 #178 reconcile never calls Forge merge whatever the PR state`() {
+        val open = waitingCard("open")
+        val merged = waitingCard("merged")
+        val closed = waitingCard("closed")
+        forge.mergedOutside(merged)
+        forge.closeOutside(closed)
+
+        handoff().reconcile("open")
+        handoff().reconcile("merged")
+        handoff().reconcile("closed")
+        forge.failNext("state")
+        handoff().reconcile("open")
+
+        assertThat(forge.merges).isEmpty()
+        assertThat(forge.findOpenPullRequest(open.branch)).isEqualTo(open)
     }
 
     @Test

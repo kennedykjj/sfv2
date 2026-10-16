@@ -97,7 +97,7 @@ class SocketServer private constructor(
         is Request.ProjectAdd, Request.ProjectList ->
             projects?.handle(request) ?: Response.Error("project commands are not available")
         is Request.CardRebuild -> rebuild?.handle(request) ?: Response.Error("card rebuild is not available")
-        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow ->
+        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, Request.ReportCsv ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 

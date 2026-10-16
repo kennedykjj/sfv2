@@ -12,6 +12,12 @@ interface Forge {
 
     fun state(pr: PullRequestRef): PullRequestState
 
+    /** Asks the forge to run the checks of [head] again. */
+    fun rerunChecks(head: String)
+
+    /** Opens a new PR that reverts [pr] and returns its ref. */
+    fun revert(pr: PullRequestRef): PullRequestRef
+
     /** Most recent merged PR of [branch], or null. Throws [ForgeException] on forge failure. */
     fun findMergedPullRequest(branch: String): MergedPullRequest?
 
