@@ -1,0 +1,1 @@
+{"issue":65,"slug":"movimentos-do-dono-na-esteira","pipeline":"develop","outcome":"handed_over","agents":[],"rounds":0,"failed_gates":["scope app (merge de main na branch; commit da feature só toca app/)"],"gates_reused":["green app sfv2.app.OwnerMovesTest","green app sfv2.app.BoardStateTest"],"flaky":[],"amendments":[]}
