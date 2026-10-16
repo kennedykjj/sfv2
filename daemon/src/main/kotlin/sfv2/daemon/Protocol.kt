@@ -41,6 +41,9 @@ sealed interface Request {
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
+    /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
+    data object ReportCsv : Request
+
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
 
@@ -56,6 +59,7 @@ sealed interface Response {
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
     data class CardsResult(val cards: List<CardView>) : Response
+    data class ReportResult(val csv: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
     data class Error(val message: String) : Response
@@ -111,6 +115,7 @@ fun parseRequest(line: String): Request {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardShow(id)
         }
+        "report.csv" -> Request.ReportCsv
         "events.subscribe" -> parseSubscribe(obj)
         else -> Request.Rejected("unknown cmd")
     }
@@ -224,6 +229,10 @@ fun render(response: Response): String = when (response) {
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.cards.map { cardJson(it) }))
+    }.toString()
+    is Response.ReportResult -> buildJsonObject {
+        put("ok", true)
+        put("csv", response.csv)
     }.toString()
     is Response.ProjectResult -> buildJsonObject {
         put("ok", true)
