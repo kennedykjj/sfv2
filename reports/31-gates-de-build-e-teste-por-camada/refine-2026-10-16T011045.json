@@ -1,0 +1,1 @@
+{"issue": 31, "slug": "gates-de-build-e-teste-por-camada", "pipeline": "refine", "started_at": "2026-10-16T00:00:00Z", "finished_at": "2026-10-16T00:30:00Z", "outcome": "ok", "agents": [], "rounds": {"weight": 1, "test-plan": 1, "scope techlead": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
