@@ -15,4 +15,5 @@ dependencies {
     implementation(project(":adapters"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.snakeyaml.engine)
+    implementation(libs.mcp.kotlin.sdk.server)
 }
