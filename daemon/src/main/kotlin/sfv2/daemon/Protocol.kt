@@ -12,6 +12,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
 import sfv2.core.Column
+import sfv2.core.FactorySettings
 import sfv2.store.StoredEvent
 
 /** A parsed client message. */
@@ -92,8 +93,19 @@ sealed interface Request {
             "MilestoneConfirm(actor=$actor, id=$id, milestone=$milestone, textHash=$textHash, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Read-only: the factory settings in force. */
+    data object SettingsGet : Request
+
+    /** Owner save of the factory [settings]. */
+    data class SettingsSave(val actor: Actor, val settings: FactorySettings, val proof: String? = null) : Request {
+        override fun toString(): String = "SettingsSave(actor=$actor, settings=***, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
+
+    /** Read-only: card, spec, events and runs of card [id]. */
+    data class CardDetail(val id: String) : Request
 
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
@@ -145,6 +157,7 @@ sealed interface Response {
 
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
+    data class CardDetailResult(val detail: JsonObject) : Response
     data class CardsResult(val cards: List<CardView>) : Response
     data class BoardImportResult(val cards: List<CardView>, val ignored: List<IgnoredRow>) : Response
     data class ReportResult(val csv: String) : Response
@@ -153,6 +166,7 @@ sealed interface Response {
     data class ProjectsResult(val projects: List<Project>) : Response
     data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
     data class MilestonesResult(val items: List<MilestoneItem>) : Response
+    data class Settings(val settings: FactorySettings) : Response
     data class Error(val message: String) : Response
 }
 
@@ -231,11 +245,26 @@ fun parseRequest(line: String): Request {
             val textHash = stringField(obj, "textHash") ?: return Request.Rejected("missing textHash")
             Request.MilestoneConfirm(actor, id, milestone, textHash, stringField(obj, "proof"))
         }
+        "settings.get" -> Request.SettingsGet
+        "settings.save" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val body = obj["settings"] as? JsonObject ?: return Request.Rejected("settings: missing or not an object")
+            val settings = try {
+                settingsFromJson(body)
+            } catch (e: InvalidSettingsJsonException) {
+                return Request.Rejected("${e.field}: ${e.message}")
+            }
+            Request.SettingsSave(actor, settings, stringField(obj, "proof"))
+        }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
         "card.show" -> {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardShow(id)
+        }
+        "card.detail" -> {
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardDetail(id)
         }
         "report.csv" -> Request.ReportCsv
         "audit.export" -> {
@@ -379,6 +408,10 @@ fun render(response: Response): String = when (response) {
         put("ok", true)
         put("result", cardJson(response.card))
     }.toString()
+    is Response.CardDetailResult -> buildJsonObject {
+        put("ok", true)
+        put("detail", response.detail)
+    }.toString()
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.cards.map { cardJson(it) }))
@@ -441,6 +474,10 @@ fun render(response: Response): String = when (response) {
                 },
             ),
         )
+    }.toString()
+    is Response.Settings -> buildJsonObject {
+        put("ok", true)
+        put("result", settingsToJson(response.settings))
     }.toString()
     is Response.EventsRecentResult -> buildJsonObject {
         put("ok", true)

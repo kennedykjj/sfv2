@@ -11,6 +11,7 @@ import kotlin.system.exitProcess
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.ProjectPathStore
+import sfv2.store.SpecStore
 
 /** Outcome of starting the daemon; only [main] turns a failure into a process exit. */
 sealed interface DaemonLaunch {
@@ -26,13 +27,17 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
         val ownerProof = OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom())
         val clock = Clock.systemUTC()
         val store = CardEventStore(database)
-        val commands = CardCommands(store, clock, ownerProof)
+        val specs = SpecStore(database, resolveDatabasePath(env, socketPath).parent.resolve("specs"))
+        val commands = CardCommands(store, clock, ownerProof, specs = specs)
         val source = GitProjectConfigSource()
         val registry = ProjectRegistry(source, ProjectPathStore(database), StderrDaemonLog, clock)
         registry.restore()
         val projects = ProjectCommands(registry, ownerProof)
         val dataDir = resolveDatabasePath(env, socketPath).parent
+        val settingsStore = SettingsStore(dataDir.resolve("settings.json"), clock)
+        val settings = SettingsCommands(settingsStore, commands.recorder, store, ownerProof, env, clock)
         val refine = RefineRuntime.start(
+            settings = settingsStore,
             dataDir = dataDir,
             store = store,
             commands = commands,
@@ -69,6 +74,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                     ownerProof, clock, StderrDaemonLog,
                 ),
                 milestones = refine.milestones,
+                settings = settings,
                 costSummary = refine.costSummary,
                 onClose = {
                     runCatching { refine.close() }

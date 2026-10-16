@@ -27,7 +27,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val sans = FontFamily.SansSerif
 private const val TABULAR = "tnum"
 
 @Composable

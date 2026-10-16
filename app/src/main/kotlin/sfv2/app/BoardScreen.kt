@@ -28,15 +28,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sfv2.core.Column as BoardColumn
 
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 private const val ID_LENGTH = 8
 
 /**
@@ -44,12 +41,15 @@ private const val ID_LENGTH = 8
  * false dims the last known state and says so. Titles are external text: drawn as plain text, never interpreted.
  */
 @Composable
-fun BoardScreen(view: BoardView?, connected: Boolean) {
+fun BoardScreen(view: BoardView?, connected: Boolean, onOpenSettings: (() -> Unit)? = null) {
     Column(
         modifier = Modifier.fillMaxSize().background(Tokens.ground).padding(16.dp).semantics { contentDescription = Texts.BOARD },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!connected) StaleBanner()
+        if (connected && onOpenSettings != null) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { SettingsButton(onOpenSettings) }
+        }
         val board = view?.board
         if (board != null && board.cards.isEmpty()) {
             BasicText(Texts.EMPTY_BOARD, style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft))

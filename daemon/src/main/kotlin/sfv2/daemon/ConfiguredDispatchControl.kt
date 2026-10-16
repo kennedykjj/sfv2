@@ -3,6 +3,8 @@ package sfv2.daemon
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 import org.snakeyaml.engine.v2.exceptions.YamlEngineException
@@ -20,6 +22,7 @@ class ConfiguredDispatchControl(
     private val recorder: EventRecorder,
     private val clock: Clock,
     private val log: DaemonLog,
+    private val settings: SettingsStore? = null,
 ) : LaunchGuard, WorkSchedule {
 
     private sealed interface Control {
@@ -62,7 +65,7 @@ class ConfiguredDispatchControl(
     }
 
     private fun decide(yaml: Map<String, Any?>): Control {
-        val settings = DispatcherSettings.resolve(yaml, env)
+        val settings = withSaved(DispatcherSettings.resolve(yaml, env))
         if ((yaml["cost"] as? Map<*, *>)?.containsKey("unlimited") == true) {
             throw InvalidDispatcherSettingsException("cost.unlimited", "cost.unlimited is only accepted from the daemon environment")
         }
@@ -78,6 +81,30 @@ class ConfiguredDispatchControl(
         val open = Control.Open(settings, CostBudget(store, recorder, settings.limits, clock, settings.zone, log))
         synchronized(this) { lastOpen = open }
         return open
+    }
+
+    /** Saved settings, when a settings file exists, replace the work hours and cost limits of factory.yml. */
+    private fun withSaved(resolved: DispatcherSettings): DispatcherSettings {
+        val saved = try {
+            if (settings?.exists() == true) settings.load() else return resolved
+        } catch (e: RuntimeException) {
+            throw InvalidDispatcherSettingsException(SETTINGS_FILE, "$SETTINGS_FILE is invalid")
+        }
+        val hours = saved.workHours
+        val schedule: WorkSchedule
+        val zone: ZoneId
+        if (hours == null) {
+            schedule = AlwaysWorkTime
+            zone = ZoneOffset.UTC
+        } else {
+            zone = ZoneId.of(hours.zone)
+            schedule = try {
+                WorkHours(hours.start, hours.end, hours.days, zone)
+            } catch (e: InvalidWorkHoursException) {
+                throw InvalidDispatcherSettingsException(SETTINGS_FILE, "$SETTINGS_FILE is invalid")
+            }
+        }
+        return resolved.copy(limits = CostLimits(saved.cost.perCardUsd, saved.cost.perDayUsd), schedule = schedule, zone = zone)
     }
 
     private fun parse(text: String): Map<String, Any?> {
@@ -103,6 +130,7 @@ class ConfiguredDispatchControl(
 
     private companion object {
         const val FACTORY_YML = "factory.yml"
+        const val SETTINGS_FILE = "settings.json"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
     }
