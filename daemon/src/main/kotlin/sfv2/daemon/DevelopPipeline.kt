@@ -266,6 +266,8 @@ class RealDevelopGates(
 
 /** One pass of the develop stage: QA writes red tests, engineers implement per layer, gates move the card. */
 @Suppress("LongParameterList")
+private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
+
 class DevelopPipeline(
     private val project: Project,
     private val store: CardEventStore,
@@ -283,6 +285,7 @@ class DevelopPipeline(
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
     private val milestones: ExternalMilestones? = null,
+    private val commit: WorktreeCommit = WorktreeCommit.None,
 ) {
     init {
         require(maxRounds > 0) { "maxRounds must be positive, got $maxRounds" }
@@ -317,19 +320,36 @@ class DevelopPipeline(
     /** Failed gates of one round; empty when every gate is green. */
     private fun playRound(cardId: String, worktree: Path): List<GateResult> {
         val model = modelStepUp.modelFor(cardId)
-        runSession(cardId, worktree, model)
+        runSession(cardId, worktree, model, QA_ROLE)
+        commitSession(cardId, worktree, "test", "tests")
         val red = gates.red(cardId, worktree).filter { !it.passed }
         if (red.isNotEmpty()) return red
         val layers = gates.layers(worktree)
-        layers.forEach { _ -> runSession(cardId, worktree, model) }
+        layers.forEach { layer ->
+            runSession(cardId, worktree, model, engineerRole(layer))
+            commitSession(cardId, worktree, "feat", layer.name)
+        }
         return layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
     }
 
-    private fun runSession(cardId: String, worktree: Path, model: String) {
+    /** The agents have no shell: what a session wrote becomes a commit of the card's branch here. */
+    private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
+        val card = store.card(cardId) ?: return
+        val message = ConventionText.commitSubject(
+            project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
+        )
+        if (!commit.commitAll(worktree, message)) log.log("develop_commit_failed", mapOf("card" to cardId, "scope" to scope))
+    }
+
+    private fun engineerRole(layer: ProjectLayer): String =
+        "engenheiro da camada `${layer.name}` (caminho `${layer.path}`): implemente só dentro dela, até os testes de aceitação " +
+            "passarem, sem alterar os testes da QA"
+
+    private fun runSession(cardId: String, worktree: Path, model: String, role: String) {
         val token = sessions.open(project.repo, "develop", cardId)
         val config = writeConfig(token)
         try {
-            val result = runtime.launch(SessionRequest("develop", worktree, model, config))
+            val result = runtime.launch(SessionRequest("develop", worktree, model, config, StagePrompt.of("develop", cardId, role)))
             recordCost(cardId, model, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }
