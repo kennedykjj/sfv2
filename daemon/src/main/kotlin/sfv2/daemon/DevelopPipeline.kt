@@ -285,6 +285,7 @@ class DevelopPipeline(
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
     private val milestones: ExternalMilestones? = null,
+    private val commit: WorktreeCommit = WorktreeCommit.None,
 ) {
     init {
         require(maxRounds > 0) { "maxRounds must be positive, got $maxRounds" }
@@ -320,11 +321,24 @@ class DevelopPipeline(
     private fun playRound(cardId: String, worktree: Path): List<GateResult> {
         val model = modelStepUp.modelFor(cardId)
         runSession(cardId, worktree, model, QA_ROLE)
+        commitSession(cardId, worktree, "test", "tests")
         val red = gates.red(cardId, worktree).filter { !it.passed }
         if (red.isNotEmpty()) return red
         val layers = gates.layers(worktree)
-        layers.forEach { layer -> runSession(cardId, worktree, model, engineerRole(layer)) }
+        layers.forEach { layer ->
+            runSession(cardId, worktree, model, engineerRole(layer))
+            commitSession(cardId, worktree, "feat", layer.name)
+        }
         return layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
+    }
+
+    /** The agents have no shell: what a session wrote becomes a commit of the card's branch here. */
+    private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
+        val card = store.card(cardId) ?: return
+        val message = ConventionText.commitSubject(
+            project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
+        )
+        if (!commit.commitAll(worktree, message)) log.log("develop_commit_failed", mapOf("card" to cardId, "scope" to scope))
     }
 
     private fun engineerRole(layer: ProjectLayer): String =

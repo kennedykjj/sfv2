@@ -115,6 +115,7 @@ class RefineRuntime private constructor(
                         runtime = runtime,
                         costRecorder = costRecorder,
                         gates = SpecScopeRefineGates(project, store, recorder, changedPaths, clock, specs = specStore),
+                        commit = SystemWorktreeCommit(),
                         configDir = dataDir.resolve("mcp"),
                         clock = clock,
                         model = MODEL,
@@ -152,6 +153,7 @@ class RefineRuntime private constructor(
                         clock = clock,
                         log = log,
                         milestones = milestones,
+                        commit = SystemWorktreeCommit(),
                     )
                 },
                 pool = pool,

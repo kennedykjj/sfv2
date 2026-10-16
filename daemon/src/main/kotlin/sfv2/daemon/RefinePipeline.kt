@@ -129,6 +129,7 @@ class RefinePipeline(
     private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
+    private val commit: WorktreeCommit = WorktreeCommit.None,
 ) {
     init {
         require(maxRounds > 0) { "maxRounds must be positive, got $maxRounds" }
@@ -151,11 +152,20 @@ class RefinePipeline(
             failed = gates.evaluate(cardId, worktree.path).filter { !it.passed }
             log.log("refine_round", mapOf("card" to cardId, "round" to round.toString(), "failed" to failed.size.toString()))
             if (failed.isEmpty()) {
+                commitSpec(cardId, worktree.path)
                 move(cardId, Column.SPEC_REVIEW)
                 return
             }
         }
         block(cardId, failed)
+    }
+
+    private fun commitSpec(cardId: String, worktree: Path) {
+        val card = store.card(cardId) ?: return
+        val message = ConventionText.commitSubject(
+            project.policies.conventions.commitFormat, "docs", "spec", card.title, cardId, ConventionText.ticketOf(card.references),
+        )
+        if (!commit.commitAll(worktree, message)) log.log("refine_commit_failed", mapOf("card" to cardId))
     }
 
     private fun runSession(cardId: String, worktree: Path) {
