@@ -59,4 +59,46 @@ class ModuleTest {
     fun `module is named after its Gradle project`() {
         assertThat(MODULE_NAME).isEqualTo("daemon")
     }
+
+    @Test
+    fun `AC-7 tcp without SFV2_TCP_PORT opens no listener and creates neither tcp token nor tcp port`() {
+        val withoutTcp = runtimeDir.resolve("plain")
+        val withTcp = runtimeDir.resolve("opt-in")
+        val plainEnv = mapOf("XDG_RUNTIME_DIR" to withoutTcp.toString())
+        val tcpEnv = mapOf("XDG_RUNTIME_DIR" to withTcp.toString(), "SFV2_TCP_PORT" to "0")
+
+        val (plain, plainErr) = launch(plainEnv)
+        val (optIn, optInErr) = launch(tcpEnv)
+
+        val plainServer = (plain as DaemonLaunch.Started).server
+        val tcpServer = (optIn as DaemonLaunch.Started).server
+        try {
+            val plainDir = resolveSocketPath(plainEnv).parent
+            val tcpDir = resolveSocketPath(tcpEnv).parent
+            assertThat(plainErr).isEmpty()
+            assertThat(optInErr).isEmpty()
+            assertThat(Files.exists(resolveSocketPath(plainEnv))).isTrue()
+            assertThat(Files.exists(plainDir.resolve("tcp.token"))).isFalse()
+            assertThat(Files.exists(plainDir.resolve("tcp.port"))).isFalse()
+            // Control: the same launch with the variable set does create both files.
+            assertThat(Files.exists(tcpDir.resolve("tcp.token"))).isTrue()
+            assertThat(Files.readString(tcpDir.resolve("tcp.port")).trim().toInt()).isGreaterThan(0)
+        } finally {
+            plainServer.close()
+            tcpServer.close()
+        }
+    }
+
+    @Test
+    fun `AC-1 tcp a SFV2_TCP_PORT that is not a port fails the launch naming the variable`() {
+        for (value in listOf("abc", "-1", "65536", "80.5")) {
+            val env = mapOf("XDG_RUNTIME_DIR" to runtimeDir.resolve("bad-$value").toString(), "SFV2_TCP_PORT" to value)
+
+            val (launch, err) = launch(env)
+
+            assertThat(launch).isEqualTo(DaemonLaunch.Failed(exitCode = 1))
+            assertThat(err).contains("SFV2_TCP_PORT")
+            assertThat(Files.exists(resolveSocketPath(env).resolveSibling("tcp.token"))).isFalse()
+        }
+    }
 }
