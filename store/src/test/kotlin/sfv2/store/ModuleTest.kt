@@ -408,7 +408,19 @@ class ModuleTest {
         Database.open(file).use { db ->
             CardEventStore(db).recordChange("c1", Card.create("Write docs", Column.INBOX), anEvent("e1"))
 
-            assertThat(perms(file)).isEqualTo("rw-------")
+            // The store's own connection leaves no side files at rest; a reader holding the WAL database
+            // open (as a second process would) is what makes SQLite create -wal and -shm.
+            DriverManager.getConnection("jdbc:sqlite:$file").use { reader ->
+                reader.createStatement().use { it.execute("SELECT count(*) FROM sqlite_master") }
+                reader.createStatement().use { it.execute("PRAGMA user_version") }
+                assertThat(perms(file)).isEqualTo("rw-------")
+                assertSideFilesOwnerOnly()
+            }
+        }
+    }
+
+    private fun assertSideFilesOwnerOnly() {
+        run {
             assertThat(Files.exists(dir.resolve("owner-new.db-wal"))).isTrue()
             assertThat(Files.exists(dir.resolve("owner-new.db-shm"))).isTrue()
             assertThat(perms(dir.resolve("owner-new.db-wal"))).isEqualTo("rw-------")
@@ -418,7 +430,7 @@ class ModuleTest {
 
     @Test
     fun `AC-2 existing database open to group or others is refused citing path and permission owner-only`() {
-        listOf("rw-r--r--", "rw-rw----", "rw-----r--").forEach { mode ->
+        listOf("rw-r--r--", "rw-rw----", "rw----r--").forEach { mode ->
             val file = existingDatabase("open-$mode.db", mode)
 
             assertThatThrownBy { Database.open(file) }
