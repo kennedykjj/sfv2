@@ -13,6 +13,23 @@ import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import sfv2.core.Actor
+import sfv2.core.Card
+import sfv2.core.Column
+import sfv2.core.EventType
+import sfv2.core.MoveDecision
+import sfv2.core.MoveRules
+import sfv2.store.CardEventStore
+import sfv2.store.Database
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -247,6 +264,112 @@ class SocketServerTest {
         assertThat(served).containsExactly(client)
         assertThat(pauses).containsExactly(10L, 20L, 40L, 10L, 20L)
         client.close()
+    }
+
+    private val fixedNow = Instant.parse("2026-10-15T10:00:00Z")
+    private val clock = Clock.fixed(fixedNow, ZoneOffset.UTC)
+
+    private fun withCardServer(block: (CardEventStore) -> Unit) {
+        Database.open(runtimeDir.resolve("cards.db")).use { db ->
+            val store = CardEventStore(db)
+            startCardServer(store)
+            block(store)
+        }
+    }
+
+    private fun startCardServer(store: CardEventStore) {
+        servers.add(SocketServer.start(socketPath(), commands = CardCommands(store, clock)))
+    }
+
+    private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
+
+    private fun reply(line: String): JsonObject = Json.parseToJsonElement(exchange(line)).jsonObject
+
+    private fun createCard(title: String): String {
+        val created = reply("""{"cmd":"card.create","actor":"owner","title":"$title"}""")
+        return created.getValue("result").jsonObject.str("id")
+    }
+
+    @Test
+    fun `AC-1 card create stores the card and a creation event by the owner`() = withCardServer { store ->
+        val created = reply("""{"cmd":"card.create","actor":"owner","title":"Write docs"}""")
+
+        assertThat(created.getValue("ok").jsonPrimitive.boolean).isTrue()
+        val result = created.getValue("result").jsonObject
+        assertThat(result.str("title")).isEqualTo("Write docs")
+        assertThat(result.str("column")).isEqualTo("INBOX")
+        val id = result.str("id")
+        assertThat(store.card(id)).isEqualTo(Card.create("Write docs", Column.INBOX))
+        val events = store.events(id)
+        assertThat(events).hasSize(1)
+        assertThat(events.single().type).isEqualTo(EventType.CARD_CREATED)
+        assertThat(events.single().actor).isEqualTo(Actor.Owner)
+        assertThat(events.single().at).isEqualTo(fixedNow)
+        assertThat(events.single().payload).containsEntry("title", "Write docs")
+    }
+
+    @Test
+    fun `AC-2 refused move writes neither card nor event`() = withCardServer { store ->
+        val id = createCard("Write docs")
+        val cardBefore = store.card(id)
+        val eventsBefore = store.events(id)
+
+        reply("""{"cmd":"card.move","actor":"owner","id":"$id","to":"CODING"}""")
+        reply("""{"cmd":"card.move","actor":"agent:dev","id":"$id","to":"READY_FOR_REFINEMENT"}""")
+
+        assertThat(store.card(id)).isEqualTo(cardBefore)
+        assertThat(store.events(id)).isEqualTo(eventsBefore)
+    }
+
+    @Test
+    fun `AC-2 allowed move updates the card and records who moved it`() = withCardServer { store ->
+        val id = createCard("Write docs")
+
+        val moved = reply("""{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT"}""")
+
+        assertThat(moved.getValue("ok").jsonPrimitive.boolean).isTrue()
+        assertThat(moved.getValue("result").jsonObject.str("column")).isEqualTo("READY_FOR_REFINEMENT")
+        assertThat(store.card(id)?.column).isEqualTo(Column.READY_FOR_REFINEMENT)
+        val last = store.events(id).last()
+        assertThat(last.type).isEqualTo(EventType.CARD_MOVED)
+        assertThat(last.actor).isEqualTo(Actor.Owner)
+        assertThat(last.payload).containsEntry("from", "INBOX").containsEntry("to", "READY_FOR_REFINEMENT")
+    }
+
+    @Test
+    fun `AC-3 refused move answers with the reason from the rules`() = withCardServer { _ ->
+        val id = createCard("Write docs")
+        val expected = (MoveRules.check(Column.INBOX, Column.CODING, Actor.Owner) as MoveDecision.Refused).reason
+        val ownerOnly =
+            (MoveRules.check(Column.INBOX, Column.READY_FOR_REFINEMENT, Actor.Agent("dev")) as MoveDecision.Refused).reason
+
+        val notAllowed = reply("""{"cmd":"card.move","actor":"owner","id":"$id","to":"CODING"}""")
+        val wrongActor = reply("""{"cmd":"card.move","actor":"agent:dev","id":"$id","to":"READY_FOR_REFINEMENT"}""")
+
+        assertThat(notAllowed.getValue("ok").jsonPrimitive.boolean).isFalse()
+        assertThat(notAllowed.str("error")).isEqualTo(expected)
+        assertThat(wrongActor.getValue("ok").jsonPrimitive.boolean).isFalse()
+        assertThat(wrongActor.str("error")).isEqualTo(ownerOnly)
+    }
+
+    @Test
+    fun `AC-5 card show and list return the current stored state`() = withCardServer { _ ->
+        val first = createCard("First")
+        val second = createCard("Second")
+        reply("""{"cmd":"card.move","actor":"owner","id":"$first","to":"READY_FOR_REFINEMENT"}""")
+
+        val shown = reply("""{"cmd":"card.show","id":"$first"}""")
+        val listed = reply("""{"cmd":"card.list"}""")
+        val missing = reply("""{"cmd":"card.show","id":"nope"}""")
+
+        assertThat(shown.getValue("ok").jsonPrimitive.boolean).isTrue()
+        assertThat(shown.getValue("result").jsonObject.str("column")).isEqualTo("READY_FOR_REFINEMENT")
+        assertThat(shown.getValue("result").jsonObject.str("title")).isEqualTo("First")
+        val rows = listed.getValue("result").jsonArray.map { it.jsonObject }
+        assertThat(rows.map { it.str("id") }).containsExactly(first, second)
+        assertThat(rows.map { it.str("column") }).containsExactly("READY_FOR_REFINEMENT", "INBOX")
+        assertThat(missing.getValue("ok").jsonPrimitive.boolean).isFalse()
+        assertThat(missing.str("error")).isEqualTo("card not found: nope")
     }
 
     @Test
