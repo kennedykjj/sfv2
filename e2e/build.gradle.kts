@@ -7,4 +7,7 @@ dependencies {
     testImplementation(project(":core"))
     testImplementation(project(":daemon"))
     testImplementation(project(":cli"))
+    testImplementation(project(":store"))
+    testImplementation(project(":ports"))
+    testImplementation(project(":adapters"))
 }

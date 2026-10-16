@@ -168,6 +168,62 @@ class MainTest {
     }
 
     @Test
+    fun `AC-5 approve and request-change send the owner decision and print the card, a daemon refusal exits 1`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        fakeDaemon { line ->
+            if (line.contains("\"gone\"")) {
+                listOf("""{"ok":false,"error":"card gone is in Coding, not in Spec Review"}""")
+            } else {
+                listOf("""{"ok":true,"result":{"id":"c1","title":"One","column":"READY_FOR_DEV"}}""")
+            }
+        }
+
+        assertThat(run("card", "approve", "c1")).isZero()
+        assertThat(out.toString().trim()).isEqualTo("c1  READY_FOR_DEV  One")
+        assertThat(run("card", "request-change", "c1", "--note", "Cover offline")).isZero()
+
+        assertThat(requests).hasSize(2)
+        assertThat(requests[0]).contains("\"card.approve\"").contains("\"c1\"")
+        assertThat(requests[1]).contains("\"card.request-change\"").contains("\"c1\"").contains("Cover offline")
+        requests.forEach {
+            assertThat(it).containsPattern("\"proof\"\\s*:\\s*\"secret-token\"").containsPattern("\"actor\"\\s*:\\s*\"owner\"")
+        }
+
+        out.clear()
+        assertThat(run("card", "approve", "gone")).isEqualTo(1)
+        assertThat(err.toString()).contains("card gone is in Coding")
+        assertThat(out).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 request-change without a note is a usage error and sends nothing`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+        fakeDaemon { listOf("""{"ok":true,"result":{"id":"c1","title":"One","column":"READY_FOR_REFINEMENT"}}""") }
+
+        assertThat(run("card", "request-change", "c1")).isEqualTo(2)
+
+        assertThat(err.toString()).contains("--note")
+        assertThat(requests).isEmpty()
+        assertThat(out).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 events shows the owner decisions with actor, moment and the change note`() {
+        val approved = """{"event":{"seq":7,"card":"c1","at":"2026-10-16T12:00:00Z","actor":"owner","type":"OWNER_APPROVED","payload":{"from":"SPEC_REVIEW","to":"READY_FOR_DEV"}}}"""
+        val changed = """{"event":{"seq":8,"card":"c2","at":"2026-10-16T12:01:00Z","actor":"owner","type":"CARD_MOVED","payload":{"from":"SPEC_REVIEW","to":"READY_FOR_REFINEMENT","note":"Cover offline"}}}"""
+        fakeDaemon { listOf("""{"ok":true,"result":"subscribed"}""", approved, changed) }
+
+        assertThat(run("events", "--after", "6", "--count", "2")).isZero()
+
+        val lines = out.toString().lines().filter { it.isNotBlank() }
+        assertThat(lines).containsExactly(approved, changed)
+        assertThat(lines[0]).contains("\"actor\":\"owner\"").contains("2026-10-16T12:00:00Z").contains("OWNER_APPROVED")
+        assertThat(lines[1]).contains("\"actor\":\"owner\"").contains("2026-10-16T12:01:00Z").contains("Cover offline")
+    }
+
+    @Test
     fun `AC-2 a stopped daemon is reported with how to start it and exit 1`() {
         // No socket at all.
         assertThat(run("card", "list")).isEqualTo(1)
