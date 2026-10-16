@@ -4,6 +4,13 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.Connection
 import java.sql.DriverManager
+import java.time.Instant
+import sfv2.core.Actor
+import sfv2.core.Card
+import sfv2.core.Column
+import sfv2.core.Event
+import sfv2.core.EventId
+import sfv2.core.EventType
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
@@ -143,6 +150,98 @@ class ModuleTest {
         Database.open(dir.resolve("spec3.db")).use { database ->
             assertThat(SpecStore(database, dir.resolve("specs")).read("card-3"))
                 .isEqualTo(SpecRead.NotRegistered("card-3"))
+        }
+    }
+
+    private fun anEvent(id: String, type: EventType = EventType.CARD_CREATED, at: String = "2026-10-15T10:00:00Z") =
+        Event(EventId(id), Instant.parse(at), Actor.Owner, type, mapOf("k" to "v"))
+
+    private fun withStore(block: (CardEventStore, Path) -> Unit) {
+        val file = dir.resolve("events.db")
+        Database.open(file).use { db -> block(CardEventStore(db), file) }
+    }
+
+    @Test
+    fun `AC-1 records card and event together`() = withStore { store, _ ->
+        val card = Card.create("Write docs", Column.INBOX)
+        val event = anEvent("e1")
+
+        store.recordChange("c1", card, event)
+
+        assertThat(store.card("c1")).isEqualTo(card)
+        assertThat(store.events("c1")).containsExactly(event)
+    }
+
+    @Test
+    fun `AC-1 later change replaces the card and appends an event`() = withStore { store, _ ->
+        val first = anEvent("e1")
+        val second = anEvent("e2", EventType.CARD_MOVED, "2026-10-15T11:00:00Z")
+        val moved = Card.create("Write docs", Column.READY_FOR_REFINEMENT)
+        store.recordChange("c1", Card.create("Write docs", Column.INBOX), first)
+
+        store.recordChange("c1", moved, second)
+
+        assertThat(store.card("c1")).isEqualTo(moved)
+        assertThat(store.events("c1")).containsExactly(first, second)
+    }
+
+    @Test
+    fun `AC-2 failed event write leaves card as it was and no new event`() = withStore { store, _ ->
+        val original = Card.create("Write docs", Column.INBOX)
+        val first = anEvent("e1")
+        store.recordChange("c1", original, first)
+
+        assertThatThrownBy {
+            store.recordChange("c1", Card.create("Write docs", Column.CODING), anEvent("e1", EventType.CARD_MOVED))
+        }.isInstanceOf(Exception::class.java)
+
+        assertThat(store.card("c1")).isEqualTo(original)
+        assertThat(store.events("c1")).containsExactly(first)
+    }
+
+    @Test
+    fun `AC-3 failed card write leaves card as it was and no new event`() = withStore { store, file ->
+        val original = Card.create("Write docs", Column.INBOX)
+        val first = anEvent("e1")
+        store.recordChange("c1", original, first)
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.execute("CREATE TRIGGER fail_card_insert BEFORE INSERT ON card BEGIN SELECT RAISE(ABORT, 'card write failed'); END")
+                s.execute("CREATE TRIGGER fail_card_update BEFORE UPDATE ON card BEGIN SELECT RAISE(ABORT, 'card write failed'); END")
+            }
+        }
+
+        assertThatThrownBy {
+            store.recordChange("c1", Card.create("Write docs", Column.CODING), anEvent("e2", EventType.CARD_MOVED))
+        }.isInstanceOf(Exception::class.java)
+
+        assertThat(store.card("c1")).isEqualTo(original)
+        assertThat(store.events("c1")).containsExactly(first)
+    }
+
+    @Test
+    fun `AC-4 recorded event stays identical after later changes and failed attempts`() = withStore { store, _ ->
+        val first = anEvent("e1")
+        store.recordChange("c1", Card.create("Write docs", Column.INBOX), first)
+
+        store.recordChange("c1", Card.create("Write docs", Column.CODING), anEvent("e2", EventType.CARD_MOVED, "2026-10-15T11:00:00Z"))
+        assertThatThrownBy {
+            store.recordChange("c1", Card.create("Other", Column.INBOX), anEvent("e1", EventType.OWNER_APPROVED))
+        }.isInstanceOf(Exception::class.java)
+
+        assertThat(store.events("c1").first { it.id == first.id }).isEqualTo(first)
+        assertThat(store.events("c1")).hasSize(2)
+    }
+
+    @Test
+    fun `AC-5 public API has no way to alter or delete an event`() {
+        val names = CardEventStore::class.java.methods
+            .filter { it.declaringClass == CardEventStore::class.java }
+            .map { it.name }
+
+        assertThat(names).contains("recordChange", "events", "card")
+        assertThat(names).noneMatch { n ->
+            listOf("update", "delete", "alter", "remove", "set", "edit", "replace").any { n.lowercase().startsWith(it) }
         }
     }
 }
