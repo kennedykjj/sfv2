@@ -1,6 +1,7 @@
 plugins {
     id("sfv2.kotlin-jvm")
     application
+    alias(libs.plugins.graalvm.native)
 }
 
 dependencies {
@@ -14,6 +15,23 @@ application {
     applicationName = "sfv2"
     // Clikt loads a native library (JNA) to read the terminal; without this the JVM warns on every error.
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+// Opt-in native image: `./gradlew :cli:nativeCompile`. It is not wired into build/check, so machines
+// without GraalVM keep building. Output: cli/build/native/nativeCompile/sfv2.
+graalvmNative {
+    // Resolve the GraalVM toolchain only for the native tasks, never for the regular build.
+    toolchainDetection = true
+    binaries {
+        named("main") {
+            imageName = "sfv2"
+            mainClass = "sfv2.cli.MainKt"
+            buildArgs.add("--no-fallback")
+            javaLauncher = javaToolchains.launcherFor {
+                vendor = JvmVendorSpec.GRAAL_VM
+            }
+        }
+    }
 }
 
 // The CLI reports the version it was built with; the build writes it into a resource.

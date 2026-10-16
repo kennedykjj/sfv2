@@ -87,6 +87,19 @@ class MainTest {
     }
 
     @Test
+    fun `AC-3 the native image config embeds the build properties resource and --version prints the build version`() {
+        val config = MainTest::class.java.getResourceAsStream("/META-INF/native-image/sfv2/cli/resource-config.json")
+            ?.use { it.readBytes().decodeToString() }
+
+        assertThat(config).isNotNull().contains("sfv2/cli/build.properties")
+
+        val printed = StringBuilder()
+        val exit = runCli(listOf("--version"), BuildInfo.version, { printed.appendLine(it) }, { err.appendLine(it) }, mapOf("XDG_RUNTIME_DIR" to runtimeDir.toString()))
+        assertThat(exit).isZero()
+        assertThat(printed.toString().trim()).isEqualTo("sfv2 ${BuildInfo.version}")
+    }
+
+    @Test
     fun `AC-1 card create prints the new card`() {
         Files.createDirectories(socketDir())
         Files.writeString(tokenPath(), "tok\n")
