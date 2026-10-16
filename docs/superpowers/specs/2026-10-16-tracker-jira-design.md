@@ -17,8 +17,9 @@ _Product Owner_
 - **AC-5** — Dado um ticket já fechado, quando a fábrica o fecha de novo, então o resultado é `AlreadyClosed` e nenhum comentário duplicado é gravado.
 - **AC-6** — Dado um marco opcional, quando a fábrica o grava, então ele aparece como comentário no ticket e o estado do ticket não muda.
 - **AC-7** — Dado que o `acli` falha, expira, não está instalado ou devolve saída acima do limite, quando qualquer operação roda, então ela falha com `TrackerException` cuja mensagem traz a operação e o id, nunca o texto do ticket.
+- **AC-9** — Dado um ticket cuja descrição vem em formato estruturado (ADF, o JSON de documento do Jira), quando o adapter o importa, então o corpo vira texto simples (só o texto dos nós, sem marcação) antes de virar `ExternalText`, e o hash é o de título e esse texto.
 - **AC-8** — Dado um ticket importado, quando o texto é lido, então passa só pela `ExternalText` e o hash do texto é consistente, como no adapter do GitHub.
-**Out of scope:** fallback via MCP quando não há CLI (em discussão); sincronização contínua; criar tickets; transições de workflow customizadas por projeto; Jira em outro mecanismo que não o `acli`; relação Blocked by (#52).
+**Out of scope:** escolher o tracker por projeto e generalizar o `provider` hoje fixo em `github` (`CardImport`, `CardClosure`, `ExternalMilestones`) e o link do PR, que remove o sufixo `/issues/<id>` (no Jira é `/browse/PROJ-1`): sem essa ligação o `AcliTracker` não é selecionável, e ela é o follow-up deste card; fallback via MCP quando não há CLI (em discussão); sincronização contínua; criar tickets; transições de workflow customizadas por projeto; Jira em outro mecanismo que não o `acli`; relação Blocked by (#52).
 **Product fit:** serve "importar e fechar, sem sincronização contínua" e o público da empresa; o Jira é tocado só na importação, em marcos opcionais e no fechamento confirmado. Não contradiz posicionamento nem o que está fora de escopo.
 **Touches UI:** no
 
@@ -31,6 +32,7 @@ _Tech Lead_
 - **Contratos:** a port `Tracker` não muda. Novo `AcliTracker(site, acli = "acli", workDir, tmpDir, timeout, runner)` em `adapters`, implementando `fetch`, `search`, `writeMilestone` e `close`; falhas são `TrackerException` / `UnknownTrackerItemException` com operação e id apenas.
 - **Camadas e arquivos:** só `adapters` — `adapters/src/main/kotlin/sfv2/adapters/AcliTracker.kt` (novo) e `adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt` (novo). Reusa `ProcessRunner`/`ProcessRunnerImpl` e o harness de binário falso de `GhForgeTest.kt`.
 - **Comportamento:** `acli jira workitem view/search/comment/transition` com saída JSON; id validado por regex de chave Jira (`PROJ-123`); consulta vira JQL com texto escapado e entre aspas; consulta em branco lista os tickets abertos (`statusCategory != Done`); `close` consulta o estado antes e devolve `AlreadyClosed` sem comentar; senão comenta e transiciona para a categoria concluída. Estado, título, corpo, labels e url mapeados para `TrackerItem.of`; url montada a partir do site validado (https).
+- **Ambiente do filho:** o `ProcessRunner` ganha o modo de ambiente filtrado que o AC-7 e a seção de segurança pedem (hoje só acrescenta variáveis): o `acli` recebe só `PATH`, `HOME`, `LANG`, `LC_*` e as variáveis do próprio `acli`; variáveis cujo nome contém `TOKEN`, `SECRET`, `PASSWORD` ou `KEY` ficam de fora. Arquivos a mais: `adapters/src/main/kotlin/sfv2/adapters/ProcessRunnerImpl.kt` (a implementação) e `adapters/src/main/kotlin/sfv2/adapters/CodexRuntime.kt` (onde a interface `ProcessRunner` está declarada).
 - **Mesmos limites do `GhTracker`:** saída em arquivo temporário, teto de 8 MiB, timeout, truncamento de busca no limite (falha), nenhuma credencial lida (fica no config do `acli`).
 - **Migração:** nenhuma (sem banco, sem mudança de contrato).
 
@@ -47,6 +49,7 @@ _Tech Lead_
 | AC-6 | adapters | `adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt` |
 | AC-7 | adapters | `adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt` |
 | AC-8 | adapters | `adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt` |
+| AC-9 | adapters | `adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt` |
 
 ## Security
 _Cybersec_
