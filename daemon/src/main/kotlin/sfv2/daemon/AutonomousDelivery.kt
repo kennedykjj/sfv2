@@ -112,6 +112,7 @@ class AutonomousDelivery(
                 is MergeResult.NotOpen -> notOpen(forge, cardId, card, branch, approvedHead)
             }
         } catch (e: ForgeException) {
+            log.log("delivery_forge_error", mapOf("card" to cardId, "error" to e.message.orEmpty().take(200)))
             val merged = pr?.let { stateOf(forge, it) } == PullRequestState.Merged
             return stop(returnToOwner(cardId, card, if (merged) "merge_unrecorded" else "forge_failed", emptyMap()))
         }
@@ -214,6 +215,7 @@ class AutonomousDelivery(
                 if (Thread.currentThread().isInterrupted) return DeliveryOutcome.Skipped
             }
         } catch (e: ForgeException) {
+            log.log("delivery_forge_error", mapOf("card" to cardId, "error" to e.message.orEmpty().take(200)))
             return returnToOwner(cardId, card, "forge_failed", base)
         }
         return when (result) {
