@@ -1,0 +1,1 @@
+{"issue":68,"slug":"feed-e-custo","pipeline":"validate","started_at":"2026-10-16T15:54:00Z","finished_at":"2026-10-16T16:10:00Z","outcome":"ok","agents":[],"rounds":{"2":0,"3":0},"gates_failed":[],"flaky":[],"gates_reused":["build","green app sfv2.app.FeedTest","green daemon sfv2.daemon.ProtocolTest"],"manual_edit":false,"amendments":[]}
