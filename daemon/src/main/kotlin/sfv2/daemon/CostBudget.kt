@@ -70,18 +70,17 @@ class CostBudget(
     }
 
     fun isBlocked(cardId: String): Boolean {
-        val events = store.events(cardId)
-        val lastBlock = events.indexOfLast { it.type == EventType.CARD_BLOCKED }
-        if (lastBlock < 0) return false
-        return events.drop(lastBlock + 1).none { it.type == EventType.CARD_MOVED && it.actor == Actor.Owner }
+        val lastBlock = store.lastSeq(cardId, EventType.CARD_BLOCKED) ?: return false
+        val lastOwnerMove = store.lastSeq(cardId, EventType.CARD_MOVED, Actor.Owner) ?: return true
+        return lastOwnerMove < lastBlock
     }
 
     override fun dayLimitReached(): Boolean {
         val limit = limits.perDayUsd ?: return false
         val today = LocalDate.now(clock.withZone(zone))
-        val byCard = store.eventsAfter(0)
-            .filter { it.event.type == EventType.RUN_COST_RECORDED }
-            .filter { it.event.at.atZone(zone).toLocalDate() == today }
+        val from = today.atStartOfDay(zone).toInstant()
+        val to = today.plusDays(1).atStartOfDay(zone).toInstant()
+        val byCard = store.costEventsBetween(from, to)
             .groupBy({ it.cardId }, { it.event })
         val spents = byCard.map { (cardId, events) -> sum(cardId, events, logZero = false) }
         if (spents.any { it.unpriced }) return true
