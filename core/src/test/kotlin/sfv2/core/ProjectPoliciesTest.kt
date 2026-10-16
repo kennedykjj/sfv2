@@ -93,6 +93,40 @@ class ProjectPoliciesTest {
         }
     }
 
+    // Issue #90: Conventions(commitFormat, branchFormat, prTemplate, language). Read by getter name so this file
+    // compiles before the two new properties exist.
+    private fun convention(policies: ProjectPolicies, property: String): Any? =
+        policies.conventions.javaClass.getMethod("get$property").invoke(policies.conventions)
+
+    @Test
+    fun `AC-5 pr_template and language default to the factory values and accept configured ones`() {
+        assertThat(convention(defaults, "PrTemplate")).isEqualTo(".github/pull_request_template.md")
+        assertThat(convention(defaults, "Language")).isEqualTo("en")
+
+        val configured = ProjectPolicies.from(
+            mapOf("conventions" to mapOf("pr_template" to "docs/pr.md", "language" to "pt-BR", "commit_format" to "[{ticket}] {subject}")),
+        )
+
+        assertThat(convention(configured, "PrTemplate")).isEqualTo("docs/pr.md")
+        assertThat(convention(configured, "Language")).isEqualTo("pt-BR")
+        assertThat(configured.conventions.commitFormat).isEqualTo("[{ticket}] {subject}")
+    }
+
+    @Test
+    fun `AC-5 an invalid pr_template or language names the field and an unknown placeholder still does`() {
+        listOf(
+            "pr_template" to "",
+            "language" to "fr",
+            "language" to "",
+            "commit_format" to "{ticket} {nope} {subject}",
+        ).forEach { (key, value) ->
+            val ex = assertThrows<InvalidPolicyException> {
+                ProjectPolicies.from(mapOf("conventions" to mapOf(key to value)))
+            }
+            assertThat(ex.field).describedAs("$key=$value").isEqualTo("conventions.$key")
+        }
+    }
+
     @Test
     fun `AC-6 milestones list turns milestones on and no list leaves all off`() {
         assertThat(milestonesOf(defaults)).isEmpty()
