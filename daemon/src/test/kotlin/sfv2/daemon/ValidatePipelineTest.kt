@@ -59,6 +59,7 @@ class ValidatePipelineTest {
 
     private val green = listOf(GateResult("build-daemon", true, null), GateResult("test-daemon", true, null), GateResult("scope", true, null))
     private val red = listOf(GateResult("build-daemon", true, null), GateResult("test-daemon", false, "2 failed"), GateResult("scope", false, "outside"))
+    private val buildRed = listOf(GateResult("build-daemon", false, "e: Unresolved reference 'Pong'"), GateResult("test-daemon", false, "compilation failed"))
     private val approved = "VERDICT: APPROVED"
 
     @BeforeEach
@@ -175,6 +176,38 @@ class ValidatePipelineTest {
 
         assertThat(column("c1")).isEqualTo(Column.STAGED)
         assertThat(events(EventType.CARD_BLOCKED)).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 a failed build or test gate sends the card back to Coding with the gate output instead of blocking it`() {
+        card("c1")
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(buildRed)).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.CODING)
+        assertThat(events(EventType.CARD_BLOCKED)).isEmpty()
+        val back = events(EventType.CARD_MOVED).last { it.payload["to"] == Column.CODING.name }
+        assertThat(back.actor).isEqualTo(Actor.Factory("validate"))
+        assertThat(back.payload["reason"]).contains("build-daemon: e: Unresolved reference 'Pong'").contains("test-daemon")
+    }
+
+    @Test
+    fun `AC-3 a card the validation already returned three times is blocked on the next failed build instead`() {
+        card("c1")
+        repeat(3) {
+            recorder.record(
+                "c1", requireNotNull(store.card("c1")),
+                Event(EventId("back-$it"), clock.instant(), Actor.Factory("validate"), EventType.CARD_MOVED, mapOf("from" to "VALIDATION", "to" to "CODING")),
+            )
+            recorder.record(
+                "c1", requireNotNull(store.card("c1")),
+                Event(EventId("again-$it"), clock.instant(), Actor.Factory("develop"), EventType.CARD_MOVED, mapOf("from" to "CODING", "to" to "VALIDATION")),
+            )
+        }
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(buildRed)).run("c1")
+
+        assertThat(events(EventType.CARD_BLOCKED).single().payload["reason"]).isEqualTo("gates_failed: build-daemon,test-daemon")
     }
 
     @Test

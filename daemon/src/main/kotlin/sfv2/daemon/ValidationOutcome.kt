@@ -97,6 +97,13 @@ class ValidationOutcome(
         return ValidationDecision.Returned(layer, reason)
     }
 
+    /** Sends the card back to Coding because a build or test gate failed; false when the move is not allowed or [reason] is too long. */
+    fun returnForGates(cardId: String, layer: String, reason: String): Boolean {
+        val card = store.card(cardId) ?: return false
+        if (layer !in layers || reason.isEmpty() || reason.toByteArray(Charsets.UTF_8).size > MAX_REASON_BYTES) return false
+        return move(cardId, card, Column.CODING, mapOf("layer" to layer, "reason" to reason, "gates" to "red"))
+    }
+
     private fun reason(report: String): String = report.lines().drop(1).joinToString("\n").trim()
 
     private fun move(cardId: String, card: Card, to: Column, extra: Map<String, String>): Boolean {
