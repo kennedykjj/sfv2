@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
@@ -277,6 +278,7 @@ private fun projectJson(project: Project): JsonObject = buildJsonObject {
         "policies",
         buildJsonObject {
             put("delivery_mode", project.policies.deliveryMode.key)
+            put("dor", buildJsonArray { project.policies.dor.forEach { add(JsonPrimitive(it.key)) } })
             put(
                 "signers",
                 buildJsonObject { project.policies.signers.forEach { (effect, signer) -> put(effect.key, signer.key) } },
