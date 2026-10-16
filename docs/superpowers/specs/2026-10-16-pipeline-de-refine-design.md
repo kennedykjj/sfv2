@@ -16,6 +16,8 @@ _Product Owner_
 - **AC-4** — Dado gates vermelhos após um run, e rodadas restantes abaixo do máximo, quando o resultado é avaliado, então um novo run de refine é feito com o resultado dos gates como entrada.
 - **AC-5** — Dado gates ainda vermelhos depois do máximo de rodadas, quando a última rodada termina, então o card fica bloqueado com um motivo legível para o dono (quais gates falharam) e nenhum novo run é iniciado.
 - **AC-6** — Dado um card em Ready for Refinement sem vaga de execução, ou um card bloqueado ou em Spec Review, quando o dispatcher roda, então nenhum run de refine é iniciado para ele.
+- **AC-7** — Dado um run de refine, quando a sessão MCP é aberta, então o arquivo de configuração do MCP (que carrega o token da sessão) é escrito FORA do worktree do card, com permissão 0600, o token nunca aparece em log nem em evento, e ao fim do run (sucesso, falha ou exceção) o arquivo é apagado e a sessão é revogada (`McpSessions.close(token)`); nenhum `mcp-config` pode aparecer no diff do card.
+- **AC-8** — Dado um run de refine que termina por exceção ou por timeout, quando o `RefineStageLauncher` encerra a thread, então o lock do card no `RunPool` é solto (`finally`) e o card não fica preso para sempre.
 **Out of scope:** Aprovação da spec e estágios seguintes (Ready for Dev em diante); conteúdo e qualidade da skill de refine e dos gates em si; UI/app; definição do valor do máximo de rodadas (vem da configuração existente); desbloqueio do card pelo dono.
 **Product fit:** Serve "gates são scripts, não a palavra do agente" e "o dono aparece só onde a decisão é dele" (Spec Review). Não contradiz posicionamento nem o que está fora de escopo.
 **Touches UI:** no
@@ -47,9 +49,14 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RefinePipelineTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RefinePipelineTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/DispatcherTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RefinePipelineTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RefinePipelineTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **O token da sessão MCP é o segredo mais sensível do run:** vive só no arquivo de configuração do run (fora do worktree, 0600), na memória do daemon e no cabeçalho do agente; some quando o run acaba (AC-7). Dentro do worktree ele poderia ser commitado pelo próprio agente.
+- **O relato do agente não decide nada:** quem move o card são os gates e o daemon (regra 8); o agente só vê texto não confiável como dado (skill do #36).
+- **Laço de rodadas limitado** (`maxRounds`) e custo limitado pelo `LaunchGuard` (#34): um refine que nunca fica verde bloqueia o card com motivo para o dono.
 
 ## Rollback
 n/a
