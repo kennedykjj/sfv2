@@ -720,6 +720,7 @@ class ValidatePipelineTest {
         val arguments = constructor.parameterTypes.map { type ->
             when {
                 type == PullRequestDelivery::class.java -> null
+                type == ConflictResolver::class.java -> null
                 type.isPrimitive -> 4317
                 else -> values.first { type.isInstance(it) }
             }
