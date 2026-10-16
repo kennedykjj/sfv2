@@ -6,6 +6,15 @@ plugins {
 
 application {
     mainClass = "sfv2.daemon.MainKt"
+    applicationName = "sfv2-daemon"
+    applicationDefaultJvmArgs = listOf("-Dsfv2.launcher=__APP_HOME__/bin/sfv2-daemon")
+}
+
+// Lets the launcher know its own absolute path: the start script expands APP_HOME at run time.
+tasks.startScripts {
+    doLast {
+        unixScript.writeText(unixScript.readText().replace("__APP_HOME__", "'\"\$APP_HOME\"'"))
+    }
 }
 
 dependencies {
