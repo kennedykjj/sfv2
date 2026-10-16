@@ -24,7 +24,7 @@ class ModuleTest {
 
         val window = skin.window(listOf("one", "two", "three", "four", "a very long phrase indeed"))
 
-        assertThat(window.lines).containsExactly("> three", "> four", "> a very l…")
+        assertThat(window.lines).containsExactly("> three", "> four", "> a very …")
         assertThat(window.lines.all { it.codePointCount(0, it.length) <= 10 }).isTrue()
         assertThat(skin.window(emptyList()).lines).containsExactly("> aguardando…")
     }
