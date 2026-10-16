@@ -1,0 +1,1 @@
+{"issue":162,"slug":"pipeline-de-validate-fonte-unica","pipeline":"validate","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green daemon sfv2.daemon.ValidatePipelineTest","green e2e sfv2.e2e.PhaseExitTest"],"manual_edit":false,"amendments":[]}
