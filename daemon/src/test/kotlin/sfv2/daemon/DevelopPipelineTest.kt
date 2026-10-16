@@ -55,10 +55,13 @@ object DevelopFixtures {
     class ScriptedDevelopGates(
         private val rounds: List<List<GateResult>>,
         private val hold: CountDownLatch? = null,
+        private val plannedLayers: List<ProjectLayer> = project.layers,
         private val onFailure: (String, List<GateResult>) -> Unit = { _, _ -> },
     ) : DevelopGates {
         val calls = CopyOnWriteArrayList<String>()
         private var round = 0
+
+        override fun layers(worktree: Path): List<ProjectLayer> = plannedLayers
 
         override fun red(cardId: String, worktree: Path): List<GateResult> {
             hold?.await(10, TimeUnit.SECONDS)
@@ -161,6 +164,20 @@ class DevelopPipelineTest {
     private fun succeeding(times: Int) = FakeRuntime(List(times) { SessionScript.Succeed })
 
     private fun rounds(count: Int) = count * DevelopFixtures.SESSIONS_PER_ROUND
+
+    @Test
+    fun `AC-1 a spec that plans tests for one layer gets one engineer session and green gates for that layer only`() {
+        card("c1")
+        val daemonOnly = DevelopFixtures.project.layers.filter { it.name == "daemon" }
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green), plannedLayers = daemonOnly)
+        val runtime = succeeding(2)
+
+        pipeline(runtime, gates).run("c1")
+
+        assertThat(runtime.launched).hasSize(2)
+        assertThat(gates.calls.filter { it.startsWith("green:") }).containsExactly("green:daemon")
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+    }
 
     @Test
     fun `AC-1 a card in Ready for Dev moves to Coding, QA runs first and then one engineer session per layer, events with actor`() {
@@ -366,6 +383,8 @@ class DevelopPipelineTest {
 
     /** Adds "red" and "green:<layer>" to the same list the runtime appends "session" to. */
     private class RecordingGates(private val inner: DevelopGates, private val calls: MutableList<String>) : DevelopGates {
+        override fun layers(worktree: Path): List<ProjectLayer> = inner.layers(worktree)
+
         override fun red(cardId: String, worktree: Path): List<GateResult> = inner.red(cardId, worktree).also { calls.add("red") }
 
         override fun green(cardId: String, layer: ProjectLayer, worktree: Path): List<GateResult> =
