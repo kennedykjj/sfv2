@@ -86,16 +86,6 @@ private val INSTANT_FORMAT = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.f
 fun formatInstant(at: Instant, zone: ZoneId): String =
     INSTANT_FORMAT.format(at.atZone(zone)).replace(".", "")
 
-/** `850 ms`, `12 s`, `3 min 20 s`; `—` when the gate ran no process. */
-fun formatDuration(durationMs: Long?): String {
-    if (durationMs == null) return Texts.NO_DURATION
-    if (durationMs < 1_000) return "$durationMs ms"
-    val seconds = durationMs / 1_000
-    if (seconds < 60) return "$seconds s"
-    val rest = seconds % 60
-    return if (rest == 0L) "${seconds / 60} min" else "${seconds / 60} min $rest s"
-}
-
 /** An approval or change request signed by the owner, as opposed to an event written by an agent or the factory. */
 internal fun TimelineEvent.isOwnerDecision(): Boolean = type in OWNER_DECISIONS && actor == "owner"
 

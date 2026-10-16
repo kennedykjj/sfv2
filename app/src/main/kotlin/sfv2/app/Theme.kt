@@ -88,7 +88,6 @@ object Texts {
     const val GATE_BAD = "bad"
     const val GATE_NOT_RUN = "não rodou"
     const val GATE_MANUAL = "manual"
-    const val BLOCKED = "bloqueado"
     const val BLOCK_NO_REASON = "motivo não informado"
     const val PR_OPEN = "aberto, aguardando decisão"
     const val PR_MERGED = "mergeado"
