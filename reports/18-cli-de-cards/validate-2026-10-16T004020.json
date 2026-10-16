@@ -1,0 +1,1 @@
+{"outcome": "staged", "pr": 124, "head": "2e0823f1ceba310013f33cfbef1337197e196611", "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": [], "amendments": [], "findings": {"red": 0, "yellow": 0, "nit": 1}}
