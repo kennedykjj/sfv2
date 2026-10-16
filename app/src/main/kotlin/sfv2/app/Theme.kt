@@ -88,6 +88,13 @@ object Texts {
     const val GATE_BAD = "bad"
     const val GATE_NOT_RUN = "não rodou"
     const val GATE_MANUAL = "manual"
+    const val BLOCKED = "bloqueado"
+    const val BLOCK_NO_REASON = "motivo não informado"
+    const val PR_OPEN = "aberto, aguardando decisão"
+    const val PR_MERGED = "mergeado"
+    const val PARTIAL_COST = "parcial"
+
+    fun pullRequest(number: Int): String = "PR #$number"
 
     const val FEED_TITLE = "Feed do dia"
     const val TODAY = "Hoje"

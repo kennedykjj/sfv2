@@ -80,7 +80,6 @@ private const val DONE_COLUMN = "DONE"
 private const val PASS = "PASS"
 private const val FAIL = "FAIL"
 private const val NO_GATE = "none"
-private const val MANUAL = "manual"
 private val INSTANT_FORMAT = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("pt-BR"))
 
 /** `16 out 14:32`, in the given zone. */
@@ -344,20 +343,23 @@ private fun PanelBody(detail: CardDetail, tab: PanelTab, zone: ZoneId, closure: 
     when (tab) {
         PanelTab.SUMMARY -> {
             if (closure != null && detail.column == DONE_COLUMN) ClosureEntry(detail, closure)
+            openBlock(detail.events)?.let { BlockNotice(it, zone) }
+            cardPullRequest(detail.events)?.let { PullRequestLine(it) }
             Section(Texts.GATES) {
-                if (detail.gates.isEmpty() && detail.criteria.isEmpty()) Faint(Texts.NO_GATES)
-                detail.gates.forEach { GateLine(it) }
-                if (detail.criteria.isNotEmpty()) {
-                    BasicText(Texts.CRITERIA, style = meta(Tokens.soft).copy(fontWeight = FontWeight.SemiBold))
-                    detail.criteria.forEach { CriterionLine(it) }
-                }
+                if (detail.gates.isEmpty()) Faint(Texts.NO_GATES)
+                detail.gates.forEach { GateLineView(gateLine(it)) }
             }
         }
-        PanelTab.SPEC -> Section(Texts.SPEC) {
-            if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
-                Faint(Texts.NO_SPEC)
-            } else {
-                SelectionContainer { BasicText(detail.spec.text, modifier = Modifier.widthIn(max = 640.dp), style = body()) }
+        PanelTab.SPEC -> {
+            if (detail.criteria.isNotEmpty()) {
+                Section(Texts.CRITERIA) { detail.criteria.forEach { CriterionLine(it) } }
+            }
+            Section(Texts.SPEC) {
+                if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
+                    Faint(Texts.NO_SPEC)
+                } else {
+                    SelectionContainer { BasicText(detail.spec.text, modifier = Modifier.widthIn(max = 640.dp), style = body()) }
+                }
             }
         }
         PanelTab.EVENTS -> Section(Texts.TIMELINE) {
@@ -371,11 +373,11 @@ private fun PanelBody(detail: CardDetail, tab: PanelTab, zone: ZoneId, closure: 
         }
         PanelTab.RUNS -> Section(Texts.RUNS) {
             if (detail.runs.isEmpty()) Faint(Texts.NO_RUNS)
-            detail.runs.forEach { RunLine(it) }
+            costByStage(detail.runs).forEach { StageCostGroup(it) }
             if (detail.runs.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     val bold = TextStyle(fontFamily = sans, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text)
-                    BasicText(Texts.TOTAL, style = bold)
+                    BasicText(if (detail.total.status == CostStatus.PARTIAL) "${Texts.TOTAL} (${Texts.PARTIAL_COST})" else Texts.TOTAL, style = bold)
                     BasicText(formatCost(detail.total.costUsd), style = tabular(bold))
                 }
             }
@@ -546,33 +548,55 @@ private fun Section(title: String, content: @Composable () -> Unit) {
     }
 }
 
+/** The blocked notice comes first in Summary because it is what asks for action. */
 @Composable
-private fun GateLine(gate: GateRow) {
-    val passed = gate.verdict == PASS
+private fun BlockNotice(block: OpenBlock, zone: ZoneId) {
+    Column(
+        Modifier.fillMaxWidth().border(1.dp, Tokens.bad, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BasicText(Texts.BLOCKED, style = body(Tokens.bad).copy(fontWeight = FontWeight.SemiBold))
+            BasicText(formatInstant(block.at, zone), style = tabular(meta()))
+        }
+        BasicText(block.reason, style = body(Tokens.text))
+    }
+}
+
+@Composable
+private fun PullRequestLine(pr: PullRequestView) {
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        BasicText(
-            if (passed) Texts.GATE_OK else Texts.GATE_BAD,
-            style = meta(if (passed) Tokens.ok else Tokens.bad).copy(fontWeight = FontWeight.SemiBold),
-        )
-        BasicText(gate.name, style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.text))
-        BasicText(formatDuration(gate.durationMs), style = tabular(meta()))
-        gate.reason?.let { BasicText(it, style = meta()) }
+        BasicText(Texts.pullRequest(pr.number), style = body(Tokens.text).copy(fontWeight = FontWeight.SemiBold))
+        BasicText(if (pr.state == PrState.MERGED) Texts.PR_MERGED else Texts.PR_OPEN, style = body())
+    }
+}
+
+@Composable
+private fun GateLineView(line: GateLine) {
+    val passed = line.verdict == PASS
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicText(line.verdict, style = meta(if (passed) Tokens.ok else Tokens.bad).copy(fontWeight = FontWeight.SemiBold))
+            BasicText(line.name, style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.text))
+            BasicText(line.duration, style = tabular(meta()))
+        }
+        line.reason?.let { BasicText(it, style = body()) }
     }
 }
 
 @Composable
 private fun CriterionLine(criterion: CriterionRow) {
-    val (label, color) = when (criterion.gate) {
-        PASS -> Texts.GATE_OK to Tokens.ok
-        FAIL -> Texts.GATE_BAD to Tokens.bad
-        MANUAL -> Texts.GATE_MANUAL to Tokens.muted
-        NO_GATE -> Texts.GATE_NOT_RUN to Tokens.faint
-        else -> criterion.gate to Tokens.muted
+    val color = when (criterion.gate) {
+        PASS -> Tokens.ok
+        FAIL -> Tokens.bad
+        NO_GATE -> Tokens.faint
+        else -> Tokens.muted
     }
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         BasicText(criterion.ac, style = meta(Tokens.text).copy(fontWeight = FontWeight.SemiBold))
+        BasicText(criterion.layer, style = meta(Tokens.soft))
         BasicText(criterion.testFile, style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.soft))
-        BasicText(label, style = meta(color))
+        BasicText(criterionResult(criterion), style = meta(color))
     }
 }
 
@@ -597,10 +621,25 @@ private fun EventRow(event: TimelineEvent, zone: ZoneId) {
 }
 
 @Composable
+private fun StageCostGroup(group: StageRunCost) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            val head = body(Tokens.text).copy(fontWeight = FontWeight.SemiBold)
+            BasicText(group.stage, style = head)
+            val partial = if (group.status == CostStatus.PARTIAL) " (${Texts.PARTIAL_COST})" else ""
+            BasicText(formatCost(group.costUsd) + partial, style = tabular(head))
+        }
+        Column(Modifier.padding(start = 16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            group.runs.forEach { RunLine(it) }
+        }
+    }
+}
+
+@Composable
 private fun RunLine(run: RunRow) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            BasicText("${run.stage} · ${run.runtime}", style = body())
+            BasicText(run.runtime, style = body())
             BasicText(formatCost(run.costUsd), style = tabular(body(Tokens.text)))
         }
         run.reason?.let { BasicText(it, style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.muted)) }
