@@ -22,8 +22,7 @@ CREATE TABLE spec (
 );
 
 upsertSpec:
-INSERT INTO spec(card_id, path, hash) VALUES (?, ?, ?)
-ON CONFLICT(card_id) DO UPDATE SET path = excluded.path, hash = excluded.hash;
+INSERT OR REPLACE INTO spec(card_id, path, hash) VALUES (?, ?, ?);
 
 selectSpec:
 SELECT path, hash FROM spec WHERE card_id = ?;
