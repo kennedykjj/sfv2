@@ -8,6 +8,7 @@ dependencies {
     implementation(project(":core"))
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
 }
 
 compose.desktop {
