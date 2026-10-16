@@ -1,7 +1,10 @@
 package sfv2.daemon
 
 import java.math.BigDecimal
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -11,7 +14,9 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
+import sfv2.core.AssistantState
 import sfv2.core.Column
+import sfv2.core.ColumnTime
 import sfv2.core.FactorySettings
 import sfv2.store.StoredEvent
 
@@ -113,11 +118,17 @@ sealed interface Request {
     /** Read-only: the audit trail of card [id]; [format] is validated by the handler. */
     data class AuditExport(val id: String, val format: String) : Request
 
-    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
-    data class CostSummary(val from: Instant, val to: Instant) : Request
+    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them; days are in [zone]. */
+    data class CostSummary(val from: Instant, val to: Instant, val zone: ZoneId = ZoneOffset.UTC) : Request
+
+    /** Read-only: the time per column of the stays that ended in [from, to). */
+    data class ColumnTimes(val from: Instant, val to: Instant) : Request
 
     /** Read-only: the newest [limit] events (1..[MAX_RECENT_EVENTS]) in seq order. */
     data class EventsRecent(val limit: Int) : Request
+
+    /** Read-only: the assistant state and phrase, the pool capacity and the cards with an active run. Takes no parameter. */
+    data object FactoryPulse : Request
 
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
@@ -141,10 +152,27 @@ data class IgnoredRow(val id: String, val reason: String)
 /** The cost of one card in the period asked. */
 data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostStatus)
 
+/** The cost of one stage (`unknown` when the event has none) in the period asked. */
+data class StageCost(val stage: String, val costUsd: BigDecimal, val status: CostStatus)
+
+/** The cost of one local day (`AAAA-MM-DD`) in the period asked. */
+data class DayCost(val day: String, val costUsd: BigDecimal, val status: CostStatus)
+
 /** A reply to the client. */
 sealed interface Response {
     /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
     data class EventsRecentResult(val events: List<StoredEvent>, val truncated: Boolean) : Response
+
+    /** The time of the columns that have a statistic; the others are absent, never zero. */
+    data class ColumnTimesResult(val times: Map<Column, ColumnTime>) : Response
+
+    /** The pulse of the factory; [active] holds card labels (`#<number>` or 8 hex characters), never titles. */
+    data class PulseResult(
+        val state: AssistantState,
+        val phrase: String,
+        val poolCapacity: Int,
+        val active: List<String>,
+    ) : Response
 
     data class CostSummaryResult(
         val totalUsd: BigDecimal,
@@ -153,6 +181,8 @@ sealed interface Response {
         val limits: CostLimits,
         val dayReached: Boolean,
         val cardsReached: List<String>,
+        val stages: List<StageCost> = emptyList(),
+        val days: List<DayCost> = emptyList(),
     ) : Response
 
     data object Pong : Response
@@ -273,10 +303,17 @@ fun parseRequest(line: String): Request {
         }
         "events.subscribe" -> parseSubscribe(obj)
         "events.recent" -> parseRecent(obj)
+        "factory.pulse" -> Request.FactoryPulse
         "cost.summary" -> {
             val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
             val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
-            Request.CostSummary(from, to)
+            val zone = if (obj["zone"] == null) ZoneOffset.UTC else zoneField(obj, "zone") ?: return Request.Rejected("invalid zone")
+            Request.CostSummary(from, to, zone)
+        }
+        "column.times" -> {
+            val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
+            val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
+            Request.ColumnTimes(from, to)
         }
         else -> Request.Rejected("unknown cmd")
     }
@@ -310,6 +347,15 @@ private fun parseRows(obj: JsonObject): List<BoardRow>? {
 
 private fun instantField(obj: JsonObject, key: String): Instant? =
     stringField(obj, key)?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+private fun zoneField(obj: JsonObject, key: String): ZoneId? =
+    stringField(obj, key)?.let {
+        try {
+            ZoneId.of(it)
+        } catch (e: DateTimeException) {
+            null
+        }
+    }
 
 private fun stringField(obj: JsonObject, key: String): String? {
     val primitive = obj[key] as? JsonPrimitive ?: return null
@@ -484,6 +530,41 @@ fun render(response: Response): String = when (response) {
         put("result", JsonArray(response.events.map { eventJson(it) }))
         put("truncated", response.truncated)
     }.toString()
+    is Response.ColumnTimesResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put(
+                    "columns",
+                    JsonArray(
+                        Column.entries.mapNotNull { column ->
+                            response.times[column]?.let { time ->
+                                buildJsonObject {
+                                    put("column", column.name)
+                                    put("kind", time.kind.name)
+                                    put("seconds", time.seconds)
+                                    put("stays", time.stays)
+                                }
+                            }
+                        },
+                    ),
+                )
+            },
+        )
+    }.toString()
+    is Response.PulseResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("state", response.state.name)
+                put("phrase", response.phrase)
+                put("poolCapacity", response.poolCapacity)
+                put("active", JsonArray(response.active.map { JsonPrimitive(it) }))
+            },
+        )
+    }.toString()
     is Response.CostSummaryResult -> buildJsonObject {
         put("ok", true)
         put(
@@ -512,6 +593,30 @@ fun render(response: Response): String = when (response) {
                 )
                 put("dayReached", response.dayReached)
                 put("cardsReached", JsonArray(response.cardsReached.map { JsonPrimitive(it) }))
+                put(
+                    "stages",
+                    JsonArray(
+                        response.stages.map { cost ->
+                            buildJsonObject {
+                                put("stage", cost.stage)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
+                put(
+                    "days",
+                    JsonArray(
+                        response.days.map { cost ->
+                            buildJsonObject {
+                                put("day", cost.day)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
             },
         )
     }.toString()

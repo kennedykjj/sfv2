@@ -1,14 +1,40 @@
 package sfv2.app
 
 import sfv2.core.Column
+import sfv2.core.ColumnTime
+import sfv2.core.ColumnTimeKind
 import sfv2.core.EventType
+import sfv2.core.OWNER_WAIT_COLUMNS
 
 data class BoardCard(val id: String, val title: String, val column: Column)
 
 /** Columns whose cards wait for a decision of the owner: the owner-only moves in `MoveRules` start here (PRODUCT.md). */
-val OWNER_DECISION_COLUMNS: Set<Column> = setOf(Column.SPEC_REVIEW, Column.STAGED)
+val OWNER_DECISION_COLUMNS: Set<Column> = OWNER_WAIT_COLUMNS
 
 fun isWaitingForOwner(column: Column): Boolean = column in OWNER_DECISION_COLUMNS
+
+/** The column subtitle: the statistic and its duration, e.g. "mediana 6 min" or "espera média 1 h 05 min". */
+object ColumnTimeLabel {
+    private const val SECONDS_PER_MINUTE = 60L
+    private const val MINUTES_PER_HOUR = 60L
+
+    fun of(time: ColumnTime): String {
+        val name = when (time.kind) {
+            ColumnTimeKind.MEDIAN -> Texts.MEDIAN
+            ColumnTimeKind.MEAN_WAIT -> Texts.MEAN_WAIT
+        }
+        return "$name ${duration(time.seconds)}"
+    }
+
+    private fun duration(seconds: Long): String {
+        val minutes = seconds / SECONDS_PER_MINUTE
+        return when {
+            minutes < 1 -> "< 1 min"
+            minutes < MINUTES_PER_HOUR -> "$minutes min"
+            else -> "${minutes / MINUTES_PER_HOUR} h ${(minutes % MINUTES_PER_HOUR).toString().padStart(2, '0')} min"
+        }
+    }
+}
 
 /**
  * The cards of the board in insertion order. Events are absolute (`to`), so applying one twice is harmless;

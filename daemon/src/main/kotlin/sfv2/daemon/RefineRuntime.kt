@@ -5,8 +5,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
+import java.time.ZoneId
 import sfv2.adapters.ClaudeRuntime
 import sfv2.adapters.RuntimeProvider
+import sfv2.core.AssistantStateRules
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.SpecStore
@@ -23,6 +25,7 @@ class RefineRuntime private constructor(
     private val deliveryTrigger: AutonomousDeliveryTrigger,
     val milestones: ExternalMilestones,
     val costSummary: CostSummaryQuery,
+    val pulse: FactoryPulse,
 ) : AutoCloseable {
 
     override fun close() {
@@ -76,8 +79,9 @@ class RefineRuntime private constructor(
             val recorder = commands.recorder
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
             val sessions = McpSessions(clock)
+            val specStore = SpecStore(database, dataDir.resolve("specs"))
             val endpoint = McpServerFactory(
-                sessions, store, SpecStore(database, dataDir.resolve("specs")), registry, files, recorder, worktrees, clock,
+                sessions, store, specStore, registry, files, recorder, worktrees, clock,
             ).start()
             val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock, provider = provider)
             val prices = loadPrices(dataDir.resolve(PRICES_FILE))
@@ -113,7 +117,8 @@ class RefineRuntime private constructor(
                         mcpPort = endpoint.port,
                         runtime = runtime,
                         costRecorder = costRecorder,
-                        gates = SpecScopeRefineGates(project, store, recorder, changedPaths, clock),
+                        gates = SpecScopeRefineGates(project, store, recorder, changedPaths, clock, specs = specStore),
+                        commit = SystemWorktreeCommit(),
                         configDir = dataDir.resolve("mcp"),
                         clock = clock,
                         model = MODEL,
@@ -151,6 +156,7 @@ class RefineRuntime private constructor(
                         clock = clock,
                         log = log,
                         milestones = milestones,
+                        commit = SystemWorktreeCommit(),
                     )
                 },
                 pool = pool,
@@ -256,10 +262,19 @@ class RefineRuntime private constructor(
                 stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP, DispatchStage.VALIDATE),
                 deliveries = deliveryTrigger,
             )
+            val pulse = FactoryPulse(
+                store = store,
+                pool = pool,
+                poolCapacity = { poolCapacity(settings, log) },
+                clock = clock,
+                rules = AssistantStateRules(zone = ZoneId.systemDefault()),
+                speaker = AssistantSpeaker(null, VoiceMode.OFF, log = log),
+            )
             return RefineRuntime(
                 dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
                 milestones = milestones,
                 costSummary = CostSummaryQuery(store, control::limits),
+                pulse = pulse,
             )
         }
 

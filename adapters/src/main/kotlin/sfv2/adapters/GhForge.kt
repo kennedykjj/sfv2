@@ -163,16 +163,26 @@ class GhForge(
         val state = stateOf(view)
         if (state !is PullRequestState.Open) return MergeResult.NotOpen(state)
         if (state.head != expectedHead) return MergeResult.HeadMismatch(state.head)
-        if (view.text("mergeable") == "CONFLICTING") return MergeResult.Conflict
-        call(
-            "merge",
-            subject,
-            "pr", "merge", pr.number.toString(), "--repo", repo, "--squash", "--match-head-commit", expectedHead,
-        )
+        // A branch behind the base cannot be merged either (the repository requires it up to date): the same way out as a conflict.
+        if (isBehindOrConflicting(view)) return MergeResult.Conflict
+        try {
+            call(
+                "merge",
+                subject,
+                "pr", "merge", pr.number.toString(), "--repo", repo, "--squash", "--match-head-commit", expectedHead,
+            )
+        } catch (e: ForgeException) {
+            // GitHub computes mergeability lazily: the view above may still say UNKNOWN for a branch that is behind.
+            if (isBehindOrConflicting(view("merge", pr))) return MergeResult.Conflict
+            throw e
+        }
         val oid = view("merge", pr)["mergeCommit"]?.asObject()?.text("oid")
         if (oid.isNullOrEmpty()) throw ForgeException("merge falhou ($subject): merge commit ausente")
         return MergeResult.Merged(oid)
     }
+
+    private fun isBehindOrConflicting(view: JsonObject): Boolean =
+        view.text("mergeable") == "CONFLICTING" || view.text("mergeStateStatus") == "BEHIND"
 
     override fun rerunChecks(head: String) {
         val subject = "head"
@@ -230,7 +240,7 @@ class GhForge(
         val out = call(
             operation,
             subject,
-            "pr", "view", pr.number.toString(), "--repo", repo, "--json", "state,headRefOid,mergeable,mergeCommit",
+            "pr", "view", pr.number.toString(), "--repo", repo, "--json", "state,headRefOid,mergeable,mergeStateStatus,mergeCommit",
             unknownPrMarker = NOT_FOUND_MARKER,
             unknownPr = pr.number,
         )
