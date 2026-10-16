@@ -89,7 +89,7 @@ class ValidatePipelineTest {
 
     private fun gates(vararg rounds: List<GateResult>) = ValidateGates { _, _ ->
         order.add("gates")
-        rounds[minOf(order.count { it == "gates" } - 1, rounds.size - 1)]
+        ValidateGateResults(rounds[minOf(order.count { it == "gates" } - 1, rounds.size - 1)])
     }
 
     /** One session per entry; the entry is what the agent reports during it (null: it reports nothing). */
@@ -343,6 +343,86 @@ class ValidatePipelineTest {
         } finally {
             dispatcher.close()
         }
+    }
+
+    @Test
+    fun `AC-1 a pipeline built without maxRounds runs the documented default constant of rounds`() {
+        card("c1")
+        val runtime = reviewing(*arrayOfNulls<String>(DEFAULT_VALIDATE_MAX_ROUNDS + 2))
+        val defaulted = ValidatePipeline(
+            project = project, store = store, recorder = recorder, worktrees = worktrees, sessions = sessions, mcpPort = 4317,
+            runtime = runtime, costRecorder = RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log),
+            branchSync = sync(MergeResult.Merged), gates = gates(green), configDir = configDir, clock = clock, model = "model-a", log = log,
+        )
+
+        defaulted.run("c1")
+
+        assertThat(DEFAULT_VALIDATE_MAX_ROUNDS).isEqualTo(3)
+        assertThat(runtime.launched()).hasSize(DEFAULT_VALIDATE_MAX_ROUNDS)
+        assertThat(order.count { it == "gates" }).isEqualTo(DEFAULT_VALIDATE_MAX_ROUNDS)
+    }
+
+    @Test
+    fun `AC-2 with maxRounds of N and gates that keep failing the pipeline stops after N rounds and reports the failure`() {
+        card("c1")
+        val runtime = reviewing(null, null, null, null, null)
+
+        pipeline(runtime, sync(MergeResult.Merged), gates(red), maxRounds = 2).run("c1")
+
+        assertThat(runtime.launched()).hasSize(2)
+        assertThat(order.count { it == "gates" }).isEqualTo(2)
+        assertThat(column("c1")).isNotEqualTo(Column.STAGED)
+        assertThat(events(EventType.CARD_BLOCKED)).hasSize(1)
+    }
+
+    @Test
+    fun `AC-3 one type turns executor, scope and spec results into the matching GatesState`() {
+        val passing = SpecCheck(SpecWeight.STANDARD, emptyList())
+        val failing = SpecCheck(SpecWeight.STANDARD, listOf(SpecFinding(SpecGate.WEIGHT, null, "weight mismatch")))
+
+        assertThat(ValidateGateResults.fromExecutor("build-daemon", GateVerdict.Pass).state).isEqualTo(GatesState.GREEN)
+        assertThat(ValidateGateResults.fromExecutor("test-daemon", GateVerdict.Fail("2 failed")).state).isEqualTo(GatesState.RED)
+        assertThat(ValidateGateResults.fromScope(ScopeVerdict.Pass).state).isEqualTo(GatesState.GREEN)
+        assertThat(ValidateGateResults.fromScope(ScopeVerdict.Violations(listOf("CLAUDE.md"), emptyList())).state).isEqualTo(GatesState.RED)
+        assertThat(ValidateGateResults.fromSpec(passing).state).isEqualTo(GatesState.GREEN)
+        assertThat(ValidateGateResults.fromSpec(failing).state).isEqualTo(GatesState.RED)
+        assertThat(ValidateGateResults(emptyList()).state).isEqualTo(GatesState.GREEN)
+    }
+
+    @Test
+    fun `AC-3 the conversions keep the gate names and reasons the events and the card show`() {
+        val executor = ValidateGateResults.fromExecutor("test-daemon", GateVerdict.Fail("2 failed")).results
+        val scope = ValidateGateResults.fromScope(ScopeVerdict.Violations(listOf("CLAUDE.md"), listOf("a", "b"))).results
+        val spec = ValidateGateResults.fromSpec(
+            SpecCheck(SpecWeight.STANDARD, listOf(SpecFinding(SpecGate.WEIGHT, null, "weight mismatch"))),
+        ).results
+
+        assertThat(executor).containsExactly(GateResult("test-daemon", false, "2 failed"))
+        assertThat(ValidateGateResults.fromExecutor("build-daemon", GateVerdict.Pass).results)
+            .containsExactly(GateResult("build-daemon", true, null))
+        assertThat(scope).containsExactly(GateResult("scope", false, "forbidden=1 outside=2"))
+        assertThat(ValidateGateResults.fromScope(ScopeVerdict.Pass).results).containsExactly(GateResult("scope", true, null))
+        assertThat(spec).containsExactly(GateResult("test-plan", true, null), GateResult("weight", false, "weight mismatch"))
+    }
+
+    @Test
+    fun `AC-4 failedNames lists only the failed gates in order`() {
+        assertThat(ValidateGateResults(red).failedNames).containsExactly("test-daemon", "scope")
+        assertThat(ValidateGateResults(green).failedNames).isEmpty()
+        val spec = SpecCheck(
+            SpecWeight.STANDARD,
+            listOf(SpecFinding(SpecGate.TEST_PLAN, "AC-1", "no row"), SpecFinding(SpecGate.WEIGHT, null, "mismatch")),
+        )
+        assertThat(ValidateGateResults.fromSpec(spec).failedNames).containsExactly("test-plan", "weight")
+    }
+
+    @Test
+    fun `AC-5 the pipeline reports the same gates_failed reason and lets green gates through as before`() {
+        card("c1")
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(red)).run("c1")
+
+        assertThat(events(EventType.CARD_BLOCKED).single().payload["reason"]).isEqualTo("gates_failed: test-daemon,scope")
+        assertThat(column("c1")).isNotEqualTo(Column.STAGED)
     }
 
     private fun lockReleasedAfter(failure: RuntimeException?, script: List<SessionScript>): Boolean {
