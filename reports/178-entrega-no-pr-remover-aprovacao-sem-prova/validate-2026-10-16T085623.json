@@ -1,0 +1,15 @@
+{
+  "outcome": "ok",
+  "card": 178,
+  "pr": 182,
+  "head": "b19cc46f7e01ff86fd979f317a1a50f365619abd",
+  "findings": {"blocker": 0, "warning": 0, "note": 1},
+  "gates": ["forbidden", "migration", "acceptance-intact", "green daemon *PullRequestHandoffTest*"],
+  "gates_reused": ["build"],
+  "flaky": [],
+  "amendments": [],
+  "rounds": 1,
+  "agents": {"reviewer": "tech-lead (inline)"},
+  "ci": {"guard": "success", "build": "success"},
+  "moved_to": "Staged"
+}
