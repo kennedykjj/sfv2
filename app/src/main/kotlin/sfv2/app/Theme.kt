@@ -2,6 +2,7 @@ package sfv2.app
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import sfv2.core.NotificationType
 
 /** Tokens of DESIGN.md (Charcoal) shared by the screens. */
 internal object Tokens {
@@ -76,6 +77,72 @@ internal object Texts {
     fun cardNotFound(id: String) = "Card #$id não encontrado."
 
     fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
+
+    const val OPEN_SETTINGS = "Configurações"
+    const val SETTINGS_TITLE = "Configurações"
+    const val SETTINGS_LOADING = "Lendo as configurações…"
+    const val SETTINGS_SAVING = "Salvando…"
+    const val SETTINGS_SAVED = "Salvo. Vale a partir do próximo ciclo."
+    const val UNREACHABLE = "Não consegui falar com o daemon. Seu rascunho continua aqui."
+    const val UNREACHABLE_LOAD = "Não consegui falar com o daemon."
+    const val REFUSED = "O daemon recusou o salvamento. Nada foi alterado."
+    const val RETRY = "Tentar de novo"
+    const val DISCARD = "Descartar"
+    const val SAVE = "Salvar"
+    const val ON = "Ligado"
+    const val OFF = "Desligado"
+    const val GROUP_POOL = "Pool de sessões"
+    const val GROUP_HOURS = "Horário de trabalho"
+    const val GROUP_COST = "Limites de custo"
+    const val GROUP_NOTIFICATIONS = "Notificações"
+    const val POOL_LABEL = "Sessões simultâneas"
+    const val POOL_DESCRIPTION = "Total de sessões que a fábrica roda ao mesmo tempo."
+    const val HOURS_LABEL = "Restringir ao horário"
+    const val HOURS_DESCRIPTION = "Fora da janela, a fábrica não despacha trabalho novo."
+    const val HOURS_START = "Início"
+    const val HOURS_END = "Fim"
+    const val COST_CARD = "Limite por card"
+    const val COST_DAY = "Limite por dia"
+    const val COST_DESCRIPTION = "Vazio: sem limite"
+    const val COST_PREFIX = "US$"
+    const val COST_SUFFIX = "est."
+    const val NOTIFICATIONS_NOTE = "Só guarda as preferências. As notificações ainda não são entregues."
+    const val QUIET_LABEL = "Horário silencioso"
+    const val QUIET_DESCRIPTION = "Sem avisos entre o início e o fim."
+    const val BAD_TIME = "use HH:MM"
+    const val BAD_AMOUNT = "use um número"
+
+    val DAY_NAMES = listOf("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
+
+    fun notificationLabel(type: NotificationType): String =
+        when (type) {
+            NotificationType.DECISION_WAITING -> "Decisão espera por você"
+            NotificationType.RUN_FAILED -> "Run falhou"
+            NotificationType.FACTORY_STOPPED -> "Fábrica parou"
+        }
+
+    fun changes(count: Int): String = if (count == 1) "1 alteração não salva" else "$count alterações não salvas"
+
+    fun fixFields(count: Int): String = if (count == 1) "Corrija 1 campo para salvar" else "Corrija $count campos para salvar"
+
+    fun fieldLabel(field: String): String =
+        when {
+            field == "poolSize" -> GROUP_POOL
+            field.startsWith("workHours") -> GROUP_HOURS
+            field == "cost.perCardUsd" -> COST_CARD
+            field == "cost.perDayUsd" -> COST_DAY
+            else -> field
+        }
+
+    fun issueReason(field: String, reason: String): String =
+        when {
+            field == "poolSize" -> "use de 1 a 64."
+            field == "workHours" -> "o fim deve ser depois do início."
+            field == "workHours.days" -> "escolha ao menos um dia."
+            field == "workHours.zone" -> "fuso desconhecido."
+            "required" in reason -> "informe um limite."
+            else -> "deve ser maior que zero."
+        }
 
     /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
     data class Explanation(val reason: String, val step: String, val command: String?)

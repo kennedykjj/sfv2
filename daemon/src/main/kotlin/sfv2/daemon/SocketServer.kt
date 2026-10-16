@@ -35,6 +35,7 @@ class SocketServer private constructor(
     private val importer: CardImport?,
     private val closure: CardClosure?,
     private val milestones: ExternalMilestones?,
+    private val settings: SettingsCommands?,
     private val costSummary: CostSummaryQuery?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
@@ -100,6 +101,8 @@ class SocketServer private constructor(
         is Request.Rejected -> Response.Error(request.message)
         is Request.ProjectAdd, Request.ProjectList ->
             projects?.handle(request) ?: Response.Error("project commands are not available")
+        Request.SettingsGet, is Request.SettingsSave ->
+            settings?.handle(request) ?: Response.Error("settings commands are not available")
         is Request.CardRebuild -> rebuild?.handle(request) ?: Response.Error("card rebuild is not available")
         is Request.CardImport, is Request.CardImportBoard -> importer?.handle(request) ?: Response.Error("card import is not available")
         is Request.CardCloseDraft, is Request.CardCloseConfirm -> closure?.handle(request) ?: Response.Error("card closure is not available")
@@ -168,6 +171,7 @@ class SocketServer private constructor(
             importer: CardImport? = null,
             closure: CardClosure? = null,
             milestones: ExternalMilestones? = null,
+            settings: SettingsCommands? = null,
             costSummary: CostSummaryQuery? = null,
         ): SocketServer {
             prepareDirectory(path)
@@ -190,7 +194,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, costSummary, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {

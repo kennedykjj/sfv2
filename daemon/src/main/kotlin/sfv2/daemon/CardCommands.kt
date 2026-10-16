@@ -40,18 +40,21 @@ class CardCommands(
         is Request.CardMove -> move(request)
         is Request.CardApprove -> approve(request)
         is Request.CardRequestChange -> requestChange(request)
-        Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
+        Request.CardList -> Response.CardsResult(visibleCards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
         is Request.CardDetail -> detail(request.id)
-        Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(store.cards()) { store.events(it) }))
+        Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(visibleCards()) { store.events(it) }))
         is Request.EventsRecent -> recent(request.limit)
-        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
+        Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
     }
 
     private fun recent(limit: Int): Response {
         val newest = store.latestEvents(limit + 1L)
         return Response.EventsRecentResult(newest.take(limit).reversed(), truncated = newest.size > limit)
     }
+
+    /** Every card but the reserved one that carries the settings events. */
+    private fun visibleCards() = store.cards().filter { it.id != SettingsCommands.SETTINGS_CARD_ID }
 
     private fun create(request: Request.CardCreate): Response {
         if (request.actor == Actor.Owner && !ownerProof.matches(request.proof)) {

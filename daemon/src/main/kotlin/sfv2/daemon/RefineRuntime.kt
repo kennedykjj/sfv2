@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import sfv2.adapters.ClaudeRuntime
+import sfv2.adapters.RuntimeProvider
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.SpecStore
@@ -40,6 +41,17 @@ class RefineRuntime private constructor(
         private val TICK: Duration = Duration.ofSeconds(30)
         private val SESSION_TIMEOUT: Duration = Duration.ofMinutes(30)
 
+        /** The saved pool size, read on every admission; without a settings file or when it is unreadable, the default. */
+        private fun poolCapacity(settings: SettingsStore?, log: DaemonLog): Int {
+            if (settings?.exists() != true) return POOL_CAPACITY
+            return try {
+                settings.load().poolSize
+            } catch (e: SettingsFileException) {
+                log.log("settings_unreadable", mapOf("field" to "poolSize"))
+                POOL_CAPACITY
+            }
+        }
+
         private sealed interface Prices {
             data class Loaded(val table: PriceTable) : Prices
             data class Failed(val field: String) : Prices
@@ -58,21 +70,23 @@ class RefineRuntime private constructor(
             source: ProjectConfigSource,
             env: Map<String, String>,
             log: DaemonLog = StderrDaemonLog,
+            settings: SettingsStore? = null,
         ): RefineRuntime {
+            val provider = RuntimeProvider.fromEnv(env)
             val recorder = commands.recorder
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
             val sessions = McpSessions(clock)
             val endpoint = McpServerFactory(
                 sessions, store, SpecStore(database, dataDir.resolve("specs")), registry, files, recorder, worktrees, clock,
             ).start()
-            val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock)
+            val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock, provider = provider)
             val prices = loadPrices(dataDir.resolve(PRICES_FILE))
             val priceTable = (prices as? Prices.Loaded)?.table ?: PriceTable.parse("models: {}")
             if (prices is Prices.Failed) log.log("dispatcher_not_started", mapOf("field" to prices.field))
             val costRecorder = RunCostRecorder(store, recorder, priceTable, clock)
-            val pool = RunPool(POOL_CAPACITY, store, clock, SystemProcessProbe, recorder = recorder)
+            val pool = RunPool({ poolCapacity(settings, log) }, store, clock, SystemProcessProbe, recorder = recorder)
             val changedPaths = GitChangedPaths()
-            val control = ConfiguredDispatchControl(registry, source, env, store, recorder, clock, log)
+            val control = ConfiguredDispatchControl(registry, source, env, store, recorder, clock, log, settings)
             val stepUp = ModelStepUp(MODEL_LADDER, store)
             commands.events.addListener(stepUp::onEvent)
             val gateRunner = ProcessGateRunner(log)

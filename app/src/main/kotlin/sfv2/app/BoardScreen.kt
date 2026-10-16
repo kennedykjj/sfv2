@@ -41,12 +41,15 @@ private const val ID_LENGTH = 8
  * false dims the last known state and says so. Titles are external text: drawn as plain text, never interpreted.
  */
 @Composable
-fun BoardScreen(view: BoardView?, connected: Boolean) {
+fun BoardScreen(view: BoardView?, connected: Boolean, onOpenSettings: (() -> Unit)? = null) {
     Column(
         modifier = Modifier.fillMaxSize().background(Tokens.ground).padding(16.dp).semantics { contentDescription = Texts.BOARD },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!connected) StaleBanner()
+        if (connected && onOpenSettings != null) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { SettingsButton(onOpenSettings) }
+        }
         val board = view?.board
         if (board != null && board.cards.isEmpty()) {
             BasicText(Texts.EMPTY_BOARD, style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft))

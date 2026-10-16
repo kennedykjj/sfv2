@@ -2,6 +2,7 @@ package sfv2.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -27,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-fun ConnectionScreen(state: ConnectionState) {
+fun ConnectionScreen(state: ConnectionState, onOpenSettings: (() -> Unit)? = null) {
     Box(
         modifier = Modifier.fillMaxSize().background(Tokens.ground).padding(16.dp),
         contentAlignment = Alignment.Center,
@@ -53,8 +55,23 @@ fun ConnectionScreen(state: ConnectionState) {
                 BasicText(headline(state), style = TextStyle(fontFamily = sans, fontSize = 15.sp, color = Tokens.text))
             }
             if (state is ConnectionState.Disconnected) Explanation(Texts.explain(state.reason))
+            if (state == ConnectionState.Connected && onOpenSettings != null) {
+                SettingsButton(onOpenSettings)
+            }
         }
     }
+}
+
+@Composable
+internal fun SettingsButton(onClick: () -> Unit) {
+    BasicText(
+        Texts.OPEN_SETTINGS,
+        modifier = Modifier
+            .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.text),
+    )
 }
 
 @Composable

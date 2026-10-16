@@ -117,6 +117,35 @@ class RunCostTest {
     }
 
     @Test
+    fun `provider AC-6 a transcript by provider is Known for a priced model and Partial or Unknown naming the model otherwise, never zero`() {
+        val table = PriceTable.parse(
+            RunCostFixtures.pricesYaml + "\n  anthropic.claude-bedrock-v1:0:\n    input: 3.00\n    output: 15.00\n",
+        )
+        val priced = recordWith(table, RunCostFixtures.claudeLine("m1", "anthropic.claude-bedrock-v1:0", 1_000_000, 0, 0, 0, 0))
+        val partial = recordWith(
+            table,
+            RunCostFixtures.claudeLine("m1", "model-a", 1_000_000, 0, 0, 0, 0),
+            RunCostFixtures.claudeLine("m2", "vertex-ai/claude-unlisted@20260101", 10, 10, 0, 0, 0),
+        )
+        val unknown = recordWith(table, RunCostFixtures.claudeLine("m1", "proxy/corp-model-x", 10, 10, 0, 0, 0))
+
+        assertThat(priced["status"]).isEqualTo("KNOWN")
+        assertThat(BigDecimal(requireNotNull(priced["cost_usd"]))).isEqualByComparingTo(BigDecimal("3"))
+        assertThat(partial["status"]).isEqualTo("PARTIAL")
+        assertThat(partial["unpriced_models"]).contains("vertex-ai/claude-unlisted@20260101")
+        assertThat(unknown["status"]).isEqualTo("UNKNOWN")
+        assertThat(unknown).doesNotContainKey("cost_usd")
+        assertThat(unknown["reason"]).contains("proxy/corp-model-x")
+    }
+
+    private fun recordWith(table: PriceTable, vararg lines: String): Map<String, String> {
+        val own = RunCostRecorder(store, EventRecorder(store, stream), table, clock)
+        val baseline = store.eventsAfter(0).maxOf { it.seq }
+        own.record("c1", "run-p", "claude", "develop", "model-a", exited(transcript(*lines)))
+        return store.eventsAfter(baseline).single().event.payload
+    }
+
+    @Test
     fun `a price table in the V0 layout with model names at the top level is read`() {
         val v0 = """
             # US${'$'} per million tokens
