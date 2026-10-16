@@ -344,4 +344,117 @@ class CardImportTest {
         assertThat(byId.map { it.title }).containsExactly("Topic closed")
         assertThat(withRef("2")).hasSize(1)
     }
+
+    private fun boardLine(rows: List<Pair<String, String>>, project: String = "alpha"): String {
+        val json = rows.joinToString(",") { """{"id":"${it.first}","column":"${it.second}"}""" }
+        return """{"cmd":"card.import_board","actor":"owner","project":"$project","rows":[$json],"proof":"$token"}"""
+    }
+
+    private class BoardOutcome(val cards: List<CardView>, val ignored: List<Pair<String, String>>)
+
+    private fun importBoard(vararg rows: Pair<String, String>): BoardOutcome {
+        val response = runCatching { importer()(boardLine(rows.toList())) }.getOrNull()
+        assertThat(response?.javaClass?.simpleName).describedAs("board import response").isEqualTo("BoardImportResult")
+        val result = requireNotNull(response)
+        val cards = result.javaClass.methods.single { it.name == "getCards" }.invoke(result) as List<*>
+        val ignored = result.javaClass.methods.single { it.name == "getIgnored" }.invoke(result) as List<*>
+        return BoardOutcome(
+            cards.map { it as CardView },
+            ignored.map { nullable ->
+                val row = requireNotNull(nullable)
+                val id = row.javaClass.methods.single { it.name == "getId" }.invoke(row) as String
+                val reason = row.javaClass.methods.single { it.name == "getReason" }.invoke(row) as String
+                id to reason
+            },
+        )
+    }
+
+    private fun columnOf(externalId: String): Column? =
+        withRef(externalId).singleOrNull()?.let { store.card(it)?.column }
+
+    private fun createdPayload(externalId: String): Map<String, String> =
+        store.events(withRef(externalId).single()).single { it.type == EventType.CARD_CREATED }.payload
+
+    @Test
+    fun `AC-1 a board import places each card in its mapped column, open issues off the board in Inbox, closed Done issues in Done`() {
+        tracker.seed(item("1", "Inbox one"))
+        tracker.seed(item("2", "Refine two"))
+        tracker.seed(item("3", "Review three"))
+        tracker.seed(item("4", "Closed four", state = TrackerItemState.CLOSED))
+        tracker.seed(item("5", "Open five off the board"))
+
+        val outcome = importBoard("1" to "Inbox", "2" to "Ready for Refinement", "3" to "Spec Review", "4" to "Done")
+
+        assertThat(outcome.ignored).isEmpty()
+        assertThat(outcome.cards).hasSize(5)
+        assertThat(columnOf("1")).isEqualTo(Column.INBOX)
+        assertThat(columnOf("2")).isEqualTo(Column.READY_FOR_REFINEMENT)
+        assertThat(columnOf("3")).isEqualTo(Column.SPEC_REVIEW)
+        assertThat(columnOf("4")).isEqualTo(Column.DONE)
+        assertThat(columnOf("5")).isEqualTo(Column.INBOX)
+        assertThat(createdPayload("2")["origin"]).isEqualTo("v0")
+        assertThat(createdPayload("5")["origin"]).isEqualTo("v0")
+        assertThat(store.projectOf(withRef("3").single())).isEqualTo(alpha)
+    }
+
+    @Test
+    fun `AC-2 importing the board again duplicates no card and records no new creation`() {
+        tracker.seed(item("1", "One"))
+        tracker.seed(item("2", "Two"))
+        tracker.seed(item("3", "Open three"))
+        importBoard("1" to "Coding", "2" to "Inbox")
+        val cardsBefore = store.cards().size
+        val eventsBefore = store.eventsAfter(0).size
+
+        val second = importBoard("1" to "Coding", "2" to "Inbox")
+
+        assertThat(second.cards).isEmpty()
+        assertThat(store.cards()).hasSize(cardsBefore).hasSize(3)
+        assertThat(store.eventsAfter(0)).hasSize(eventsBefore)
+        assertThat(withRef("1")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-3 a row with an unknown column is reported and ignored while the others are imported`() {
+        tracker.seed(item("1", "One"))
+        tracker.seed(item("2", "Two"))
+
+        val outcome = importBoard("1" to "Backlog", "2" to "Spec Review")
+
+        assertThat(outcome.ignored).containsExactly("1" to "unknown_column")
+        assertThat(withRef("1")).isEmpty()
+        assertThat(columnOf("2")).isEqualTo(Column.SPEC_REVIEW)
+    }
+
+    @Test
+    fun `AC-4 a row whose issue does not exist is reported and ignored while the others are imported`() {
+        tracker.seed(item("2", "Two"))
+
+        val outcome = importBoard("404" to "Inbox", "2" to "Ready for Refinement")
+
+        assertThat(outcome.ignored).containsExactly("404" to "not_found")
+        assertThat(withRef("404")).isEmpty()
+        assertThat(columnOf("2")).isEqualTo(Column.READY_FOR_REFINEMENT)
+        assertThat(store.cards()).hasSize(1)
+    }
+
+    @Test
+    fun `AC-5 Technical Refinement is Ready for Refinement and in-flight V0 columns land in Spec Review with v0_column`() {
+        val v0 = listOf("Ready for Dev", "Coding", "Validation", "Staged", "Ready for Prod")
+        v0.forEachIndexed { index, _ -> tracker.seed(item("${index + 10}", "In flight ${index + 10}")) }
+        tracker.seed(item("1", "Tech refinement"))
+
+        val outcome = importBoard(
+            *(listOf("1" to "Technical Refinement") + v0.mapIndexed { index, name -> "${index + 10}" to name }).toTypedArray(),
+        )
+
+        assertThat(outcome.ignored).isEmpty()
+        assertThat(columnOf("1")).isEqualTo(Column.READY_FOR_REFINEMENT)
+        v0.forEachIndexed { index, name ->
+            val id = "${index + 10}"
+            assertThat(columnOf(id)).describedAs(name).isEqualTo(Column.SPEC_REVIEW)
+            assertThat(createdPayload(id)["v0_column"]).describedAs(name).isEqualTo(name)
+            assertThat(createdPayload(id)["origin"]).isEqualTo("v0")
+        }
+    }
 }

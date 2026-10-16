@@ -17,7 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 
 /** Outcome of one request to the daemon. */
 sealed interface DaemonResult {
-    data class Ok(val result: JsonElement) : DaemonResult
+    data class Ok(val result: JsonElement, val ignored: JsonElement? = null) : DaemonResult
     data class DaemonError(val message: String) : DaemonResult
     data object Unavailable : DaemonResult
 }
@@ -86,7 +86,7 @@ class DaemonClient(private val socket: Path) {
     private fun parseReply(line: String): DaemonResult {
         val obj = parseObject(line) ?: return DaemonResult.DaemonError("daemon sent an unreadable reply")
         val ok = (obj["ok"] as? JsonPrimitive)?.booleanOrNull
-        if (ok == true) return DaemonResult.Ok(obj["result"] ?: JsonPrimitive(null as String?))
+        if (ok == true) return DaemonResult.Ok(obj["result"] ?: JsonPrimitive(null as String?), obj["ignored"])
         val message = (obj["error"] as? JsonPrimitive)?.contentOrNull ?: "daemon refused the request"
         return DaemonResult.DaemonError(message)
     }

@@ -55,6 +55,17 @@ sealed interface Request {
             "CardImport(actor=$actor, project=$project, id=$id, query=${if (query == null) "null" else "***"}, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Imports the V0 board [rows] (issue id and V0 column name) plus the open issues, from the tracker of [project]. */
+    data class CardImportBoard(
+        val actor: Actor,
+        val project: String? = null,
+        val rows: List<BoardRow> = emptyList(),
+        val proof: String? = null,
+    ) : Request {
+        override fun toString(): String =
+            "CardImportBoard(actor=$actor, project=$project, rows=${rows.size}, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -71,11 +82,18 @@ sealed interface Request {
 /** A card as the client sees it. */
 data class CardView(val id: String, val title: String, val column: Column)
 
+/** One line of the V0 board: the issue number and the V0 column name. */
+data class BoardRow(val id: String, val column: String)
+
+/** A board row that was not imported; [reason] is `unknown_column` or `not_found`. */
+data class IgnoredRow(val id: String, val reason: String)
+
 /** A reply to the client. */
 sealed interface Response {
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
     data class CardsResult(val cards: List<CardView>) : Response
+    data class BoardImportResult(val cards: List<CardView>, val ignored: List<IgnoredRow>) : Response
     data class ReportResult(val csv: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
@@ -134,6 +152,11 @@ fun parseRequest(line: String): Request {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             Request.CardImport(actor, stringField(obj, "project"), stringField(obj, "id"), stringField(obj, "query"), stringField(obj, "proof"))
         }
+        "card.import_board" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val rows = parseRows(obj) ?: return Request.Rejected("missing or invalid rows")
+            Request.CardImportBoard(actor, stringField(obj, "project"), rows, stringField(obj, "proof"))
+        }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
         "card.show" -> {
@@ -152,6 +175,14 @@ private fun parseSubscribe(obj: JsonObject): Request {
     val after = if (primitive == null || primitive.isString) null else primitive.content.toLongOrNull()
     if (after == null || after < 0) return Request.Rejected("invalid after")
     return Request.Subscribe(after)
+}
+
+private fun parseRows(obj: JsonObject): List<BoardRow>? {
+    val array = obj["rows"] as? JsonArray ?: return null
+    return array.map { element ->
+        val row = element as? JsonObject ?: return null
+        BoardRow(stringField(row, "id") ?: return null, stringField(row, "column") ?: return null)
+    }
 }
 
 private fun stringField(obj: JsonObject, key: String): String? {
@@ -254,6 +285,21 @@ fun render(response: Response): String = when (response) {
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.cards.map { cardJson(it) }))
+    }.toString()
+    is Response.BoardImportResult -> buildJsonObject {
+        put("ok", true)
+        put("result", JsonArray(response.cards.map { cardJson(it) }))
+        put(
+            "ignored",
+            JsonArray(
+                response.ignored.map { row ->
+                    buildJsonObject {
+                        put("id", row.id)
+                        put("reason", row.reason)
+                    }
+                },
+            ),
+        )
     }.toString()
     is Response.ReportResult -> buildJsonObject {
         put("ok", true)

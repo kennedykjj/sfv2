@@ -10,6 +10,10 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.long
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.InvalidPathException
+import java.nio.file.Path
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -47,9 +51,12 @@ class CliEnvironment(
     }
 
     /** Sends [request] and returns the daemon's result, or fails with the right message. */
-    fun call(request: JsonObject): JsonElement =
+    fun call(request: JsonObject): JsonElement = callFull(request).result
+
+    /** Like [call], keeping the extra fields of the reply. */
+    fun callFull(request: JsonObject): DaemonResult.Ok =
         when (val result = client().request(request)) {
-            is DaemonResult.Ok -> result.result
+            is DaemonResult.Ok -> result
             is DaemonResult.DaemonError -> fail(result.message)
             DaemonResult.Unavailable -> fail(DAEMON_DOWN_MESSAGE)
         }
@@ -174,6 +181,55 @@ class CardRebuild(private val cli: CliEnvironment) : CliktCommand(name = "rebuil
     }
 }
 
+class CardImportBoard(private val cli: CliEnvironment) : CliktCommand(name = "import-board") {
+    private val file by argument(help = "TSV file with lines <issue><TAB><column>")
+    private val project by option("--project", help = "Project the cards belong to")
+
+    override fun help(context: Context) = "Import the cards of the V0 board into the mapped columns."
+
+    override fun run() {
+        val text = try {
+            Files.readString(Path.of(file))
+        } catch (e: IOException) {
+            cli.fail("não foi possível ler o arquivo: $file")
+        } catch (e: InvalidPathException) {
+            cli.fail("não foi possível ler o arquivo: $file")
+        }
+        val rows = text.lines().filter { it.isNotBlank() }.mapNotNull { line ->
+            val parts = line.split('\t')
+            val id = parts[0].trim().removePrefix("#")
+            val column = parts.getOrNull(1)?.trim().orEmpty()
+            if (id.isEmpty() || column.isEmpty()) null else id to column
+        }
+        val token = cli.ownerToken()
+        val request = buildJsonObject {
+            put("cmd", "card.import_board")
+            put("actor", "owner")
+            project?.let { put("project", it) }
+            put(
+                "rows",
+                JsonArray(
+                    rows.map { (id, column) ->
+                        buildJsonObject {
+                            put("id", id)
+                            put("column", column)
+                        }
+                    },
+                ),
+            )
+            put("proof", token)
+        }
+        val reply = cli.callFull(request)
+        val cards = reply.result as? JsonArray ?: cli.fail("resposta inesperada do daemon")
+        cards.forEach { cli.out(cardLine(it)) }
+        (reply.ignored as? JsonArray).orEmpty().forEach { item ->
+            val obj = item as? JsonObject ?: return@forEach
+            fun field(name: String) = (obj[name] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            cli.out("ignorada: #${field("id")} (${field("reason")})")
+        }
+    }
+}
+
 class CardShow(private val cli: CliEnvironment) : CliktCommand(name = "show") {
     private val id by argument(help = "Card id")
 
@@ -218,6 +274,6 @@ class EventsCommand(private val cli: CliEnvironment) : CliktCommand(name = "even
 /** Registers the card group and the events command on [root]. */
 fun Sfv2Command.withCardCommands(cli: CliEnvironment): Sfv2Command =
     subcommands(
-        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardRebuild(cli), CardShow(cli)),
+        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardRebuild(cli), CardImportBoard(cli), CardShow(cli)),
         EventsCommand(cli),
     ) as Sfv2Command
