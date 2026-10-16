@@ -2,6 +2,7 @@ package sfv2.daemon
 
 import java.io.File
 import java.io.IOException
+import java.math.BigDecimal
 import java.time.Duration
 import java.time.ZoneId
 import java.util.concurrent.locks.LockSupport
@@ -1362,6 +1363,83 @@ class SocketServerTest {
             assertThat(shownAfter.getValue("blocked").jsonPrimitive.boolean).isFalse()
             assertThat(shownAfter.str("column")).isEqualTo("READY_FOR_DEV")
         }
+
+    private fun seedMoved(store: CardEventStore, id: String, to: Column, secondsAfterCreation: Long) {
+        seed(store, id, Column.INBOX)
+        val event = Event(
+            EventId("move-$id"),
+            fixedNow.plusSeconds(secondsAfterCreation),
+            Actor.Owner,
+            EventType.CARD_MOVED,
+            mapOf("from" to Column.INBOX.name, "to" to to.name),
+        )
+        store.recordChange(id, Card.create("Seeded", to), event)
+    }
+
+    private fun seedRun(store: CardEventStore, id: String, column: Column, seq: Int, fields: Map<String, String>) {
+        val event = Event(
+            EventId("$id-run-$seq"),
+            fixedNow.plusSeconds(seq.toLong()),
+            Actor.Factory("run-cost"),
+            EventType.RUN_COST_RECORDED,
+            mapOf("run_id" to "run-$seq", "stage" to "develop", "runtime" to "claude", "estimate" to "true") + fields,
+        )
+        store.recordChange(id, Card.create("Seeded", column), event)
+    }
+
+    private fun known(usd: String) = mapOf("status" to "KNOWN", "cost_usd" to usd)
+
+    private val unknownRun = mapOf("status" to "UNKNOWN", "reason" to "no price for the model")
+
+    @Test
+    fun `AC-1 card list carries when the card entered its column and its total cost with status, writing nothing`() =
+        withCardServer { store ->
+            seedMoved(store, "moved", Column.CODING, secondsAfterCreation = 300)
+            seedRun(store, "moved", Column.CODING, 400, known("0.40"))
+            seedRun(store, "moved", Column.CODING, 401, known("0.02"))
+            seedMoved(store, "partial", Column.VALIDATION, secondsAfterCreation = 60)
+            seedRun(store, "partial", Column.VALIDATION, 70, known("1.50"))
+            seedRun(store, "partial", Column.VALIDATION, 71, unknownRun)
+            seedMoved(store, "unpriced", Column.REFINEMENT, secondsAfterCreation = 60)
+            seedRun(store, "unpriced", Column.REFINEMENT, 70, unknownRun)
+            seedMoved(store, "idle", Column.READY_FOR_REFINEMENT, secondsAfterCreation = 60)
+            seedBlocked(store, "stuck", Column.CODING)
+            val ids = listOf("moved", "partial", "unpriced", "idle", "stuck")
+            val before = ids.associateWith { store.events(it) }
+
+            val listed = reply("""{"cmd":"card.list"}""").getValue("result").jsonArray.map { it.jsonObject }
+            val byId = listed.associateBy { it.str("id") }
+
+            val moved = byId.getValue("moved")
+            assertThat(moved.str("enteredAt")).isEqualTo(fixedNow.plusSeconds(300).toString())
+            assertThat(moved.getValue("cost").jsonObject.str("status")).isEqualTo("KNOWN")
+            assertThat(BigDecimal(moved.getValue("cost").jsonObject.str("costUsd"))).isEqualByComparingTo("0.42")
+            assertThat(byId.getValue("partial").getValue("cost").jsonObject.str("status")).isEqualTo("PARTIAL")
+            assertThat(BigDecimal(byId.getValue("partial").getValue("cost").jsonObject.str("costUsd"))).isEqualByComparingTo("1.50")
+            val unpriced = byId.getValue("unpriced").getValue("cost").jsonObject
+            assertThat(unpriced.str("status")).isEqualTo("UNKNOWN")
+            assertThat(unpriced.containsKey("costUsd")).isFalse()
+            val idle = byId.getValue("idle").getValue("cost").jsonObject
+            assertThat(idle.str("status")).isEqualTo("NONE")
+            assertThat(idle.containsKey("costUsd")).isFalse()
+            assertThat(byId.getValue("stuck").getValue("blocked").jsonPrimitive.boolean).isTrue()
+            assertThat(byId.getValue("moved").getValue("blocked").jsonPrimitive.boolean).isFalse()
+            assertThat(moved.str("column")).isEqualTo("CODING")
+            assertThat(moved.str("title")).isEqualTo("Seeded")
+            assertThat(ids.associateWith { store.events(it) }).isEqualTo(before)
+        }
+
+    @Test
+    fun `AC-1 card list adds no free text beyond the existing fields, the instant and the cost`() = withCardServer { store ->
+        seedMoved(store, "moved", Column.CODING, secondsAfterCreation = 300)
+        seedRun(store, "moved", Column.CODING, 400, unknownRun)
+
+        val row = reply("""{"cmd":"card.list"}""").getValue("result").jsonArray.single().jsonObject
+
+        assertThat(row.keys).containsExactlyInAnyOrder("id", "title", "column", "blocked", "enteredAt", "cost")
+        assertThat(row.getValue("cost").jsonObject.keys).containsExactlyInAnyOrder("status")
+        assertThat(row.toString()).doesNotContain("no price for the model")
+    }
 
     @Test
     fun `AC-7 closing the server removes the socket`() {

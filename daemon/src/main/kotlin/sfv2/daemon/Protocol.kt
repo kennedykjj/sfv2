@@ -144,7 +144,17 @@ sealed interface Request {
 }
 
 /** A card as the client sees it. */
-data class CardView(val id: String, val title: String, val column: Column, val blocked: Boolean = false)
+data class CardView(
+    val id: String,
+    val title: String,
+    val column: Column,
+    val blocked: Boolean = false,
+    val enteredAt: Instant? = null,
+    val cost: CardListCost? = null,
+)
+
+/** The total cost of a card in `card.list`: [costUsd] is present only for [CostStatus.KNOWN] and [CostStatus.PARTIAL]. */
+data class CardListCost(val status: CostStatus, val costUsd: BigDecimal? = null)
 
 /** One line of the V0 board: the issue number and the V0 column name. */
 data class BoardRow(val id: String, val column: String)
@@ -411,6 +421,16 @@ private fun cardJson(card: CardView): JsonObject = buildJsonObject {
     put("title", card.title)
     put("column", card.column.name)
     put("blocked", card.blocked)
+    card.enteredAt?.let { put("enteredAt", it.toString()) }
+    card.cost?.let { cost ->
+        put(
+            "cost",
+            buildJsonObject {
+                put("status", cost.status.name)
+                cost.costUsd?.let { put("costUsd", it.toPlainString()) }
+            },
+        )
+    }
 }
 
 private fun projectJson(project: Project): JsonObject = buildJsonObject {

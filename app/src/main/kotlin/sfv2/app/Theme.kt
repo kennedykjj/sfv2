@@ -20,6 +20,9 @@ object Tokens {
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
     val bad = Color(0xFFE58F80)
+    val refine = Color(0xFF8FA8C7)
+    val develop = Color(0xFF7FCDBF)
+    val validate = Color(0xFFC896EC)
 }
 
 val sans = FontFamily.SansSerif
@@ -37,6 +40,9 @@ object Texts {
     const val WAITS_FOR_YOU = "Aguarda você"
     const val MEDIAN = "mediana"
     const val MEAN_WAIT = "espera média"
+    const val AGO = "há"
+    const val BLOCKED = "bloqueado"
+    const val COST_UNKNOWN = "custo desconhecido"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"

@@ -7,11 +7,14 @@ import java.net.UnixDomainSocketAddress
 import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Path
+import java.time.Instant
+import java.time.format.DateTimeParseException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
@@ -85,13 +88,7 @@ class SocketBoardSource(private val socket: Path) : BoardSource {
         }
     }
 
-    private fun parseCard(element: JsonElement?): BoardCard? {
-        val obj = element as? JsonObject ?: return null
-        val id = obj["id"]?.jsonPrimitiveOrNull()?.contentOrNull ?: return null
-        val title = obj["title"]?.jsonPrimitiveOrNull()?.contentOrNull ?: return null
-        val column = obj["column"]?.jsonPrimitiveOrNull()?.contentOrNull?.let { name -> Column.entries.firstOrNull { it.name == name } }
-        return column?.let { BoardCard(id, title, it) }
-    }
+    private fun parseCard(element: JsonElement?): BoardCard? = parseBoardCard(element)
 
     private fun parseEvent(element: JsonElement?): BoardEvent? {
         val obj = element as? JsonObject ?: return null
@@ -106,4 +103,32 @@ class SocketBoardSource(private val socket: Path) : BoardSource {
     }
 
     private fun JsonElement.jsonPrimitiveOrNull(): JsonPrimitive? = this as? JsonPrimitive
+}
+
+private fun JsonElement.primitiveOrNull(): JsonPrimitive? = this as? JsonPrimitive
+
+/** Reads one `card.list` row, tolerating a daemon that does not send the newer fields or sends unreadable ones. */
+fun parseBoardCard(element: JsonElement?): BoardCard? {
+    val obj = element as? JsonObject ?: return null
+    val id = obj["id"]?.primitiveOrNull()?.contentOrNull ?: return null
+    val title = obj["title"]?.primitiveOrNull()?.contentOrNull ?: return null
+    val column = obj["column"]?.primitiveOrNull()?.contentOrNull?.let { name -> Column.entries.firstOrNull { it.name == name } }
+        ?: return null
+    val blocked = obj["blocked"]?.primitiveOrNull()?.booleanOrNull ?: false
+    val enteredAt = obj["enteredAt"]?.primitiveOrNull()?.contentOrNull?.let { text ->
+        try {
+            Instant.parse(text)
+        } catch (e: DateTimeParseException) {
+            null
+        }
+    }
+    return BoardCard(id, title, column, blocked, enteredAt, parseCardCost(obj["cost"]))
+}
+
+private fun parseCardCost(element: JsonElement?): BoardCost? {
+    val obj = element as? JsonObject ?: return null
+    val status = obj["status"]?.primitiveOrNull()?.contentOrNull?.let { name -> CostStatus.entries.firstOrNull { it.name == name } }
+        ?: return null
+    val usd = obj["costUsd"]?.primitiveOrNull()?.contentOrNull?.toBigDecimalOrNull()
+    return BoardCost(status, usd)
 }

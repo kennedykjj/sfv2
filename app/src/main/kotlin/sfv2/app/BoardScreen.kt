@@ -40,6 +40,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -70,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.Clock
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,6 +86,7 @@ private const val LANE_GAP = 8
 private val MAP_BOX_MIN_WIDTH = 12.dp
 private val MAP_COUNT_MIN_WIDTH = 24.dp
 private val EDGE_FADE_WIDTH = 24.dp
+private val STAGE_BAR = 3.dp
 
 /**
  * The conveyor belt: ten columns in product order. [view] is null until the first snapshot; [connected] false dims
@@ -439,6 +443,7 @@ private fun Lane(
     val waiting = isWaitingForOwner(column) && !cards.isNullOrEmpty()
     val accent = if (waiting) Tokens.sand else Tokens.text
     val shape = RoundedCornerShape(12.dp)
+    val hue = stageHue(column)
     val count = cards?.size
     val timeLabel = time?.let(ColumnTimeLabel::of)
     Column(
@@ -449,6 +454,9 @@ private fun Lane(
             .onGloballyPositioned { laneBounds[column] = it.boundsInRoot() }
             .background(Tokens.panel, shape)
             .border(if (accepts) 2.dp else 1.dp, if (accepts) Tokens.edgeHi else if (waiting) Tokens.sand else Tokens.edge, shape)
+            .drawBehind {
+                if (hue != StageHue.NEUTRAL) drawRect(hueColor(hue), size = Size(size.width, STAGE_BAR.toPx()))
+            }
             .padding(12.dp)
             .semantics { contentDescription = laneDescription(column, count ?: 0, waiting, timeLabel) },
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -497,7 +505,8 @@ private fun Card(
     var focused by remember { mutableStateOf(false) }
     var origin by remember { mutableStateOf(Offset.Zero) }
     var pointer by remember { mutableStateOf(Offset.Zero) }
-    val description = "${card.title}, $shortId" + if (movable) ", pode mover" else ""
+    val face = CardFace.of(card, Clock.systemUTC())
+    val description = face.description + if (movable) ", pode mover" else ""
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -541,16 +550,38 @@ private fun Card(
             },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        BasicText(shortId, style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = if (waiting) Tokens.sand else Tokens.muted))
-        BasicText(
-            card.title,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft),
-        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BasicText(shortId, style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = hueColor(stageHue(card.column))))
+                face.blockedLabel?.let { BasicText(it, style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.bad)) }
+            }
+            BasicText(
+                card.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft),
+            )
+            val meta = listOfNotNull(face.stage, face.age, face.cost, face.costNote).joinToString(" · ")
+            BasicText(
+                meta,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.muted),
+            )
+        }
     }
 }
+
+/** The color of a stage hue; the accent is the sand of the owner-decision columns, neutral is plain muted text. */
+private fun hueColor(hue: StageHue): Color =
+    when (hue) {
+        StageHue.REFINE -> Tokens.refine
+        StageHue.DEVELOP -> Tokens.develop
+        StageHue.VALIDATE -> Tokens.validate
+        StageHue.OK -> Tokens.ok
+        StageHue.ACCENT -> Tokens.sand
+        StageHue.NEUTRAL -> Tokens.muted
+    }
 
 private fun laneDescription(column: BoardColumn, count: Int, waiting: Boolean, timeLabel: String?): String {
     val base = "${column.displayName}, ${Texts.cardCount(count)}"
