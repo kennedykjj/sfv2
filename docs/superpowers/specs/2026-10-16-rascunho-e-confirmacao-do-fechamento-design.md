@@ -15,6 +15,8 @@ _Product Owner_
 - **AC-3** — Dado a confirmação do dono, quando o daemon a processa, então o evento assinado (prova do dono) é gravado antes da escrita no tracker, e a escrita é feita por código (`Tracker.close`), nunca por um agente.
 - **AC-4** — Dada uma confirmação sem prova válida do dono (ator não dono), quando chega ao daemon, então é recusada, nenhum evento de confirmação é gravado e nada é escrito no tracker.
 - **AC-5** — Dada a escrita no tracker falhar, então o card mostra o erro do fechamento e continua em Done, com a confirmação já registrada.
+- **AC-7** — Dado um card entregue no modo PR (sem `PR_MERGED`, com `pr` no movimento para Done), quando o rascunho é pedido, então o link vem desse `pr` e o rascunho não tem commit; sem nenhum dos dois, é recusado com `no_pr_recorded`.
+- **AC-8** — Dado um card cujo título tem `@time`, links ou markdown, quando o rascunho é gerado e confirmado, então o comentário escrito no tracker não contém o título.
 - **AC-6** — Dado um fechamento com erro, quando o dono tenta de novo, então a escrita é repetida sem novo evento de confirmação e sem comentário duplicado; um fechamento que já aconteceu no tracker conta como escrito.
 **Out of scope:** botões na CLI/app (UI), marcos opcionais (#55), porta única do texto externo (#57), Jira.
 **Product fit:** serve "toda ação é um evento com ator; a aprovação do dono é um evento assinado" e "nada sai da máquina sem evento assinado pelo dono"; fechamento confirmado é um dos toques permitidos no tracker. Não contradiz posicionamento nem escopo.
@@ -28,7 +30,7 @@ _Tech Lead_
 
 - Contratos: `core` ganha 3 `EventType`: `CLOSURE_CONFIRMED` (ator dono; payload `draft_hash`), `CLOSURE_WRITTEN` (ator fábrica; payload `result`: `closed` ou `already_closed`) e `CLOSURE_FAILED` (ator fábrica; payload `reason` curto, sem texto da issue). Porta `Tracker` inalterada.
 - `daemon`: nova classe `CardClosure(store, recorder, registry, trackerOf, ownerProof, clock, log)`, mesmo formato do `CardImport`. Dois comandos em `Protocol.kt`: `card.close.draft` (`Request.CardCloseDraft(id)`, só leitura, sem prova) e `card.close.confirm` (`Request.CardCloseConfirm(actor, id, draftHash, proof)`); resposta `Response.CloseDraftResult(status, summary, prLink, draftHash)`. Roteados em `SocketServer` e tratados como "not a card command" em `CardCommands`.
-- Rascunho: exige card em `DONE` com `ExternalRef` de provider `github`; status = coluna final, resumo = título do card + commit do merge (do último `PR_MERGED`), link do PR = `https://github.com/<repo do projeto>/pull/<pr do PR_MERGED>`. Nenhum texto do corpo da issue entra. `draftHash` = SHA-256 do rascunho.
+- Rascunho: exige card em `DONE` com `ExternalRef` de provider `github`; status = coluna final, resumo = id do card + commit do merge; link do PR = `<base da url da referência externa, sem o sufixo /issues/<id>>/pull/<número>` (o `Project.repo` é um caminho de pasta local, não um repositório do GitHub). O número do PR e o commit vêm do último `PR_MERGED` ou, nos cards entregues no modo PR (que não têm `PR_MERGED`), do campo `pr` do movimento para Done (sem commit: o resumo omite o commit). Sem número de PR em nenhuma das duas fontes, o rascunho é recusado com `no_pr_recorded`. O texto que vai para o tracker nunca contém texto vindo de fora: o título do card (que veio da issue e pode trazer menções `@time` e links) não entra no comentário postado, que leva só id do card, commit e link do PR; o dono vê o título só no rascunho local. Nenhum texto do corpo da issue entra. `draftHash` = SHA-256 do rascunho.
 - Confirmação: recusa não dono / prova inválida (AC-4) e card inelegível (AC-2); recusa se `draftHash` não bate com o rascunho atual. Grava `CLOSURE_CONFIRMED` antes de qualquer chamada; só então chama `tracker.close(externalId, comentário)`. Sucesso (`Closed` ou `AlreadyClosed`) grava `CLOSURE_WRITTEN`; `TrackerException` grava `CLOSURE_FAILED` e devolve o erro; o card continua em Done.
 - Nova tentativa (AC-6): o mesmo `card.close.confirm`. Se já há `CLOSURE_CONFIRMED` com o mesmo `draftHash` e sem `CLOSURE_WRITTEN` posterior, reaproveita-o (sem novo evento) e repete a escrita; com `CLOSURE_WRITTEN` já gravado devolve sucesso sem chamar o tracker. `Tracker.close` só comenta quando fecha, então a repetição não duplica o comentário.
 - O erro aparece no card pelo último `CLOSURE_FAILED` nos eventos do card (leitura já existente via `card.show`/stream); sem mudança de armazenamento.
@@ -45,6 +47,8 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
