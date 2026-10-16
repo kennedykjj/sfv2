@@ -61,4 +61,33 @@ class EventTest {
 
         assertThat(error).hasMessageContaining("TIME_TRAVEL")
     }
+
+    @Test
+    fun `AC-3 reading an unknown event type names the event id`() {
+        val json = EventJson.encode(EventFixtures.anEvent(id = "evt-7", type = EventType.CARD_CREATED))
+            .replace("CARD_CREATED", "TIME_TRAVEL")
+
+        val error = assertThrows<UnknownEventTypeException> { EventJson.decode(json) }
+
+        assertThat(error).hasMessageContaining("evt-7")
+    }
+
+    @Test
+    fun `reading an event without a field fails naming the field`() {
+        val json = EventJson.encode(EventFixtures.anEvent()).replace("\"id\":\"evt-1\",", "")
+
+        val error = assertThrows<InvalidEventJsonException> { EventJson.decode(json) }
+
+        assertThat(error).hasMessageContaining("id")
+    }
+
+    @Test
+    fun `reading an unknown actor kind fails without quoting the input`() {
+        val json = EventJson.encode(EventFixtures.anEvent(payload = mapOf("secret" to "s3cr3t")))
+            .replace("\"owner\"", "\"alien\"")
+
+        val error = assertThrows<InvalidEventJsonException> { EventJson.decode(json) }
+
+        assertThat(error.message).doesNotContain("s3cr3t")
+    }
 }

@@ -5,7 +5,7 @@ import java.time.Instant
 @JvmInline
 value class EventId(val value: String)
 
-/** Registro imutável de um efeito da fábrica. O instante entra por parâmetro. */
+/** Immutable record of one effect in the factory. The instant comes in as a parameter. */
 data class Event(
     val id: EventId,
     val at: Instant,
@@ -20,5 +20,9 @@ enum class EventType {
     OWNER_APPROVED,
 }
 
-/** Lançada na leitura de um evento cujo tipo não existe no catálogo. */
-class UnknownEventTypeException(type: String) : RuntimeException("unknown event type: $type")
+/** Thrown when reading an event whose type is not in the catalog. */
+class UnknownEventTypeException(type: String, eventId: String) :
+    RuntimeException("unknown event type: $type (event $eventId)")
+
+/** Thrown when an event's JSON is malformed, misses a field or has an unknown actor kind. Never quotes the input. */
+class InvalidEventJsonException(message: String) : RuntimeException(message)
