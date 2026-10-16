@@ -126,17 +126,42 @@ class RefineRuntime private constructor(
                 log = log,
                 onRunFinished = control::onRunFinished,
             )
-            val launcher = StageLauncher { stage, cardId ->
-                when (stage) {
-                    DispatchStage.REFINE -> refineLauncher.launch(stage, cardId)
-                    DispatchStage.DEVELOP -> developLauncher.launch(stage, cardId)
-                    else -> throw IllegalArgumentException("no launcher for stage $stage (card $cardId)")
-                }
-            }
+            val gateExecutor = GateExecutor(store, recorder, clock, gateRunner, log)
+            val validateLauncher = ValidateStageLauncher(
+                pipelineFor = { cardId ->
+                    val project = projectOf(cardId, store, registry)
+                    ValidatePipeline(
+                        project = project,
+                        store = store,
+                        recorder = recorder,
+                        worktrees = worktrees,
+                        sessions = sessions,
+                        mcpPort = endpoint.port,
+                        runtime = runtime,
+                        costRecorder = costRecorder,
+                        branchSync = SystemBranchSync(),
+                        gates = ProjectValidateGates(
+                            project, store, recorder, gateExecutor, changedPaths, clock, dataDir.resolve("gates"),
+                        ),
+                        configDir = dataDir.resolve("mcp"),
+                        clock = clock,
+                        model = MODEL,
+                    )
+                },
+                pool = pool,
+                log = log,
+                onRunFinished = control::onRunFinished,
+            )
             val dispatcher = Dispatcher(
                 store = store,
                 pool = pool,
-                launcher = launcher,
+                launcher = StageRouter(
+                    mapOf(
+                        DispatchStage.REFINE to refineLauncher,
+                        DispatchStage.DEVELOP to developLauncher,
+                        DispatchStage.VALIDATE to validateLauncher,
+                    ),
+                ),
                 pause = FilePauseSwitch(dataDir.resolve("PAUSE")),
                 schedule = control,
                 limits = DispatchLimits(emptyMap()),
@@ -144,7 +169,7 @@ class RefineRuntime private constructor(
                 tick = TICK,
                 log = log,
                 launchGuard = control,
-                stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP),
+                stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP, DispatchStage.VALIDATE),
             )
             return RefineRuntime(dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp)
         }

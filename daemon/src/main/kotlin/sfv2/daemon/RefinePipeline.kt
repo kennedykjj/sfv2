@@ -85,6 +85,24 @@ class SpecScopeRefineGates(
     }
 }
 
+/** Writes the MCP client config (it carries the session token) under [configDir] with mode 0600; the caller deletes it. */
+fun writeMcpConfig(configDir: Path, mcpPort: Int, token: String): Path {
+    Files.createDirectories(configDir)
+    val file = configDir.resolve("mcp-${UUID.randomUUID()}.json")
+    Files.createFile(file, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+    val json = buildJsonObject {
+        putJsonObject("mcpServers") {
+            putJsonObject("sfv2") {
+                put("type", "http")
+                put("url", "http://127.0.0.1:$mcpPort/mcp")
+                putJsonObject("headers") { put("Authorization", "Bearer $token") }
+            }
+        }
+    }
+    Files.writeString(file, json.toString())
+    return file
+}
+
 /** One pass of the refine stage: runs the agent, judges it with gates, and moves the card on the gates' word. */
 @Suppress("LongParameterList")
 class RefinePipeline(
@@ -144,22 +162,7 @@ class RefinePipeline(
         }
     }
 
-    private fun writeConfig(token: String): Path {
-        Files.createDirectories(configDir)
-        val file = configDir.resolve("mcp-${UUID.randomUUID()}.json")
-        Files.createFile(file, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
-        val json = buildJsonObject {
-            putJsonObject("mcpServers") {
-                putJsonObject("sfv2") {
-                    put("type", "http")
-                    put("url", "http://127.0.0.1:$mcpPort/mcp")
-                    putJsonObject("headers") { put("Authorization", "Bearer $token") }
-                }
-            }
-        }
-        Files.writeString(file, json.toString())
-        return file
-    }
+    private fun writeConfig(token: String): Path = writeMcpConfig(configDir, mcpPort, token)
 
     private fun recordCost(cardId: String, result: SessionResult) {
         costRecorder.record(cardId, UUID.randomUUID().toString(), runtimeName, "refine", model, result)

@@ -25,6 +25,14 @@ fun interface StageLauncher {
     fun launch(stage: DispatchStage, cardId: String): LaunchedRun
 }
 
+/** Delegates each stage to its own launcher; a stage without one is a wiring error. */
+class StageRouter(private val launchers: Map<DispatchStage, StageLauncher>) : StageLauncher {
+    override fun launch(stage: DispatchStage, cardId: String): LaunchedRun {
+        val launcher = requireNotNull(launchers[stage]) { "no launcher for stage $stage (card $cardId)" }
+        return launcher.launch(stage, cardId)
+    }
+}
+
 fun interface PauseSwitch {
     fun isPaused(): Boolean
 }
