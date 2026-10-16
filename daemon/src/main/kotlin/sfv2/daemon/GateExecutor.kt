@@ -71,7 +71,9 @@ class GateExecutor(
         require(outputFile.startsWith(base)) { "invalid gate name: output file escapes the run directory" }
         Files.createDirectories(base)
 
+        val startedAt = clock.instant()
         val run = runner.run(spec, outputFile)
+        val finishedAt = clock.instant()
         if (!Files.exists(outputFile)) Files.createFile(outputFile)
 
         val (verdict, reason) = when {
@@ -102,12 +104,13 @@ class GateExecutor(
             put("verdict", if (verdict is GateVerdict.Pass) "PASS" else "FAIL")
             if (reason != null) put("reason", reason)
             if (!run.timedOut && run.exitCode != null) put("exit_code", run.exitCode.toString())
+            put("duration_ms", Duration.between(startedAt, finishedAt).toMillis().toString())
             put("summary", summary(outputFile))
             put("output_file", outputFile.toString())
         }
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
-            at = clock.instant(),
+            at = finishedAt,
             actor = Actor.Factory("gate"),
             type = EventType.GATE_FINISHED,
             payload = payload,
