@@ -7,6 +7,7 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.convert
 import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.long
 import kotlinx.serialization.json.JsonArray
@@ -119,6 +120,42 @@ class CardMove(private val cli: CliEnvironment) : CliktCommand(name = "move") {
     }
 }
 
+class CardApprove(private val cli: CliEnvironment) : CliktCommand(name = "approve") {
+    private val id by argument(help = "Card id")
+
+    override fun help(context: Context) = "Approve a card waiting for the owner."
+
+    override fun run() {
+        val token = cli.ownerToken()
+        val request = buildJsonObject {
+            put("cmd", "card.approve")
+            put("actor", "owner")
+            put("id", id)
+            put("proof", token)
+        }
+        cli.out(cardLine(cli.call(request)))
+    }
+}
+
+class CardRequestChange(private val cli: CliEnvironment) : CliktCommand(name = "request-change") {
+    private val id by argument(help = "Card id")
+    private val note by option("--note", help = "What must change").required()
+
+    override fun help(context: Context) = "Ask for changes on a card."
+
+    override fun run() {
+        val token = cli.ownerToken()
+        val request = buildJsonObject {
+            put("cmd", "card.request-change")
+            put("actor", "owner")
+            put("id", id)
+            put("note", note)
+            put("proof", token)
+        }
+        cli.out(cardLine(cli.call(request)))
+    }
+}
+
 class CardShow(private val cli: CliEnvironment) : CliktCommand(name = "show") {
     private val id by argument(help = "Card id")
 
@@ -163,6 +200,6 @@ class EventsCommand(private val cli: CliEnvironment) : CliktCommand(name = "even
 /** Registers the card group and the events command on [root]. */
 fun Sfv2Command.withCardCommands(cli: CliEnvironment): Sfv2Command =
     subcommands(
-        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardShow(cli)),
+        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardShow(cli)),
         EventsCommand(cli),
     ) as Sfv2Command
