@@ -36,11 +36,16 @@ class MoveRulesTest {
     }
 
     @Test
-    fun `AC-3 refuses factory moving Ready for Prod to Done and accepts the owner`() {
+    fun `AC-3 refuses factory releasing Staged to Ready for Prod and accepts the owner`() {
         nonOwners.forEach { actor ->
-            assertThat(MoveRules.check(READY_FOR_PROD, DONE, actor)).isInstanceOf(MoveDecision.Refused::class.java)
+            assertThat(MoveRules.check(STAGED, READY_FOR_PROD, actor)).isInstanceOf(MoveDecision.Refused::class.java)
         }
-        assertThat(MoveRules.check(READY_FOR_PROD, DONE, Actor.Owner)).isEqualTo(MoveDecision.Allowed)
+        assertThat(MoveRules.check(STAGED, READY_FOR_PROD, Actor.Owner)).isEqualTo(MoveDecision.Allowed)
+    }
+
+    @Test
+    fun `factory closes a released card moving Ready for Prod to Done`() {
+        assertThat(MoveRules.check(READY_FOR_PROD, DONE, Actor.Factory("deploy"))).isEqualTo(MoveDecision.Allowed)
     }
 
     @Test
@@ -84,9 +89,9 @@ class MoveRulesTest {
             (CODING to VALIDATION) to FACTORY_OR_OWNER,
             (VALIDATION to CODING) to FACTORY_OR_OWNER,
             (VALIDATION to STAGED) to FACTORY_OR_OWNER,
-            (STAGED to READY_FOR_PROD) to FACTORY_OR_OWNER,
+            (STAGED to READY_FOR_PROD) to OWNER_ONLY,
             (STAGED to CODING) to FACTORY_OR_OWNER,
-            (READY_FOR_PROD to DONE) to OWNER_ONLY,
+            (READY_FOR_PROD to DONE) to FACTORY_OR_OWNER,
         )
         assertThat(MoveRules.table).isEqualTo(expected)
 

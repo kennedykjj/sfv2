@@ -34,9 +34,9 @@ object MoveRules {
         (CODING to VALIDATION) to FACTORY_OR_OWNER,
         (VALIDATION to CODING) to FACTORY_OR_OWNER,
         (VALIDATION to STAGED) to FACTORY_OR_OWNER,
-        (STAGED to READY_FOR_PROD) to FACTORY_OR_OWNER,
+        (STAGED to READY_FOR_PROD) to OWNER_ONLY,
         (STAGED to CODING) to FACTORY_OR_OWNER,
-        (READY_FOR_PROD to DONE) to OWNER_ONLY,
+        (READY_FOR_PROD to DONE) to FACTORY_OR_OWNER,
     )
 
     fun check(from: Column, to: Column, actor: Actor): MoveDecision {
