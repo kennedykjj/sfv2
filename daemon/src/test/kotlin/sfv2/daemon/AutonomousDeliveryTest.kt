@@ -37,6 +37,7 @@ class AutonomousDeliveryTest {
     private val clock: Clock = Clock.fixed(Instant.parse("2026-10-16T12:00:00Z"), ZoneOffset.UTC)
     private val forge = FakeForge()
     private var pauses = 0
+    private var pauseHook: () -> Unit = {}
     private var sequence = 0
     private val policies = ProjectPolicies.DEFAULT
 
@@ -55,7 +56,7 @@ class AutonomousDeliveryTest {
     }
 
     private fun delivery(maxPolls: Int = 3) = AutonomousDelivery(
-        store, recorder, { forge }, { policies }, { pauses++ }, maxPolls, clock, DaemonLog { _, _ -> },
+        store, recorder, { forge }, { policies }, { pauses++; pauseHook() }, maxPolls, clock, DaemonLog { _, _ -> },
     )
 
     private fun record(cardId: String, column: Column, actor: Actor, type: EventType, payload: Map<String, String>) {
@@ -90,6 +91,24 @@ class AutonomousDeliveryTest {
     private fun lastMove(cardId: String) = store.events(cardId).last { it.type == EventType.CARD_MOVED }
 
     private fun greenOn(pr: PullRequestRef) = forge.scriptChecks("merge-${pr.number}", ChecksState.Passed)
+
+    /**
+     * Main is red on the merge commit. Once a rerun was requested the forge first keeps showing the old red, then
+     * shows Pending on the first pause and [afterPending] from the second pause on (an extra pause is harmless).
+     */
+    private fun redThenRerun(pr: PullRequestRef, red: ChecksState, afterPending: ChecksState) {
+        val commit = "merge-${pr.number}"
+        forge.scriptChecks(commit, red)
+        var pausesSinceRerun = 0
+        pauseHook = {
+            if (forge.reruns.isNotEmpty()) {
+                pausesSinceRerun++
+                forge.scriptChecks(commit, if (pausesSinceRerun == 1) ChecksState.Pending else afterPending)
+            }
+        }
+    }
+
+    private fun unitTestsRed(summary: String = "boom") = ChecksState.Failed(listOf(FailedCheck("unit-tests", summary)))
 
     private fun returned(outcome: DeliveryOutcome, cardId: String, vararg parts: String) {
         assertThat(outcome).isInstanceOf(DeliveryOutcome.ReturnedToOwner::class.java)
@@ -158,18 +177,139 @@ class AutonomousDeliveryTest {
     }
 
     @Test
-    fun `AC-5 a red main goes back to the owner with the failing check names and a capped summary`() {
+    fun `AC-5 a red main that stays red after the rerun goes back to the owner with the failing check names and a capped summary`() {
         val pr = approvedCard("c1")
-        forge.scriptChecks(
-            "merge-${pr.number}",
-            ChecksState.Failed(listOf(FailedCheck("unit-tests", "x".repeat(5000)))),
-        )
+        redThenRerun(pr, unitTestsRed("x".repeat(5000)), unitTestsRed("x".repeat(5000)))
 
-        val outcome = delivery().deliver("c1")
+        val outcome = delivery(maxPolls = 8).deliver("c1")
 
         returned(outcome, "c1", "main_ci_red", "unit-tests")
         assertThat(lastMove("c1").payload.getValue("reason").toByteArray(Charsets.UTF_8).size).isLessThanOrEqualTo(2048)
         assertThat(column("c1")).isNotEqualTo(Column.DONE)
+    }
+
+    @Test
+    fun `AC-1 a red main is rerun once and a green rerun closes the card without a revert`() {
+        val pr = approvedCard("c1")
+        redThenRerun(pr, unitTestsRed(), ChecksState.Passed)
+
+        val outcome = delivery(maxPolls = 8).deliver("c1")
+
+        assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
+        assertThat(forge.reruns).containsExactly("merge-${pr.number}")
+        assertThat(forge.reverts).isEmpty()
+        assertThat(column("c1")).isEqualTo(Column.DONE)
+    }
+
+    @Test
+    fun `AC-2 a second red after the rerun opens a revert PR and records its number on the card`() {
+        val pr = approvedCard("c1")
+        redThenRerun(pr, unitTestsRed(), unitTestsRed())
+
+        val outcome = delivery(maxPolls = 8).deliver("c1")
+
+        returned(outcome, "c1", "main_ci_red", "unit-tests")
+        assertThat(forge.reruns).containsExactly("merge-${pr.number}")
+        assertThat(forge.reverts.map { it.number }).containsExactly(pr.number)
+        val revertPr = lastMove("c1").payload.getValue("revert_pr").toInt()
+        assertThat(revertPr).isNotEqualTo(pr.number).isPositive()
+        assertThat(merged("c1")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-2 a rerun already recorded before a restart goes straight to the revert on red`() {
+        val pr = approvedCard("c1")
+        record(
+            "c1", Column.READY_FOR_PROD, Actor.Factory("deliver"), prMergedType(),
+            mapOf("pr" to pr.number.toString(), "merge_commit" to "merge-${pr.number}", "head" to pr.head),
+        )
+        record(
+            "c1", Column.READY_FOR_PROD, Actor.Factory("deliver"), EventType.MAIN_CI_RERUN,
+            mapOf("merge_commit" to "merge-${pr.number}", "pr" to pr.number.toString()),
+        )
+        forge.scriptChecks("merge-${pr.number}", unitTestsRed())
+
+        val outcome = delivery().deliver("c1")
+
+        returned(outcome, "c1", "main_ci_red")
+        assertThat(forge.reruns).isEmpty()
+        assertThat(forge.reverts.map { it.number }).containsExactly(pr.number)
+        assertThat(lastMove("c1").payload).containsKey("revert_pr")
+    }
+
+    @Test
+    fun `AC-3 a rerun still running does not close the card, is not rerun again and survives a restart`() {
+        val pr = approvedCard("c1")
+        forge.scriptChecks("merge-${pr.number}", unitTestsRed())
+        pauseHook = {
+            if (forge.reruns.isNotEmpty()) forge.scriptChecks("merge-${pr.number}", ChecksState.Pending)
+        }
+
+        val outcome = delivery(maxPolls = 6).deliver("c1")
+
+        returned(outcome, "c1", "main_ci_timeout")
+        assertThat(forge.reruns).containsExactly("merge-${pr.number}")
+        assertThat(forge.reverts).isEmpty()
+        assertThat(store.events("c1").none { it.type == EventType.CARD_MOVED && it.payload["to"] == "DONE" }).isTrue()
+
+        approve("c1")
+        val afterRestart = delivery(maxPolls = 6).deliver("c1")
+
+        returned(afterRestart, "c1", "main_ci_timeout")
+        assertThat(forge.reruns).hasSize(1)
+        assertThat(forge.reverts).isEmpty()
+        assertThat(store.events("c1").count { it.type == EventType.MAIN_CI_RERUN }).isEqualTo(1)
+    }
+
+    @Test
+    fun `AC-4 the owner sees the rerun event and the return event with the red checks and the revert PR`() {
+        val pr = approvedCard("c1")
+        redThenRerun(pr, unitTestsRed(), unitTestsRed())
+
+        delivery(maxPolls = 8).deliver("c1")
+
+        val events = store.events("c1")
+        val rerun = events.single { it.type == EventType.MAIN_CI_RERUN }
+        assertThat(rerun.actor).isEqualTo(Actor.Factory("deliver"))
+        assertThat(rerun.payload).containsEntry("merge_commit", "merge-${pr.number}").containsEntry("pr", pr.number.toString())
+        val back = lastMove("c1")
+        assertThat(back.actor).isEqualTo(Actor.Factory("deliver"))
+        assertThat(back.payload.getValue("reason")).contains("main_ci_red", "unit-tests")
+        assertThat(back.payload.getValue("revert_pr")).matches("[0-9]+")
+        assertThat(events.indexOf(rerun)).isLessThan(events.indexOf(back))
+    }
+
+    @Test
+    fun `AC-5 the old red of the same commit is not a second red when no pending shows up after the rerun`() {
+        val pr = approvedCard("c1")
+        forge.scriptChecks("merge-${pr.number}", unitTestsRed())
+
+        val outcome = delivery(maxPolls = 4).deliver("c1")
+
+        returned(outcome, "c1", "rerun_not_started")
+        assertThat(forge.reruns).containsExactly("merge-${pr.number}")
+        assertThat(forge.reverts).isEmpty()
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+    }
+
+    @Test
+    fun `AC-6 a failed rerun call does not spend the rerun and opens no revert`() {
+        val pr = approvedCard("c1")
+        forge.scriptChecks("merge-${pr.number}", unitTestsRed())
+        forge.failNext("rerunChecks")
+
+        returned(delivery(maxPolls = 8).deliver("c1"), "c1", "forge_failed")
+        assertThat(forge.reruns).isEmpty()
+        assertThat(forge.reverts).isEmpty()
+        assertThat(store.events("c1").none { it.type == EventType.MAIN_CI_RERUN }).isTrue()
+
+        redThenRerun(pr, unitTestsRed(), ChecksState.Passed)
+        approve("c1")
+        val outcome = delivery(maxPolls = 8).deliver("c1")
+
+        assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
+        assertThat(forge.reruns).containsExactly("merge-${pr.number}")
+        assertThat(forge.reverts).isEmpty()
     }
 
     @Test
@@ -203,9 +343,10 @@ class AutonomousDeliveryTest {
     @Test
     fun `AC-8 an approval after a red main reuses the validate head, does not merge twice and closes on green`() {
         val pr = approvedCard("c1")
-        forge.scriptChecks("merge-${pr.number}", ChecksState.Failed(listOf(FailedCheck("unit-tests", "boom"))))
-        returned(delivery().deliver("c1"), "c1", "main_ci_red")
+        redThenRerun(pr, unitTestsRed(), unitTestsRed())
+        returned(delivery(maxPolls = 8).deliver("c1"), "c1", "main_ci_red")
 
+        pauseHook = {}
         greenOn(pr)
         approve("c1")
         val outcome = delivery().deliver("c1")

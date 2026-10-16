@@ -71,5 +71,9 @@ private object UnavailableForge : Forge {
 
     override fun state(pr: PullRequestRef): PullRequestState = unavailable("state")
 
+    override fun rerunChecks(head: String) = unavailable("rerunChecks")
+
+    override fun revert(pr: PullRequestRef): PullRequestRef = unavailable("revert")
+
     override fun findMergedPullRequest(branch: String): MergedPullRequest? = unavailable("findMergedPullRequest")
 }

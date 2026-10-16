@@ -20,6 +20,8 @@ class FakeForge : Forge {
     private val entries = mutableListOf<Entry>()
     private val requests = mutableListOf<PullRequestRequest>()
     private val mergeRefs = mutableListOf<PullRequestRef>()
+    private val rerunHeads = mutableListOf<String>()
+    private val revertRefs = mutableListOf<PullRequestRef>()
     private val checksByHead = mutableMapOf<String, ChecksState>()
     private var pendingFailure: String? = null
 
@@ -27,6 +29,12 @@ class FakeForge : Forge {
     val opened: List<PullRequestRequest> get() = requests.toList()
 
     val merges: List<PullRequestRef> get() = mergeRefs.toList()
+
+    /** Heads passed to [rerunChecks], in call order; failed calls are not recorded. */
+    val reruns: List<String> get() = rerunHeads.toList()
+
+    /** PRs passed to [revert], in call order; failed calls are not recorded. */
+    val reverts: List<PullRequestRef> get() = revertRefs.toList()
 
     fun scriptChecks(head: String, state: ChecksState) {
         checksByHead[head] = when (state) {
@@ -105,6 +113,25 @@ class FakeForge : Forge {
     override fun state(pr: PullRequestRef): PullRequestState {
         failIf("state", "PR #${pr.number}")
         return stateOf(find(pr.number))
+    }
+
+    override fun rerunChecks(head: String) {
+        failIf("rerunChecks", "head $head")
+        rerunHeads += head
+    }
+
+    override fun revert(pr: PullRequestRef): PullRequestRef {
+        failIf("revert", "PR #${pr.number}")
+        find(pr.number)
+        val number = entries.size + 1
+        val entry = Entry(
+            number = number,
+            request = PullRequestRequest("revert-${pr.number}", "main", "Revert PR #${pr.number}", ""),
+            head = "sha-$number",
+        )
+        entries += entry
+        revertRefs += pr
+        return refOf(entry)
     }
 
     private fun find(number: Int): Entry =
