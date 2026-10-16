@@ -74,6 +74,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import sfv2.core.ColumnTime
 import sfv2.core.Column as BoardColumn
 
 private const val ID_LENGTH = 8
@@ -153,6 +154,7 @@ fun BoardScreen(
                         Lane(
                             column = column,
                             cards = board?.cardsIn(column),
+                            time = view?.columnTimes?.get(column),
                             controller = controller,
                             accepts = accepts,
                             dimmed = held != null && !accepts,
@@ -373,11 +375,12 @@ private fun NoteBox(onSend: (String) -> Unit, onCancel: () -> Unit) {
     }
 }
 
-/** [cards] is null while the first snapshot has not arrived. */
+/** [cards] is null while the first snapshot has not arrived; [time] is null when the column has no statistic. */
 @Composable
 private fun Lane(
     column: BoardColumn,
     cards: List<BoardCard>?,
+    time: ColumnTime?,
     controller: OwnerMoveController?,
     accepts: Boolean,
     dimmed: Boolean,
@@ -388,6 +391,7 @@ private fun Lane(
     val accent = if (waiting) Tokens.sand else Tokens.text
     val shape = RoundedCornerShape(12.dp)
     val count = cards?.size
+    val timeLabel = time?.let(ColumnTimeLabel::of)
     Column(
         modifier = Modifier
             .width(LANE_WIDTH.dp)
@@ -397,7 +401,7 @@ private fun Lane(
             .background(Tokens.panel, shape)
             .border(if (accepts) 2.dp else 1.dp, if (accepts) Tokens.edgeHi else if (waiting) Tokens.sand else Tokens.edge, shape)
             .padding(12.dp)
-            .semantics { contentDescription = laneDescription(column, count ?: 0, waiting) },
+            .semantics { contentDescription = laneDescription(column, count ?: 0, waiting, timeLabel) },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -410,6 +414,7 @@ private fun Lane(
                 style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted, fontFeatureSettings = "tnum"),
             )
         }
+        timeLabel?.let { Meta(it, Tokens.muted) }
         if (waiting) BasicText(Texts.WAITS_FOR_YOU, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.sand))
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -498,7 +503,8 @@ private fun Card(
     }
 }
 
-private fun laneDescription(column: BoardColumn, count: Int, waiting: Boolean): String {
+private fun laneDescription(column: BoardColumn, count: Int, waiting: Boolean, timeLabel: String?): String {
     val base = "${column.displayName}, ${Texts.cardCount(count)}"
-    return if (waiting) "$base, ${Texts.WAITS_FOR_YOU.replaceFirstChar { it.lowercase() }}" else base
+    val withTime = if (timeLabel != null) "$base, $timeLabel" else base
+    return if (waiting) "$withTime, ${Texts.WAITS_FOR_YOU.replaceFirstChar { it.lowercase() }}" else withTime
 }

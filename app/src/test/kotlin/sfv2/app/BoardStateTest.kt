@@ -6,6 +6,8 @@ import org.assertj.core.api.Assertions.within
 import org.junit.jupiter.api.Test
 import sfv2.core.AssistantState
 import sfv2.core.Column
+import sfv2.core.ColumnTime
+import sfv2.core.ColumnTimeKind
 import sfv2.core.EventType
 import sfv2.core.OWNER_WAIT_COLUMNS
 
@@ -19,6 +21,8 @@ import sfv2.core.OWNER_WAIT_COLUMNS
  *   card as `BoardSource.fetchCard` reported it (real column); without it the created card is not placed (never Inbox).
  *   `CARD_MOVED`/`OWNER_APPROVED` put the card in `payload["to"]` (a `Column` name), at the end of that column.
  * - `isWaitingForOwner(column)` and `OWNER_DECISION_COLUMNS`.
+ * - `ColumnTimeLabel.of(time: ColumnTime): String`: the column subtitle, "mediana <duração>" for `MEDIAN` and
+ *   "espera média <duração>" for `MEAN_WAIT`; duration is "< 1 min", "N min" up to 59 min, "N h MM min" from 1 h.
  *
  * Pulse strip (pure, in `PulseModel.kt`):
  *
@@ -173,6 +177,34 @@ class BoardStateTest {
         assertThat(after.cardsIn(Column.STAGED)).isEmpty()
         assertThat(isWaitingForOwner(Column.READY_FOR_PROD)).isFalse()
         assertThat(after.cardsIn(Column.READY_FOR_PROD).map { it.id }).containsExactly("a")
+    }
+
+    @Test
+    fun `AC-6 a work column subtitle says median and the minutes`() {
+        val label = ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 360L))
+
+        assertThat(label).isEqualTo("mediana 6 min")
+    }
+
+    @Test
+    fun `AC-6 a gate column subtitle says average wait and the minutes`() {
+        val label = ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 2_460L))
+
+        assertThat(label).isEqualTo("espera média 41 min")
+    }
+
+    @Test
+    fun `AC-6 less than one minute reads as under one minute`() {
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 59L))).isEqualTo("mediana < 1 min")
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 0L))).isEqualTo("mediana < 1 min")
+    }
+
+    @Test
+    fun `AC-6 the minute scale holds up to 59 minutes and hours start at 1 h with two-digit minutes`() {
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 60L))).isEqualTo("mediana 1 min")
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 3_599L))).isEqualTo("mediana 59 min")
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 3_900L))).isEqualTo("mediana 1 h 05 min")
+        assertThat(ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 7_200L))).isEqualTo("espera média 2 h 00 min")
     }
 
     @Test
@@ -560,6 +592,8 @@ object BoardFixtures {
 
     fun aMove(seq: Long, cardId: String, to: Column, type: EventType = EventType.CARD_MOVED) =
         anEvent(seq, cardId, type, mapOf("to" to to.name))
+
+    fun aColumnTime(kind: ColumnTimeKind, seconds: Long, stays: Int = 3) = ColumnTime(kind, seconds, stays)
 
     fun uniformWidths(width: Int): Map<Column, Int> = Column.entries.associateWith { width }
 }

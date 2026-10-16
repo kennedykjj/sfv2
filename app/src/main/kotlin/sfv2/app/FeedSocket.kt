@@ -8,6 +8,9 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Path
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -18,8 +21,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import sfv2.core.Column
+import sfv2.core.ColumnTime
+import sfv2.core.ColumnTimeKind
 
 /** Opens the daemon's socket, sends one JSON line and hands over the channel. Replies are never logged. */
 private fun connect(socket: Path, request: JsonObject): SocketChannel {
@@ -121,15 +128,35 @@ class SocketFeedTransport(private val socket: Path) : FeedTransport {
     }
 }
 
-/** `cost.summary` over the daemon's socket; a missing or invalid `limits` means no limits, never an error. */
-class SocketCostSummarySource(private val socket: Path) : CostSummarySource {
+/**
+ * `cost.summary` over the daemon's socket, asking for days in [zone]. A missing or invalid `limits` means no limits,
+ * and missing `stages`/`days` (an older daemon) mean empty lists, never an error.
+ */
+class SocketCostSummarySource(private val socket: Path, private val zone: ZoneId = ZoneOffset.UTC) : CostSummarySource {
     override fun summary(from: Instant, to: Instant): CostSummary {
-        val reply = call(socket, buildJsonObject { put("cmd", "cost.summary"); put("from", from.toString()); put("to", to.toString()) })
+        val reply = call(
+            socket,
+            buildJsonObject {
+                put("cmd", "cost.summary")
+                put("from", from.toString())
+                put("to", to.toString())
+                put("zone", zone.id)
+            },
+        )
         val result = reply["result"] as? JsonObject ?: throw IOException("daemon sent a cost summary without result")
         val limits = result["limits"] as? JsonObject
         val cards = (result["cards"] as? JsonArray).orEmpty().mapNotNull { element ->
             val card = element as? JsonObject ?: return@mapNotNull null
             CardCost(text(card, "card") ?: return@mapNotNull null, decimal(card["costUsd"]), statusOf(text(card, "status")))
+        }
+        val stages = (result["stages"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val stage = element as? JsonObject ?: return@mapNotNull null
+            StageCost(text(stage, "stage") ?: return@mapNotNull null, decimal(stage["costUsd"]), statusOf(text(stage, "status")))
+        }
+        val days = (result["days"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val day = element as? JsonObject ?: return@mapNotNull null
+            val date = text(day, "day")?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return@mapNotNull null
+            DayCost(date, decimal(day["costUsd"]), statusOf(text(day, "status")))
         }
         val reached = (result["cardsReached"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.toSet()
         return CostSummary(
@@ -139,8 +166,26 @@ class SocketCostSummarySource(private val socket: Path) : CostSummarySource {
             limits = CostLimitsInfo(limits?.let { decimal(it["perCardUsd"]) }, limits?.let { decimal(it["perDayUsd"]) }),
             dayReached = (result["dayReached"] as? JsonPrimitive)?.booleanOrNull ?: false,
             cardsReached = reached,
+            stages = stages,
+            days = days,
         )
     }
 
     private fun statusOf(name: String?): CostStatus = CostStatus.entries.firstOrNull { it.name == name } ?: CostStatus.UNKNOWN
+}
+
+/** `column.times` over the daemon's socket; rows with an unknown column or kind are skipped. */
+class SocketColumnTimesSource(private val socket: Path) : ColumnTimesSource {
+    override fun times(from: Instant, to: Instant): Map<Column, ColumnTime> {
+        val reply = call(socket, buildJsonObject { put("cmd", "column.times"); put("from", from.toString()); put("to", to.toString()) })
+        val result = reply["result"] as? JsonObject ?: throw IOException("daemon sent column times without result")
+        return (result["columns"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val row = element as? JsonObject ?: return@mapNotNull null
+            val column = Column.entries.firstOrNull { it.name == text(row, "column") } ?: return@mapNotNull null
+            val kind = ColumnTimeKind.entries.firstOrNull { it.name == text(row, "kind") } ?: return@mapNotNull null
+            val seconds = (row["seconds"] as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+            val stays = (row["stays"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            column to ColumnTime(kind, seconds, stays)
+        }.toMap()
+    }
 }

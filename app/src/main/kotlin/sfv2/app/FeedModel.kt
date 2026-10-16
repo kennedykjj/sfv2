@@ -39,8 +39,13 @@ interface FeedTransport {
 
 data class CardCost(val card: String, val costUsd: BigDecimal?, val status: CostStatus)
 
+data class StageCost(val stage: String, val costUsd: BigDecimal?, val status: CostStatus)
+
+data class DayCost(val day: LocalDate, val costUsd: BigDecimal?, val status: CostStatus)
+
 data class CostLimitsInfo(val perCardUsd: BigDecimal?, val perDayUsd: BigDecimal?)
 
+/** [stages] and [days] stay empty when the daemon predates them. */
 data class CostSummary(
     val totalUsd: BigDecimal?,
     val status: CostStatus,
@@ -48,6 +53,8 @@ data class CostSummary(
     val limits: CostLimitsInfo,
     val dayReached: Boolean,
     val cardsReached: Set<String>,
+    val stages: List<StageCost> = emptyList(),
+    val days: List<DayCost> = emptyList(),
 )
 
 /** `cost.summary` for the instants [from, to). */
@@ -70,12 +77,19 @@ data class CostLine(
 )
 
 /** The daemon's numbers, formatted. Nothing is computed here beyond ordering and the bar size. */
-data class CostSummaryView(val total: CostLine, val cards: List<CostLine>, val explainsPartial: Boolean) {
+data class CostSummaryView(
+    val total: CostLine,
+    val cards: List<CostLine>,
+    val explainsPartial: Boolean,
+    val stages: List<CostLine> = emptyList(),
+    val days: List<CostLine> = emptyList(),
+) {
     companion object {
         private val symbols = DecimalFormatSymbols().apply {
             groupingSeparator = '.'
             decimalSeparator = ','
         }
+        private val DAY_LABEL: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM")
 
         fun of(summary: CostSummary): CostSummaryView {
             val limits = summary.limits
@@ -99,12 +113,34 @@ data class CostSummaryView(val total: CostLine, val cards: List<CostLine>, val e
                         fraction = fractionOf(card.costUsd, limits.perCardUsd),
                     )
                 }
-            val partial = summary.status == CostStatus.PARTIAL || summary.cards.any { it.status == CostStatus.PARTIAL || it.status == CostStatus.UNKNOWN }
-            return CostSummaryView(total, cards, partial)
+            val stages = summary.stages
+                .sortedByDescending { rankOf(it.costUsd, it.status) }
+                .map { plainLine(it.stage, it.costUsd, it.status) }
+            val days = if (summary.days.size > 1) {
+                summary.days.map { plainLine(DAY_LABEL.format(it.day), it.costUsd, it.status) }
+            } else {
+                emptyList()
+            }
+            val statuses = listOf(summary.status) + summary.cards.map { it.status } +
+                summary.stages.map { it.status } + summary.days.map { it.status }
+            val partial = summary.status == CostStatus.PARTIAL ||
+                statuses.any { it == CostStatus.PARTIAL || it == CostStatus.UNKNOWN }
+            return CostSummaryView(total, cards, partial, stages, days)
         }
 
         fun loading(): CostSummaryView =
             of(CostSummary(null, CostStatus.NONE, emptyList(), CostLimitsInfo(null, null), false, emptySet()))
+
+        private fun plainLine(label: String, usd: BigDecimal?, status: CostStatus) = CostLine(
+            label = label,
+            value = amountText(usd, status),
+            tag = tagOf(status),
+            limit = null,
+            limitState = LimitState.NoLimit,
+        )
+
+        private fun rankOf(usd: BigDecimal?, status: CostStatus): BigDecimal =
+            if (usd == null || status == CostStatus.UNKNOWN) BigDecimal.ONE.negate() else usd
 
         private fun totalText(summary: CostSummary): String {
             val amount = amountText(summary.totalUsd, summary.status)

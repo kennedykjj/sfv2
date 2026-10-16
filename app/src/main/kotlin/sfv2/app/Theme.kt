@@ -35,6 +35,8 @@ object Texts {
     const val BOARD = "Esteira"
     const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
+    const val MEDIAN = "mediana"
+    const val MEAN_WAIT = "espera média"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
@@ -73,6 +75,8 @@ object Texts {
 
     const val COST_TITLE = "Custo do dia"
     const val COST_BY_CARD = "Por card"
+    const val COST_BY_STAGE = "Por estágio"
+    const val COST_BY_DAY = "Por dia"
     const val COST_TOTAL = "Total do dia"
     const val ESTIMATE_TAG = "estimativa"
     const val ESTIMATE_SUFFIX = "est."
