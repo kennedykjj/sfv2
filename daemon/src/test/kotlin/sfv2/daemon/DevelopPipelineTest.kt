@@ -391,6 +391,38 @@ class DevelopPipelineTest {
             inner.green(cardId, layer, worktree).also { calls.add("green:${layer.name}") }
     }
 
+    private fun defaultRoundsOfEachPipeline(): Map<String, Any?> {
+        val costRecorder = RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log)
+        val refine = RefinePipeline(
+            project, store, recorder, worktrees, sessions, 4317, succeeding(0), costRecorder,
+            RefineGates { _, _ -> emptyList() }, configDir, clock, "model-a",
+        )
+        val develop = DevelopPipeline(
+            project, store, recorder, worktrees, sessions, 4317, succeeding(0), costRecorder,
+            DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green)), stepUp, configDir, clock,
+        )
+        val validate = ValidatePipeline(
+            project, store, recorder, worktrees, sessions, 4317, succeeding(0), costRecorder,
+            BranchSync { MergeResult.Merged }, ValidateGates { _, _ -> emptyList() }, configDir, clock, "model-a",
+        )
+        return listOf("refine" to refine, "develop" to develop, "validate" to validate).associate { (name, pipeline) ->
+            name to pipeline.javaClass.getDeclaredField("maxRounds").apply { isAccessible = true }.get(pipeline)
+        }
+    }
+
+    @Test
+    fun `AC-4 refine, develop and validate default to the same 3 rounds from one definition`() {
+        assertThat(DEFAULT_MAX_ROUNDS).isEqualTo(3)
+        assertThat(defaultRoundsOfEachPipeline()).containsExactlyInAnyOrderEntriesOf(
+            mapOf("refine" to 3, "develop" to 3, "validate" to 3),
+        )
+    }
+
+    @Test
+    fun `AC-5 every pipeline default follows DEFAULT_MAX_ROUNDS`() {
+        assertThat(defaultRoundsOfEachPipeline().values).containsOnly(DEFAULT_MAX_ROUNDS)
+    }
+
     private fun tokenIn(config: String): String {
         val candidates = Regex("[A-Za-z0-9_-]{43}").findAll(config).map { it.value }.toList()
         return requireNotNull(candidates.firstOrNull { sessions.find(it) != null } ?: candidates.lastOrNull()) {

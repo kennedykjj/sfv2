@@ -314,6 +314,37 @@ class ValidatePipelineTest {
         }
     }
 
+    @Test
+    fun `AC-6 the validate launcher delegates to the shared PipelineStageLauncher and keeps no thread or lock handling of its own`() {
+        val pool = RunPool(2, store, clock, ProcessProbe { _, _ -> true }, log, recorder = recorder)
+        val launcher = ValidateStageLauncher({ pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green)) }, pool)
+
+        val fieldTypes = ValidateStageLauncher::class.java.declaredFields.map { it.type }
+        val methods = ValidateStageLauncher::class.java.declaredMethods.map { it.name }
+
+        assertThat(fieldTypes).contains(PipelineStageLauncher::class.java)
+        assertThat(methods).doesNotContain("execute", "awaitLock")
+        assertThat(launcher).isInstanceOf(StageLauncher::class.java)
+    }
+
+    @Test
+    fun `AC-7 a run that throws is logged as validate_failed with the card id and still frees the lock`() {
+        card("c1")
+        val pool = RunPool(2, store, clock, ProcessProbe { _, _ -> true }, log, recorder = recorder)
+        val runtime = RefineFixtures.ProbingRuntime(FakeRuntime(listOf(SessionScript.Succeed)), hold = null, failure = IllegalStateException("boom"))
+        val launcher = ValidateStageLauncher({ pipeline(runtime, sync(MergeResult.Merged), gates(green)) }, pool, log)
+        val dispatcher = DispatcherFixtures.dispatcherFor(
+            setOf(DispatchStage.VALIDATE), store, pool, launcher, DispatcherFixtures.FakePause(), AlwaysWorkTime, clock, log,
+        )
+        try {
+            assertThat(dispatcher.runCycle()).containsExactly(DispatchedRun(DispatchStage.VALIDATE, "c1"))
+            assertThat(RefineFixtures.await { !pool.isLocked("c1") }).isTrue()
+            assertThat(log.lines).anyMatch { it.first == "validate_failed" && it.second["card"] == "c1" }
+        } finally {
+            dispatcher.close()
+        }
+    }
+
     private fun lockReleasedAfter(failure: RuntimeException?, script: List<SessionScript>): Boolean {
         card("c1")
         val pool = RunPool(2, store, clock, ProcessProbe { _, _ -> true }, log, recorder = recorder)
