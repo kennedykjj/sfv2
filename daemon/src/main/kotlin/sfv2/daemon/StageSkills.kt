@@ -15,6 +15,11 @@ object StageSkills {
         return stream.use { String(it.readAllBytes(), Charsets.UTF_8) }
     }
 
+    /** The spec template that ships with the refine skill; null for stages that have none. */
+    fun specTemplate(stage: String): String? =
+        StageSkills::class.java.classLoader.getResourceAsStream("skills/$stage/spec-template.md")
+            ?.use { String(it.readAllBytes(), Charsets.UTF_8) }
+
     /** Ordered `steps:` of the skill's front matter; empty when the skill declares none. */
     fun steps(stage: String): List<SkillStep> {
         val lines = load(stage).lines()

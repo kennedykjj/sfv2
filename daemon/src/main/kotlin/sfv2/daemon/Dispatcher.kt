@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import sfv2.core.Column
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
+import sfv2.store.StoredCard
 import sfv2.store.StoredEvent
 
 enum class DispatchStage(val column: Column) {
@@ -93,7 +94,7 @@ class Dispatcher(
         val started = mutableListOf<DispatchedRun>()
         for (stage in DispatchStage.entries.filter { it in stages }) {
             val limit = limits.wip[stage] ?: 0
-            for (stored in store.cards().filter { it.card.column == stage.column }) {
+            for (stored in store.cards().filter { waitsFor(stage, it) }) {
                 if (!pool.hasRoom()) return started
                 if (limit > 0 && running.values.count { it == stage } >= limit) break
                 val cardId = stored.id
@@ -104,6 +105,23 @@ class Dispatcher(
             }
         }
         return started
+    }
+
+    private fun waitsFor(stage: DispatchStage, stored: StoredCard): Boolean =
+        stored.card.column == stage.column || (stage == DispatchStage.DEVELOP && returnedForRework(stored))
+
+    /**
+     * A card the validation sent back to Coding waits for a new develop run. It is picked until a session of that run
+     * records its cost, so a run that cannot even start does not loop on the card.
+     */
+    private fun returnedForRework(stored: StoredCard): Boolean {
+        if (stored.card.column != Column.CODING) return false
+        val events = store.events(stored.id)
+        val moveIndex = events.indexOfLast { it.type == EventType.CARD_MOVED }
+        if (moveIndex < 0) return false
+        val move = events[moveIndex]
+        if (move.payload["to"] != Column.CODING.name || move.payload["from"] !in REWORK_ORIGINS) return false
+        return events.drop(moveIndex + 1).none { it.type == EventType.RUN_COST_RECORDED }
     }
 
     private fun launch(stage: DispatchStage, cardId: String, now: Instant): Boolean {
@@ -170,5 +188,6 @@ class Dispatcher(
         val MIN_BACKOFF: Duration = Duration.ofSeconds(60)
         val MAX_BACKOFF: Duration = Duration.ofMinutes(30)
         const val JOIN_MILLIS = 5_000L
+        val REWORK_ORIGINS = setOf(Column.VALIDATION.name, Column.STAGED.name)
     }
 }

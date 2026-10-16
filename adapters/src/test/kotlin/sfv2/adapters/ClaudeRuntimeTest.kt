@@ -49,7 +49,8 @@ object ClaudeRuntimeFixtures {
         worktree: Path,
         model: String = "model-x",
         mcpConfig: Path = Path.of("/tmp/mcp.json"),
-    ): SessionRequest = SessionRequest(stage, worktree, model, mcpConfig)
+        prompt: String = "stage skill for $stage",
+    ): SessionRequest = SessionRequest(stage, worktree, model, mcpConfig, prompt)
 
     fun runtime(binary: Path, transcriptDir: Path, timeout: Duration = Duration.ofSeconds(30)) =
         ClaudeRuntime(binary.toString(), transcriptDir, timeout, fixedClock)
@@ -82,7 +83,7 @@ object ProviderEnvProbe {
             args[0], Path.of(args[1]), Duration.ofSeconds(30), ClaudeRuntimeFixtures.fixedClock,
             provider = RuntimeProvider.fromEnv(System.getenv()),
         )
-        runtime.launch(SessionRequest("implement", Path.of(args[2]), "model-x", Path.of("/tmp/mcp.json")))
+        runtime.launch(SessionRequest("implement", Path.of(args[2]), "model-x", Path.of("/tmp/mcp.json"), "prompt"))
     }
 }
 
@@ -99,7 +100,7 @@ class ClaudeRuntimeTest {
     }
 
     @Test
-    fun `AC-1 runs claude headless in the worktree with the stage prompt on stdin`() {
+    fun `AC-1 runs claude headless in the worktree with the request prompt on stdin`() {
         val (wt, rec, transcripts) = dirs()
         val binary = ClaudeRuntimeFixtures.aRecordingClaude(tmp, rec)
 
@@ -109,7 +110,7 @@ class ClaudeRuntimeTest {
         assertThat(Path.of(Files.readString(rec.resolve("cwd")).trim()).toRealPath())
             .isEqualTo(wt.toRealPath())
         assertThat(Files.readAllLines(rec.resolve("args"))).contains("-p")
-        assertThat(Files.readString(rec.resolve("stdin")).trim()).isEqualTo("/sf:implement")
+        assertThat(Files.readString(rec.resolve("stdin")).trim()).isEqualTo("stage skill for implement")
     }
 
     @Test
@@ -125,6 +126,19 @@ class ClaudeRuntimeTest {
         assertThat(args).contains("--strict-mcp-config")
         assertThat(args[args.indexOf("--mcp-config") + 1]).isEqualTo(mcp.toString())
         assertThat(args[args.indexOf("--model") + 1]).isEqualTo("model-y")
+    }
+
+    @Test
+    fun `AC-2 limits the built-in tools to reading and allows the factory mcp server`() {
+        val (wt, rec, transcripts) = dirs()
+        val binary = ClaudeRuntimeFixtures.aRecordingClaude(tmp, rec)
+
+        ClaudeRuntimeFixtures.runtime(binary, transcripts)
+            .launch(ClaudeRuntimeFixtures.aRequest(worktree = wt))
+
+        val args = Files.readAllLines(rec.resolve("args"))
+        assertThat(args[args.indexOf("--tools") + 1]).isEqualTo("Read,Glob,Grep")
+        assertThat(args[args.indexOf("--allowedTools") + 1]).isEqualTo("mcp__sfv2")
     }
 
     @Test

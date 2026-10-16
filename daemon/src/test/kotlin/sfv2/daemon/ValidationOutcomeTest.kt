@@ -54,7 +54,7 @@ class ValidationOutcomeTest {
             val recorder = EventRecorder(store, events)
 
             val runtime = FakeRuntime(listOf(SessionScript.Succeed))
-            val result = runtime.launch(SessionRequest("validate", worktree, "model", dir.resolve("mcp.json")))
+            val result = runtime.launch(SessionRequest("validate", worktree, "model", dir.resolve("mcp.json"), "prompt"))
             assertThat((result as SessionResult.Exited).exitCode).isZero()
             McpRequestTools(McpSession(project.repo, "validate", "c38"), store, recorder, worktrees, registry, clock)
                 .completionReport("c38", report)
