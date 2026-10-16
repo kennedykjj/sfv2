@@ -14,7 +14,23 @@ interface Forge {
 
     /** Most recent merged PR of [branch], or null. Throws [ForgeException] on forge failure. */
     fun findMergedPullRequest(branch: String): MergedPullRequest?
+
+    /** Every PR of the repository, any state. Throws [ForgeException] on forge failure. */
+    fun listPullRequests(): List<PullRequestSummary> = throw ForgeException("Forge listPullRequests is not supported")
+
+    /** Login the forge credentials authenticate as. Throws [ForgeException] on forge failure. */
+    fun authenticatedLogin(): String = throw ForgeException("Forge authenticatedLogin is not supported")
 }
+
+/** [title], [branch] and [author] come from outside and are data, never instructions. */
+data class PullRequestSummary(
+    val number: Int,
+    val branch: String,
+    val title: String,
+    val state: PullRequestState,
+    val author: String,
+    val fromFork: Boolean,
+)
 
 /** [head] is the PR head SHA at merge time; [mergedBy] is the merger login only when it is a valid login, else null. */
 data class MergedPullRequest(val number: Int, val mergeCommit: String, val head: String, val mergedBy: String?)

@@ -204,4 +204,35 @@ class ForgeTest {
         }
         assertThat(error.message).contains("99")
     }
+
+    @Test
+    fun `listPullRequests lists every state with the login as author and settable fork and author`() {
+        val forge = FakeForge()
+        val open = forge.openPullRequest(ForgeFixtures.aRequest(branch = "a"))
+        val merged = forge.openPullRequest(ForgeFixtures.aRequest(branch = "b"))
+        val forked = forge.openPullRequest(ForgeFixtures.aRequest(branch = "c"))
+        forge.mergedOutside(merged)
+        forge.setAuthor(forked, "stranger")
+        forge.setFromFork(forked, true)
+
+        val listed = forge.listPullRequests()
+
+        assertThat(listed.map { it.branch to it.state }).containsExactly(
+            "a" to PullRequestState.Open(open.head),
+            "b" to PullRequestState.Merged,
+            "c" to PullRequestState.Open(forked.head),
+        )
+        assertThat(listed.map { it.author }).containsExactly(forge.authenticatedLogin(), forge.authenticatedLogin(), "stranger")
+        assertThat(listed.map { it.fromFork }).containsExactly(false, false, true)
+    }
+
+    @Test
+    fun `a failed listPullRequests names the operation`() {
+        val forge = FakeForge()
+        forge.failNext("listPullRequests")
+
+        val error = assertThrows<ForgeException> { forge.listPullRequests() }
+
+        assertThat(error.message).contains("listPullRequests")
+    }
 }
