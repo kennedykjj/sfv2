@@ -37,16 +37,6 @@ private val LEGEND_HIDDEN_BELOW = 880.dp
 private val LABEL_MIN_WIDTH = 56.dp
 private val STRIPE_STEP = 8.dp
 
-private fun hueColor(hue: StageHue): Color =
-    when (hue) {
-        StageHue.REFINE -> Tokens.refine
-        StageHue.DEVELOP -> Tokens.develop
-        StageHue.VALIDATE -> Tokens.validate
-        StageHue.OK -> Tokens.ok
-        StageHue.ACCENT -> Tokens.sand
-        StageHue.NEUTRAL -> Tokens.muted
-    }
-
 /**
  * "Onde o tempo vai": a stacked bar of the median time per stage and the share spent waiting for the owner.
  * Built only from column names and numbers; waiting segments are hatched so the color is not the only cue.
