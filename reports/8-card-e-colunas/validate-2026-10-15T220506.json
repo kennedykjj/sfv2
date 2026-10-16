@@ -1,0 +1,14 @@
+{
+  "outcome": "staged",
+  "pr": 96,
+  "head": "21cf40e857a7d5b0020eb457f2769a3d53f4b234",
+  "rounds": 0,
+  "agents": [],
+  "gates": ["forbidden", "migration", "acceptance-intact", "build", "green core CardTest"],
+  "failed_gates": [],
+  "gates_reused": [],
+  "flaky": [],
+  "amendments": [],
+  "review": {"blockers": 0, "should_fix": 0, "nits": 0, "cybersec": false, "ux": false},
+  "ci": {"build": "pass", "guard": "pass"}
+}
