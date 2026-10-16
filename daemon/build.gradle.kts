@@ -1,5 +1,11 @@
 plugins {
     id("sfv2.kotlin-jvm")
+    id("org.jetbrains.kotlin.plugin.serialization")
+    application
+}
+
+application {
+    mainClass = "sfv2.daemon.MainKt"
 }
 
 dependencies {
@@ -7,4 +13,5 @@ dependencies {
     implementation(project(":store"))
     implementation(project(":ports"))
     implementation(project(":adapters"))
+    implementation(libs.kotlinx.serialization.json)
 }

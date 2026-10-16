@@ -1,58 +1,61 @@
 package sfv2.core
 
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.node.ObjectNode
 import java.time.Instant
+import java.time.format.DateTimeParseException
+import kotlinx.serialization.MissingFieldException
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
-/** Serialização do evento em JSON, montada à mão sobre a árvore do Jackson (sem IO: só string). */
+/** JSON form of an [Event]: {"id", "at", "actor": {"kind", ...}, "type", "payload"}. Pure: strings only, no IO. */
 object EventJson {
-    private val mapper = ObjectMapper()
+    private val json = Json { classDiscriminator = "kind" }
 
-    fun encode(event: Event): String {
-        val node = mapper.createObjectNode()
-        node.put("id", event.id.value)
-        node.put("at", event.at.toString())
-        node.set<JsonNode>("actor", encodeActor(event.actor))
-        node.put("type", event.type.name)
-        val payload = node.putObject("payload")
-        event.payload.forEach { (key, value) -> payload.put(key, value) }
-        return mapper.writeValueAsString(node)
+    fun encode(event: Event): String = json.encodeToString(EventRecord.serializer(), EventRecord.of(event))
+
+    fun decode(text: String): Event {
+        val record = try {
+            json.decodeFromString(EventRecord.serializer(), text)
+        } catch (e: MissingFieldException) {
+            throw InvalidEventJsonException("event JSON misses fields ${e.missingFields}")
+        } catch (e: SerializationException) {
+            // The library's message quotes the input, which may carry payload: keep only the error kind.
+            throw InvalidEventJsonException("event JSON is invalid: ${e.javaClass.simpleName}")
+        }
+        return record.toEvent()
     }
 
-    fun decode(json: String): Event {
-        val node = mapper.readTree(json)
-        return Event(
-            id = EventId(node.path("id").asText()),
-            at = Instant.parse(node.path("at").asText()),
-            actor = decodeActor(node.path("actor")),
-            type = decodeType(node.path("type").asText()),
-            payload = node.path("payload").fields().asSequence().associate { it.key to it.value.asText() },
+    /** Wire shape of an event; the type travels as a string so an unknown one fails with its name. */
+    @Serializable
+    private data class EventRecord(
+        val id: String,
+        val at: String,
+        val actor: Actor,
+        val type: String,
+        val payload: Map<String, String>,
+    ) {
+        fun toEvent(): Event = Event(
+            id = EventId(id),
+            at = parseInstant(),
+            actor = actor,
+            type = EventType.entries.firstOrNull { it.name == type } ?: throw UnknownEventTypeException(type, id),
+            payload = payload,
         )
-    }
 
-    private fun encodeActor(actor: Actor): ObjectNode {
-        val node = mapper.createObjectNode()
-        when (actor) {
-            Actor.Owner -> node.put("kind", "owner")
-            is Actor.Agent -> node.put("kind", "agent").put("role", actor.role)
-            is Actor.Adapter -> node.put("kind", "adapter").put("provider", actor.provider)
-            is Actor.Factory -> node.put("kind", "factory").put("component", actor.component)
+        private fun parseInstant(): Instant = try {
+            Instant.parse(at)
+        } catch (e: DateTimeParseException) {
+            throw InvalidEventJsonException("event $id has an invalid instant")
         }
-        return node
-    }
 
-    private fun decodeActor(node: JsonNode): Actor {
-        val kind = node.path("kind").asText()
-        return when (kind) {
-            "owner" -> Actor.Owner
-            "agent" -> Actor.Agent(node.path("role").asText())
-            "adapter" -> Actor.Adapter(node.path("provider").asText())
-            "factory" -> Actor.Factory(node.path("component").asText())
-            else -> error("unknown actor kind: $kind")
+        companion object {
+            fun of(event: Event) = EventRecord(
+                id = event.id.value,
+                at = event.at.toString(),
+                actor = event.actor,
+                type = event.type.name,
+                payload = event.payload,
+            )
         }
     }
-
-    private fun decodeType(type: String): EventType =
-        EventType.entries.firstOrNull { it.name == type } ?: throw UnknownEventTypeException(type)
 }
