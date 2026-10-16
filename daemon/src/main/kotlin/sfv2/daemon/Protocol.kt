@@ -55,6 +55,14 @@ sealed interface Request {
             "CardImport(actor=$actor, project=$project, id=$id, query=${if (query == null) "null" else "***"}, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Read-only: the closure draft of a Done card. */
+    data class CardCloseDraft(val id: String) : Request
+
+    /** Owner confirmation of the closure draft whose hash is [draftHash]; also the retry of a failed write. */
+    data class CardCloseConfirm(val actor: Actor, val id: String, val draftHash: String, val proof: String? = null) : Request {
+        override fun toString(): String = "CardCloseConfirm(actor=$actor, id=$id, draftHash=$draftHash, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -79,6 +87,7 @@ sealed interface Response {
     data class ReportResult(val csv: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
+    data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
     data class Error(val message: String) : Response
 }
 
@@ -133,6 +142,16 @@ fun parseRequest(line: String): Request {
         "card.import" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             Request.CardImport(actor, stringField(obj, "project"), stringField(obj, "id"), stringField(obj, "query"), stringField(obj, "proof"))
+        }
+        "card.close.draft" -> {
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardCloseDraft(id)
+        }
+        "card.close.confirm" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            val draftHash = stringField(obj, "draftHash") ?: return Request.Rejected("missing draftHash")
+            Request.CardCloseConfirm(actor, id, draftHash, stringField(obj, "proof"))
         }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
@@ -266,6 +285,18 @@ fun render(response: Response): String = when (response) {
     is Response.ProjectsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.projects.map { projectJson(it) }))
+    }.toString()
+    is Response.CloseDraftResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("status", response.status)
+                put("summary", response.summary)
+                put("prLink", response.prLink)
+                put("draftHash", response.draftHash)
+            },
+        )
     }.toString()
     is Response.Error -> buildJsonObject {
         put("ok", false)

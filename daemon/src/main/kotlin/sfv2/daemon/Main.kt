@@ -60,6 +60,11 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                     { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
                     ownerProof, clock, StderrDaemonLog,
                 ),
+                closure = CardClosure.forProjects(
+                    store, commands.recorder, registry,
+                    { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
+                    ownerProof, clock, StderrDaemonLog,
+                ),
                 onClose = {
                     runCatching { refine.close() }
                     database.close()
