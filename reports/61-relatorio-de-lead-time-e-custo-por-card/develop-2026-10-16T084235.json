@@ -1,0 +1,1 @@
+{"issue":61,"slug":"relatorio-de-lead-time-e-custo-por-card","pipeline":"develop","started_at":"2026-10-16T11:35:00Z","finished_at":"2026-10-16T11:50:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":61182,"duration_s":93}],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
