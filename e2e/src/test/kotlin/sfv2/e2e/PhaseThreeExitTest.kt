@@ -115,7 +115,7 @@ class PhaseThreeExitTest {
         staged(original, handoff, handoffPr)
         val prPolicies = ProjectPolicies.DEFAULT.copy(deliveryMode = DeliveryMode.PR_HANDOFF)
         val pullRequestHandoff = PullRequestHandoff(original.store, original.recorder, { forge }, { prPolicies }, clock, silent)
-        pullRequestHandoff.approve(handoff)
+        toReadyForProd(original, handoff)
         forge.mergedOutside(handoffPr)
         pullRequestHandoff.reconcile(handoff)
 
