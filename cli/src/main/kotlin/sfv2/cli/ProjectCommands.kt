@@ -24,7 +24,7 @@ private fun projectLine(project: JsonElement): String {
 }
 
 /** The path the daemon registers; a path that does not resolve goes as typed so the daemon refuses it. */
-private fun canonicalPath(path: String): String =
+internal fun canonicalPath(path: String): String =
     try {
         Path.of(path).toRealPath().toString()
     } catch (e: IOException) {
@@ -48,21 +48,22 @@ class ProjectAdd(private val cli: CliEnvironment) : CliktCommand(name = "add") {
     override fun help(context: Context) = "Register a project (the daemon reads factory.yml from main)."
 
     override fun run() {
-        val canonical = canonicalPath(path)
-        val existing = cli.registeredProjects().firstOrNull { (it as? JsonObject)?.let { p -> projectField(p, "repo") } == canonical }
-        if (existing != null) {
-            cli.out(projectLine(existing))
-            return
-        }
-        val token = cli.ownerToken()
-        val request = buildJsonObject {
-            put("cmd", "project.add")
-            put("actor", "owner")
-            put("path", canonical)
-            put("proof", token)
-        }
-        cli.out(projectLine(cli.call(request)))
+        cli.out(cli.registerProject(canonicalPath(path)))
     }
+}
+
+/** Registers the project at [canonical] unless the daemon already has it; returns the project line. */
+internal fun CliEnvironment.registerProject(canonical: String): String {
+    val existing = registeredProjects().firstOrNull { (it as? JsonObject)?.let { p -> projectField(p, "repo") } == canonical }
+    if (existing != null) return projectLine(existing)
+    val token = ownerToken()
+    val request = buildJsonObject {
+        put("cmd", "project.add")
+        put("actor", "owner")
+        put("path", canonical)
+        put("proof", token)
+    }
+    return projectLine(call(request))
 }
 
 class ProjectList(private val cli: CliEnvironment) : CliktCommand(name = "list") {
