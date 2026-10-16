@@ -1,0 +1,22 @@
+{
+  "issue": 11,
+  "pipeline": "validate",
+  "outcome": "ok",
+  "column": "Staged",
+  "pr": 103,
+  "head": "575b898af389e3ebb5f7c95368171427dcb6c450",
+  "agents": [],
+  "rounds": {"owner_fix": 0, "qa_amend": 0},
+  "gates": {
+    "run": ["qa-commit", "forbidden", "migration", "acceptance-intact", "build", "green core sfv2.core.CardTest"],
+    "failed": [],
+    "reused": ["green core sfv2.core.CardTest"]
+  },
+  "gates_reused": ["green core sfv2.core.CardTest"],
+  "flaky": [],
+  "amendments": [],
+  "ci": {"guard": "pass"},
+  "brief": "build executado sem saída; verificar <reviews>/11.brief.json",
+  "tokens": "não medido",
+  "duration": "não medido"
+}
