@@ -30,9 +30,21 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
         val registry = ProjectRegistry(source)
         val projects = ProjectCommands(registry, ownerProof)
         val dataDir = resolveDatabasePath(env, socketPath).parent
-        val refine = RefineRuntime.start(dataDir, store, commands, registry, source, database, clock)
-        commands.events.addListener(refine.dispatcher::onEvent)
-        refine.dispatcher.start()
+        val refine = RefineRuntime.start(
+            dataDir = dataDir,
+            store = store,
+            commands = commands,
+            registry = registry,
+            files = source,
+            database = database,
+            clock = clock,
+            source = source,
+            env = env,
+        )
+        if (refine.dispatcherAllowed) {
+            commands.events.addListener(refine.dispatcher::onEvent)
+            refine.dispatcher.start()
+        }
         DaemonLaunch.Started(
             SocketServer.start(
                 socketPath,

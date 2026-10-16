@@ -198,6 +198,7 @@ class RefineStageLauncher(
     private val pipelineFor: (String) -> RefinePipeline,
     private val pool: RunPool,
     private val log: DaemonLog = StderrDaemonLog,
+    private val onRunFinished: (String) -> Unit = {},
 ) : StageLauncher {
 
     override fun launch(stage: DispatchStage, cardId: String): LaunchedRun {
@@ -215,7 +216,13 @@ class RefineStageLauncher(
         } catch (e: Exception) {
             log.log("refine_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
         } finally {
-            pool.release(cardId)
+            try {
+                onRunFinished(cardId)
+            } catch (e: Exception) {
+                log.log("run_finished_hook_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
+            } finally {
+                pool.release(cardId)
+            }
         }
     }
 
