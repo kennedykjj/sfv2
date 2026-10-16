@@ -11,7 +11,13 @@ import sfv2.core.ProjectPolicies
 
 data class ProjectLayer(val name: String, val path: String)
 
-data class Project(val name: String, val repo: String, val layers: List<ProjectLayer>, val policies: ProjectPolicies)
+data class Project(
+    val name: String,
+    val repo: String,
+    val layers: List<ProjectLayer>,
+    val policies: ProjectPolicies,
+    val forbidden: List<String> = emptyList(),
+)
 
 /** The project's `factory.yml` on `main` is invalid; [field] names the offending field. */
 class InvalidProjectConfigException(val field: String, message: String) : RuntimeException(message)
@@ -70,7 +76,21 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         } catch (e: InvalidPolicyException) {
             throw InvalidProjectConfigException(e.field, "invalid policy field ${e.field}")
         }
-        return Project(name, repo.toString(), layers, policies)
+        return Project(name, repo.toString(), layers, policies, parseForbidden(map["forbidden"]))
+    }
+
+    private fun parseForbidden(raw: Any?): List<String> {
+        if (raw == null) return emptyList()
+        val items = raw as? List<*> ?: throw InvalidProjectConfigException("forbidden", "forbidden must be a list")
+        return items.mapIndexed { index, item ->
+            val field = "forbidden[$index]"
+            val path = (item as? String)?.takeIf { it.isNotBlank() }
+                ?: throw InvalidProjectConfigException(field, "$field must be a non-empty text")
+            if (path.startsWith("/") || path.split("/").any { it == ".." }) {
+                throw InvalidProjectConfigException(field, "$field must be a relative path without '..'")
+            }
+            path
+        }
     }
 
     private fun parseLayers(raw: Any?): List<ProjectLayer> {
