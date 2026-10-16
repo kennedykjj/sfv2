@@ -49,10 +49,12 @@ class GhTracker(
     override fun search(query: String): List<TrackerItem> {
         val subject = "query"
         requireValid("search", subject, validRepo() && validQuery(query))
+        // A blank query lists the open issues (what the V0 board import asks for); any other query searches all states.
+        val scope = if (query.isBlank()) listOf("--state", "open") else listOf("--state", "all", "--search", query)
         val out = call(
             "search",
             subject,
-            "issue", "list", "--repo", repo, "--state", "all", "--search", query,
+            "issue", "list", "--repo", repo, *scope.toTypedArray(),
             "--limit", SEARCH_LIMIT.toString(), "--json", FIELDS,
         )
         val items = parse("search", subject) { JSON.parseToJsonElement(out).jsonArray.map { toItem(it.jsonObject) } }
@@ -153,7 +155,7 @@ class GhTracker(
     private fun validRepo(): Boolean = REPO.matches(repo)
 
     private fun validQuery(query: String): Boolean =
-        query.isNotBlank() && !query.startsWith("-") && query.none { it.isISOControl() } && !SCOPE_QUALIFIER.containsMatchIn(query)
+        !query.startsWith("-") && query.none { it.isISOControl() } && !SCOPE_QUALIFIER.containsMatchIn(query)
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
