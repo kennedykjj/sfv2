@@ -1,6 +1,9 @@
 package sfv2.daemon
 
 import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.ParameterizedType
+import java.lang.reflect.Type
+import java.lang.reflect.WildcardType
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.SecureRandom
@@ -89,23 +92,80 @@ class ExternalMilestonesTest {
 
     private fun milestones(policies: ProjectPolicies, with: Tracker = tracker): Subject {
         val type = production("sfv2.daemon.ExternalMilestones")
-        val constructor = type.constructors.firstOrNull { it.parameterCount == 7 }
-        assertThat(constructor).describedAs("ExternalMilestones takes the OwnerProof as a 7th parameter").isNotNull()
-        val trackerOf: (Any?) -> Tracker = { with }
-        val policiesOf: (Any?) -> ProjectPolicies = { policies }
-        val functions = mutableListOf<Any>(trackerOf, policiesOf)
+        val constructor = type.constructors.filter { !it.isSynthetic }.maxBy { it.parameterCount }
+        val project = Project("alpha", dir.toString(), listOf(ProjectLayer("daemon", "daemon/")), policies)
         val log = DaemonLog { event, fields -> synchronized(logged) { logged.add(event to fields) } }
-        val args = requireNotNull(constructor).parameterTypes.map { type ->
-            when {
-                type.isAssignableFrom(CardEventStore::class.java) -> store
-                type.isAssignableFrom(EventRecorder::class.java) -> recorder
-                type.isAssignableFrom(Clock::class.java) -> clock
-                type.isAssignableFrom(DaemonLog::class.java) -> log
-                type.isAssignableFrom(OwnerProof::class.java) -> proof
-                else -> functions.removeAt(0)
+        val args = constructor.parameterTypes.indices.map { index ->
+            when (val parameter = constructor.parameterTypes[index]) {
+                CardEventStore::class.java -> store
+                EventRecorder::class.java -> recorder
+                Clock::class.java -> clock
+                DaemonLog::class.java -> log
+                OwnerProof::class.java -> proof
+                ProjectRegistry::class.java -> ProjectRegistry(object : ProjectConfigSource {
+                    override fun read(repo: Path): String? = null
+                })
+                Function2::class.java -> { _: Any?, pr: Any? -> prLink(pr as String) }
+                Function1::class.java -> {
+                    val result = rawOf((constructor.genericParameterTypes[index] as ParameterizedType).actualTypeArguments[1])
+                    val value: Any = when (result) {
+                        Tracker::class.java -> with
+                        ProjectPolicies::class.java -> policies
+                        Project::class.java -> project
+                        else -> error("unexpected lookup returning $result")
+                    }
+                    val lookup: (Any?) -> Any = { value }
+                    lookup
+                }
+                else -> error("unexpected constructor parameter $parameter")
             }
         }
         return Subject(constructor.newInstance(*args.toTypedArray()), production("sfv2.core.Milestone"))
+    }
+
+    private fun rawOf(type: Type): Class<*> = when (type) {
+        is Class<*> -> type
+        is WildcardType -> rawOf(type.upperBounds[0])
+        is ParameterizedType -> rawOf(type.rawType)
+        else -> error("unexpected type $type")
+    }
+
+    /** The forge link the milestones are given for a PR number; null stands for a project without a GitHub origin. */
+    private var prLink: (String) -> String? = { pr -> "https://github.com/acme/alpha/pull/$pr" }
+
+    @Test
+    fun `AC-2 of #197 a Jira card gets its milestones through the project tracker with the forge link and the jira actor`() {
+        val jira = ProjectPolicies.from(
+            mapOf(
+                "milestones" to listOf("started", "pr_opened"),
+                "tracker" to "jira",
+                "jira_site" to "acme.atlassian.net",
+                "jira_project" to "PROJ",
+                "signers" to mapOf("milestone" to "policy"),
+            ),
+        )
+        val source = TrackerItem.of("PROJ-1", ExternalText("Jira title"), ExternalText("body"), emptyList(), "https://acme.atlassian.net/browse/PROJ-1", TrackerItemState.OPEN)
+        tracker.seed(source)
+        val ref = ExternalRef("jira", "PROJ-1", source.url, clock.instant(), TextHash(source.textHash))
+        val jiraCard = "card-jira"
+        recorder.record(jiraCard, Card.create("Title", Column.CODING).withReference(ref), Event(EventId("seed-jira"), clock.instant(), Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Title")))
+        val subject = milestones(jira)
+        val written = { store.events(jiraCard).filter { it.type == EventType.MILESTONE_WRITTEN } }
+
+        subject.reached(jiraCard, "STARTED")
+        prLink = { null }
+        subject.reached(jiraCard, "PR_OPENED", "12")
+
+        assertThat(tracker.milestones["PROJ-1"]).containsExactly("started")
+        assertThat(written().map { it.payload["milestone"] }).containsExactly("started")
+        assertThat(written().single().actor).isEqualTo(Actor.Adapter("jira"))
+
+        prLink = { pr -> "https://github.com/acme/alpha/pull/$pr" }
+        tracker.seed(TrackerItem.of("PROJ-1", ExternalText("Changed"), ExternalText("changed"), emptyList(), source.url, TrackerItemState.OPEN))
+        subject.reached(jiraCard, "PR_OPENED", "12")
+
+        assertThat(tracker.milestones["PROJ-1"]).containsExactly("started", "https://github.com/acme/alpha/pull/12")
+        assertThat(store.events(jiraCard).single { it.type == EventType.EXTERNAL_TEXT_CHANGED }.actor).isEqualTo(Actor.Adapter("jira"))
     }
 
     private fun pending(subject: Subject): List<Map<String, String>> {

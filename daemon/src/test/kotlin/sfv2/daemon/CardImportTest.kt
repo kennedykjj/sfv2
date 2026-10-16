@@ -43,6 +43,7 @@ class CardImportTest {
     private lateinit var beta: String
     private val tracker = FakeTracker()
     private var sequence = 0
+    private val extraYaml = mutableMapOf<String, String>()
 
     /** Looks a production class up by name so a missing one fails an assertion, not the compilation. */
     private fun production(name: String): Class<*> {
@@ -66,9 +67,14 @@ class CardImportTest {
         stream = EventStream(store)
         recorder = EventRecorder(store, stream)
         registry = ProjectRegistry(object : ProjectConfigSource {
-            override fun read(repo: Path): String =
+            override fun read(repo: Path): String {
+                val withExtra =
+                "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n" + extraYaml[repo.fileName.toString()].orEmpty()
+                val withDor =
                 "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n" +
                     (if (repo.fileName.toString() == "strict") "dor:\n  - title\n  - body\n  - acceptance_criteria\n  - label\n" else "")
+                return if (repo.fileName.toString() == "strict") withDor else withExtra
+            }
         })
         alpha = register("alpha")
         beta = register("beta")
@@ -344,6 +350,29 @@ class CardImportTest {
         val byId = cardsOf(importById("2"))
         assertThat(byId.map { it.title }).containsExactly("Topic closed")
         assertThat(withRef("2")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-1 of #197 a project that declares the jira tracker imports a card with the jira reference and adapter`() {
+        extraYaml["gamma"] = "tracker: jira\njira_site: acme.atlassian.net\njira_project: PROJ\n"
+        val gamma = registry.register(Files.createDirectories(dir.resolve("gamma")).also { Files.createDirectories(it.resolve(".git")) })
+        val url = "https://acme.atlassian.net/browse/PROJ-1"
+        tracker.seed(TrackerItem.of("PROJ-1", ExternalText("Jira title"), ExternalText("body"), emptyList(), url, TrackerItemState.OPEN))
+
+        val id = cardsOf(importById("PROJ-1", project = "gamma")).single().id
+        importById("PROJ-1", project = "gamma")
+
+        val card = requireNotNull(store.card(id))
+        assertThat(card.references.single().provider).isEqualTo("jira")
+        assertThat(card.references.single().externalId).isEqualTo("PROJ-1")
+        assertThat(store.cards()).hasSize(1)
+        val created = store.events(id).single { it.type == EventType.CARD_CREATED }
+        assertThat(created.actor).isEqualTo(Actor.Adapter("jira"))
+        assertThat(created.payload["provider"]).isEqualTo("jira")
+        assertThat(reimports(id).single().payload["provider"]).isEqualTo("jira")
+        assertThat(ProjectDelivery.trackerOf(gamma, dir.resolve("tracker")).javaClass.simpleName).isEqualTo("AcliTracker")
+        val github = registry.list().first { it.name == "alpha" }
+        assertThat(ProjectDelivery.trackerOf(github, dir.resolve("tracker")).javaClass.simpleName).isNotEqualTo("AcliTracker")
     }
 
     private fun boardLine(rows: List<Pair<String, String>>, project: String = "alpha"): String {

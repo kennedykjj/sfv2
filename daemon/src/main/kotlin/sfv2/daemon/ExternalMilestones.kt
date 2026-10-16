@@ -21,6 +21,7 @@ import sfv2.store.CardEventStore
  * Writes the optional milestones (policy `milestones`) of a card to its external issue, once each.
  * With `signers.milestone` = `owner` (the default) a reached milestone is only held as MILESTONE_PENDING until the owner
  * confirms it over the socket; with `policy` it is written at once.
+ * The tracker provider comes from the project policies (`tracker`); the PR link comes from [prLinkOf].
  * [reached] never throws: an optional milestone must not break the pipeline that triggers it. Both lookups take the card id.
  */
 class ExternalMilestones(
@@ -28,6 +29,8 @@ class ExternalMilestones(
     private val recorder: EventRecorder,
     private val trackerOf: (String) -> Tracker,
     private val policiesOf: (String) -> ProjectPolicies,
+    private val projectOf: (String) -> Project,
+    private val prLinkOf: (Project, String) -> String?,
     private val clock: Clock,
     private val log: DaemonLog,
     private val ownerProof: OwnerProof,
@@ -39,10 +42,12 @@ class ExternalMilestones(
             val policies = policiesOf(cardId)
             if (milestone !in policies.milestones) return
             val card = store.card(cardId) ?: return
-            val ref = card.references.firstOrNull { it.provider == PROVIDER } ?: return
+            val project = projectOf(cardId)
+            val provider = project.policies.tracker.provider
+            val ref = card.references.firstOrNull { it.provider == provider } ?: return
             when (policies.signers[ExternalEffect.MILESTONE] ?: Signer.OWNER) {
-                Signer.OWNER -> hold(cardId, card, ref, milestone, detail)
-                Signer.POLICY -> write(cardId, card, ref, milestone, detail)
+                Signer.OWNER -> hold(cardId, card, ref, project, milestone, detail)
+                Signer.POLICY -> write(cardId, card, ref, project, milestone, detail)
             }
         } catch (e: TrackerException) {
             log.log("milestone_failed", mapOf("card" to cardId, "milestone" to milestone.key))
@@ -62,36 +67,39 @@ class ExternalMilestones(
         else -> Response.Error("not a milestone command")
     }
 
-    private fun hold(cardId: String, card: Card, ref: ExternalRef, milestone: Milestone, detail: String?) {
+    private fun hold(cardId: String, card: Card, ref: ExternalRef, project: Project, milestone: Milestone, detail: String?) {
         val events = store.events(cardId)
         if (events.any { (it.type == EventType.MILESTONE_PENDING || it.type == EventType.MILESTONE_WRITTEN) && it.payload["milestone"] == milestone.key }) return
-        val text = textOf(milestone, ref.url, ref.externalId, detail) ?: return
+        val text = textOf(milestone, project, detail) ?: return
         val payload = buildMap {
             put("milestone", milestone.key)
             put("externalId", ref.externalId)
             put("textHash", sha256(text))
             if (detail != null) put("detail", detail)
         }
-        record(cardId, card, Actor.Adapter(PROVIDER), EventType.MILESTONE_PENDING, payload)
+        record(cardId, card, Actor.Adapter(ref.provider), EventType.MILESTONE_PENDING, payload)
         log.log("milestone_pending", mapOf("card" to cardId, "milestone" to milestone.key))
     }
 
-    private fun write(cardId: String, card: Card, ref: ExternalRef, milestone: Milestone, detail: String?) {
+    private fun write(cardId: String, card: Card, ref: ExternalRef, project: Project, milestone: Milestone, detail: String?) {
         val tracker = trackerOf(cardId)
         val item = tracker.fetch(ref.externalId)
         if (item != null) {
             TextChangeWarning.warnIfChanged(
-                store, recorder, clock, cardId, card, ref.externalId, ref.textHash.value, item.textHash,
+                store, recorder, clock, cardId, card, ref.externalId, ref.textHash.value, item.textHash, ref.provider,
             )
         }
         if (store.events(cardId).any { it.type == EventType.MILESTONE_WRITTEN && it.payload["milestone"] == milestone.key }) return
-        val text = textOf(milestone, ref.url, ref.externalId, detail) ?: return
+        val text = textOf(milestone, project, detail) ?: return
         tracker.writeMilestone(ref.externalId, text)
-        recordWritten(cardId, card, milestone, ref.externalId)
+        recordWritten(cardId, card, milestone, ref)
     }
 
-    private fun recordWritten(cardId: String, card: Card, milestone: Milestone, externalId: String) {
-        record(cardId, card, Actor.Adapter(PROVIDER), EventType.MILESTONE_WRITTEN, mapOf("milestone" to milestone.key, "externalId" to externalId))
+    private fun recordWritten(cardId: String, card: Card, milestone: Milestone, ref: ExternalRef) {
+        record(
+            cardId, card, Actor.Adapter(ref.provider), EventType.MILESTONE_WRITTEN,
+            mapOf("milestone" to milestone.key, "externalId" to ref.externalId),
+        )
         log.log("milestone_written", mapOf("card" to cardId, "milestone" to milestone.key))
     }
 
@@ -113,9 +121,11 @@ class ExternalMilestones(
         }
         val written = events.any { it.type == EventType.MILESTONE_WRITTEN && it.payload["milestone"] == milestone.key }
         if (written) return Response.MilestonesResult(pendingItems())
-        val ref = card.references.firstOrNull { it.provider == PROVIDER }
-            ?: return Response.Error("card $cardId has no github reference")
-        val text = textOf(milestone, ref.url, ref.externalId, pending.payload["detail"])
+        val project = projectOf(cardId)
+        val provider = project.policies.tracker.provider
+        val ref = card.references.firstOrNull { it.provider == provider }
+            ?: return Response.Error("card $cardId has no $provider reference")
+        val text = textOf(milestone, project, pending.payload["detail"])
         if (text == null || sha256(text) != pendingHash) {
             return Response.Error("text changed for milestone ${milestone.key} of card $cardId: list the pending milestones again")
         }
@@ -126,10 +136,12 @@ class ExternalMilestones(
         return try {
             val tracker = trackerOf(cardId)
             tracker.fetch(ref.externalId)?.let {
-                TextChangeWarning.warnIfChanged(store, recorder, clock, cardId, card, ref.externalId, ref.textHash.value, it.textHash)
+                TextChangeWarning.warnIfChanged(
+                    store, recorder, clock, cardId, card, ref.externalId, ref.textHash.value, it.textHash, provider,
+                )
             }
             tracker.writeMilestone(ref.externalId, text)
-            recordWritten(cardId, card, milestone, ref.externalId)
+            recordWritten(cardId, card, milestone, ref)
             Response.MilestonesResult(pendingItems())
         } catch (e: TrackerException) {
             log.log("milestone_failed", mapOf("card" to cardId, "milestone" to milestone.key))
@@ -140,21 +152,28 @@ class ExternalMilestones(
     /** Pending = MILESTONE_PENDING with no MILESTONE_WRITTEN of the same milestone, derived from the events. */
     private fun pendingItems(): List<MilestoneItem> = store.cards().flatMap { stored ->
         val events = store.events(stored.id)
+        val pendingEvents = events.filter { it.type == EventType.MILESTONE_PENDING }
+        if (pendingEvents.isEmpty()) return@flatMap emptyList()
+        val project = try {
+            projectOf(stored.id)
+        } catch (e: RuntimeException) {
+            return@flatMap emptyList()
+        }
         val written = events.filter { it.type == EventType.MILESTONE_WRITTEN }.mapNotNull { it.payload["milestone"] }.toSet()
-        val ref = stored.card.references.firstOrNull { it.provider == PROVIDER }
-        events.filter { it.type == EventType.MILESTONE_PENDING }
+        val ref = stored.card.references.firstOrNull { it.provider == project.policies.tracker.provider }
+        pendingEvents
             .distinctBy { it.payload["milestone"] }
             .filter { it.payload["milestone"] !in written }
             .mapNotNull { event ->
                 val milestone = Milestone.entries.firstOrNull { it.key == event.payload["milestone"] }
-                val text = if (milestone == null || ref == null) null else textOf(milestone, ref.url, ref.externalId, event.payload["detail"])
+                val text = if (milestone == null || ref == null) null else textOf(milestone, project, event.payload["detail"])
                 text?.let { MilestoneItem(stored.id, requireNotNull(milestone).key, it, sha256(it)) }
             }
     }
 
-    private fun textOf(milestone: Milestone, url: String, externalId: String, detail: String?): String? = when (milestone) {
+    private fun textOf(milestone: Milestone, project: Project, detail: String?): String? = when (milestone) {
         Milestone.STARTED -> "started"
-        Milestone.PR_OPENED -> detail?.let { url.removeSuffix("/issues/$externalId") + "/pull/" + it }
+        Milestone.PR_OPENED -> detail?.let { prLinkOf(project, it) }
     }
 
     private fun sha256(text: String): String =
@@ -172,7 +191,6 @@ class ExternalMilestones(
     }
 
     private companion object {
-        const val PROVIDER = "github"
         const val CMD_CONFIRM = "milestone.confirm"
         const val OWNER_PROOF_ERROR = "owner proof missing or invalid"
     }
@@ -189,6 +207,7 @@ internal object TextChangeWarning {
         externalId: String,
         previousHash: String,
         newHash: String,
+        provider: String,
     ) {
         if (previousHash == newHash) return
         val already = store.events(cardId).any { it.type == EventType.EXTERNAL_TEXT_CHANGED && it.payload["newHash"] == newHash }
@@ -196,7 +215,7 @@ internal object TextChangeWarning {
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
             at = clock.instant(),
-            actor = Actor.Adapter("github"),
+            actor = Actor.Adapter(provider),
             type = EventType.EXTERNAL_TEXT_CHANGED,
             payload = mapOf("externalId" to externalId, "previousHash" to previousHash, "newHash" to newHash),
         )
