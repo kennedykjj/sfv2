@@ -91,6 +91,7 @@ internal object Texts {
         when (cause) {
             NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
             NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
+            NotSentCause.NO_ANSWER -> "Movimento sem resposta do daemon: confira o quadro antes de repetir."
         }
 
     /** What the move means to the owner, for the destination chooser and the drop button. */
