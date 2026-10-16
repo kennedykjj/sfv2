@@ -54,8 +54,36 @@ object ClaudeRuntimeFixtures {
     fun runtime(binary: Path, transcriptDir: Path, timeout: Duration = Duration.ofSeconds(30)) =
         ClaudeRuntime(binary.toString(), transcriptDir, timeout, fixedClock)
 
+    fun runtime(binary: Path, transcriptDir: Path, provider: RuntimeProvider) =
+        ClaudeRuntime(binary.toString(), transcriptDir, Duration.ofSeconds(30), fixedClock, provider = provider)
+
+    /** Records the subprocess environment into `env` under [rec]. */
+    fun anEnvRecordingClaude(dir: Path, rec: Path): Path =
+        aRecordingClaude(dir, rec, extra = "env > \"${rec}/env\"")
+
+    fun recordedEnv(rec: Path): Map<String, String> =
+        Files.readAllLines(rec.resolve("env")).filter { it.contains('=') }
+            .associate { it.substringBefore('=') to it.substringAfter('=') }
+
+    val providerVars = listOf(
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "AWS_REGION", "AWS_PROFILE",
+        "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+    )
+
     fun fileCount(dir: Path): Long =
         if (Files.exists(dir)) Files.list(dir).use { it.count() } else 0L
+}
+
+/** Entry point of a child JVM whose own environment plays the daemon's: provider from env, then one launch. */
+object ProviderEnvProbe {
+    @JvmStatic
+    fun main(args: Array<String>) {
+        val runtime = ClaudeRuntime(
+            args[0], Path.of(args[1]), Duration.ofSeconds(30), ClaudeRuntimeFixtures.fixedClock,
+            provider = RuntimeProvider.fromEnv(System.getenv()),
+        )
+        runtime.launch(SessionRequest("implement", Path.of(args[2]), "model-x", Path.of("/tmp/mcp.json")))
+    }
 }
 
 class ClaudeRuntimeTest {
@@ -212,5 +240,157 @@ class ClaudeRuntimeTest {
         assertThat(error.message).contains("worktree")
         assertThat(Files.exists(rec.resolve("started"))).isFalse()
         assertThat(ClaudeRuntimeFixtures.fileCount(transcripts)).isEqualTo(0)
+    }
+
+    // --- runtime provider (#87) ---
+
+    private fun launchWith(provider: RuntimeProvider): Map<String, String> {
+        val base = Files.createTempDirectory(tmp, "launch")
+        val wt = Files.createDirectory(base.resolve("wt"))
+        val rec = Files.createDirectory(base.resolve("rec"))
+        val transcripts = base.resolve("transcripts")
+        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(base, rec)
+        ClaudeRuntimeFixtures.runtime(binary, transcripts, provider)
+            .launch(ClaudeRuntimeFixtures.aRequest(worktree = wt))
+        return ClaudeRuntimeFixtures.recordedEnv(rec)
+    }
+
+    @Test
+    fun `provider AC-1 bedrock gives the subprocess the use flag, region and optional profile`() {
+        val withProfile = launchWith(RuntimeProvider.Bedrock("us-east-1", "corp"))
+        assertThat(withProfile).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1")
+            .containsEntry("AWS_REGION", "us-east-1").containsEntry("AWS_PROFILE", "corp")
+
+        val noProfile = launchWith(RuntimeProvider.fromEnv(mapOf("SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "eu-west-1")))
+        assertThat(noProfile).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1").containsEntry("AWS_REGION", "eu-west-1")
+            .doesNotContainKey("AWS_PROFILE")
+    }
+
+    @Test
+    fun `provider AC-2 vertex gives the subprocess the use flag, region and project`() {
+        val env = launchWith(
+            RuntimeProvider.fromEnv(
+                mapOf("SFV2_PROVIDER" to "vertex", "SFV2_PROVIDER_REGION" to "us-east5", "SFV2_PROVIDER_PROJECT" to "my-proj"),
+            ),
+        )
+
+        assertThat(env).containsEntry("CLAUDE_CODE_USE_VERTEX", "1")
+            .containsEntry("CLOUD_ML_REGION", "us-east5").containsEntry("ANTHROPIC_VERTEX_PROJECT_ID", "my-proj")
+            .doesNotContainKey("CLAUDE_CODE_USE_BEDROCK")
+    }
+
+    @Test
+    fun `provider AC-3 proxy gives the subprocess the base url`() {
+        val env = launchWith(
+            RuntimeProvider.fromEnv(mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "https://llm.corp.example/v1")),
+        )
+
+        assertThat(env).containsEntry("ANTHROPIC_BASE_URL", "https://llm.corp.example/v1")
+            .doesNotContainKey("CLAUDE_CODE_USE_BEDROCK").doesNotContainKey("CLAUDE_CODE_USE_VERTEX")
+    }
+
+    private fun probeEnv(daemonEnv: Map<String, String>): Map<String, String> {
+        val (wt, rec, transcripts) = dirs()
+        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(tmp, rec)
+        val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
+        val builder = ProcessBuilder(
+            java, "-cp", System.getProperty("java.class.path"), "sfv2.adapters.ProviderEnvProbe",
+            binary.toString(), transcripts.toString(), wt.toString(),
+        ).redirectErrorStream(true).redirectOutput(tmp.resolve("probe.log").toFile())
+        builder.environment().also { e ->
+            e.keys.removeAll(ClaudeRuntimeFixtures.providerVars.toSet())
+            e.keys.removeAll { it.startsWith("SFV2_PROVIDER") }
+            e.putAll(daemonEnv)
+        }
+        val probe = builder.start()
+        assertThat(probe.waitFor(60, TimeUnit.SECONDS)).isTrue()
+        assertThat(probe.exitValue()).`as`(Files.readString(tmp.resolve("probe.log"))).isEqualTo(0)
+        return ClaudeRuntimeFixtures.recordedEnv(rec)
+    }
+
+    @Test
+    fun `provider AC-4 without a provider none of the provider variables of the daemon environment reach the subprocess`() {
+        val leaked = ClaudeRuntimeFixtures.providerVars.associateWith { "leak-$it" }
+
+        val env = probeEnv(leaked + mapOf("ANTHROPIC_AUTH_TOKEN" to "tok-123"))
+
+        ClaudeRuntimeFixtures.providerVars.forEach { assertThat(env).doesNotContainKey(it) }
+        assertThat(env).containsEntry("ANTHROPIC_AUTH_TOKEN", "tok-123")
+    }
+
+    @Test
+    fun `provider AC-4 a configured provider replaces stale provider variables of the daemon environment`() {
+        val leaked = ClaudeRuntimeFixtures.providerVars.associateWith { "leak-$it" }
+
+        val env = probeEnv(leaked + mapOf("SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "us-east-1"))
+
+        assertThat(env).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1").containsEntry("AWS_REGION", "us-east-1")
+        listOf("CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "AWS_PROFILE", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID",
+            "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL").forEach { assertThat(env).doesNotContainKey(it) }
+    }
+
+    @Test
+    fun `provider AC-5 invalid configuration is refused naming the field, never the value`() {
+        val cases = listOf(
+            mapOf("SFV2_PROVIDER" to "gcp-magic-77") to "SFV2_PROVIDER",
+            mapOf("SFV2_PROVIDER" to "bedrock") to "SFV2_PROVIDER_REGION",
+            mapOf("SFV2_PROVIDER" to "vertex", "SFV2_PROVIDER_PROJECT" to "p") to "SFV2_PROVIDER_REGION",
+            mapOf("SFV2_PROVIDER" to "vertex", "SFV2_PROVIDER_REGION" to "us-east5") to "SFV2_PROVIDER_PROJECT",
+            mapOf("SFV2_PROVIDER" to "proxy") to "SFV2_PROVIDER_URL",
+            mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "ftp://proxy-secret-host/x") to "SFV2_PROVIDER_URL",
+            mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "https://user:hunter2@host/x") to "SFV2_PROVIDER_URL",
+            mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "https://host/x?key=hunter2") to "SFV2_PROVIDER_URL",
+            mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "https://host/x#hunter2") to "SFV2_PROVIDER_URL",
+        )
+
+        cases.forEach { (env, field) ->
+            val error = assertThrows<InvalidRuntimeProviderException> { RuntimeProvider.fromEnv(env) }
+            assertThat(error.message).`as`(env.toString()).contains(field)
+            assertThat(error.message).doesNotContain("hunter2").doesNotContain("gcp-magic-77")
+                .doesNotContain("proxy-secret-host")
+        }
+        assertThat(RuntimeProvider.fromEnv(emptyMap())).isEqualTo(RuntimeProvider.Anthropic)
+    }
+
+    @Test
+    fun `provider AC-5 a runtime built with an invalid provider starts no process and writes no transcript`() {
+        val (wt, rec, transcripts) = dirs()
+        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(tmp, rec)
+
+        listOf(RuntimeProvider.Proxy("ftp://host/x"), RuntimeProvider.Bedrock(""), RuntimeProvider.Vertex("us-east5", "")).forEach { bad ->
+            assertThrows<InvalidRuntimeProviderException> {
+                ClaudeRuntimeFixtures.runtime(binary, transcripts, bad)
+                    .launch(ClaudeRuntimeFixtures.aRequest(worktree = wt))
+            }
+        }
+
+        assertThat(Files.exists(rec.resolve("started"))).isFalse()
+        assertThat(ClaudeRuntimeFixtures.fileCount(transcripts)).isEqualTo(0)
+    }
+
+    @Test
+    fun `provider AC-7 credentials are not part of the configuration and come from the daemon environment`() {
+        val config = mapOf(
+            "SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "us-east-1",
+            "AWS_SECRET_ACCESS_KEY" to "secret-key-4242", "AWS_ACCESS_KEY_ID" to "akia-4242", "ANTHROPIC_AUTH_TOKEN" to "tok-4242",
+        )
+
+        val provider = RuntimeProvider.fromEnv(config)
+
+        assertThat(provider.environment().keys).containsExactlyInAnyOrder("CLAUDE_CODE_USE_BEDROCK", "AWS_REGION")
+        assertThat(provider.toString()).doesNotContain("4242")
+
+        val inherited = probeEnv(config)
+        assertThat(inherited).containsEntry("AWS_SECRET_ACCESS_KEY", "secret-key-4242")
+            .containsEntry("AWS_ACCESS_KEY_ID", "akia-4242").containsEntry("ANTHROPIC_AUTH_TOKEN", "tok-4242")
+    }
+
+    @Test
+    fun `provider AC-7 a url with embedded credentials is refused without echoing them`() {
+        val error = assertThrows<InvalidRuntimeProviderException> {
+            RuntimeProvider.Proxy("https://svc:hunter2@proxy.corp/v1").environment()
+        }
+
+        assertThat(error.message).contains("SFV2_PROVIDER_URL").doesNotContain("hunter2").doesNotContain("svc")
     }
 }
