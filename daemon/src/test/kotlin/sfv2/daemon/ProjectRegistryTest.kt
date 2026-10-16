@@ -338,7 +338,7 @@ class ProjectRegistryTest {
         val repo = aRepo("alpha")
         val source = FakeSource().also { it.put(repo, validYaml("alpha")) }
         daemonRun("policy.db", source) { it.register(repo) }
-        source.put(repo, validYaml("renamed").replace("close: policy", "close: owner").replace("path: daemon/", "path: app/"))
+        source.put(repo, validYaml("renamed").replace("close: policy", "close: owner").replace("name: daemon", "name: app").replace("path: daemon/", "path: app/"))
 
         val restored = daemonRun("policy.db", source) { registry -> registry.restore(); registry.list().single() }
 
