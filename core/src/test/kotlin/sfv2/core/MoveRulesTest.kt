@@ -78,14 +78,23 @@ class MoveRulesTest {
     }
 
     @Test
+    fun `a card blocked in Refinement or Coding goes back to its ready column by the owner, and the owner stays the only judge of the others`() {
+        assertThat(MoveRules.check(REFINEMENT, READY_FOR_REFINEMENT, Actor.Owner)).isEqualTo(MoveDecision.Allowed)
+        assertThat(MoveRules.check(CODING, READY_FOR_DEV, Actor.Owner)).isEqualTo(MoveDecision.Allowed)
+        assertThat(MoveRules.check(SPEC_REVIEW, READY_FOR_DEV, Actor.Agent("develop"))).isInstanceOf(MoveDecision.Refused::class.java)
+    }
+
+    @Test
     fun `AC-6 table is the single source and every column and actor pair follows it`() {
         val expected = mapOf(
             (INBOX to READY_FOR_REFINEMENT) to OWNER_ONLY,
             (READY_FOR_REFINEMENT to REFINEMENT) to FACTORY_OR_OWNER,
             (REFINEMENT to SPEC_REVIEW) to FACTORY_OR_OWNER,
+            (REFINEMENT to READY_FOR_REFINEMENT) to FACTORY_OR_OWNER,
             (SPEC_REVIEW to READY_FOR_DEV) to OWNER_ONLY,
             (SPEC_REVIEW to READY_FOR_REFINEMENT) to OWNER_ONLY,
             (READY_FOR_DEV to CODING) to FACTORY_OR_OWNER,
+            (CODING to READY_FOR_DEV) to FACTORY_OR_OWNER,
             (CODING to VALIDATION) to FACTORY_OR_OWNER,
             (VALIDATION to CODING) to FACTORY_OR_OWNER,
             (VALIDATION to STAGED) to FACTORY_OR_OWNER,
