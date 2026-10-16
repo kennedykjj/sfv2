@@ -30,7 +30,7 @@ fun runCli(
     env: Map<String, String>,
 ): Int {
     val cli = CliEnvironment(env, out, err)
-    val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli)
+    val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli).withProjectCommands(cli)
     return try {
         command.parse(args)
         0
