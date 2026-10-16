@@ -151,7 +151,7 @@ class CardApprove(private val cli: CliEnvironment) : CliktCommand(name = "approv
 class CardUnblock(private val cli: CliEnvironment) : CliktCommand(name = "unblock") {
     private val id by argument(help = "Card id")
 
-    override fun help(context: Context) = "Unblock a blocked card, keeping its column."
+    override fun help(context: Context) = "Unblock a blocked card; one blocked mid-work returns to the queue of its stage."
 
     override fun run() {
         val token = cli.ownerToken()
