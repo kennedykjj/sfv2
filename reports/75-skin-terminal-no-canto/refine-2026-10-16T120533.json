@@ -1,0 +1,1 @@
+{"issue":75,"slug":"skin-terminal-no-canto","pipeline":"refine","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:10:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15811,"duration_s":12},{"role":"ux-designer","tokens":21415,"duration_s":20}],"rounds":{"po":1,"ux":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
