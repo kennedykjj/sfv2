@@ -204,11 +204,11 @@ class ProjectRegistryTest {
         git(repo, "init", "-q", "-b", "main")
         Files.createDirectories(repo.resolve(".shipfloor"))
         val file = repo.resolve(".shipfloor/factory.yml")
-        Files.writeString(file, validYaml("scoped") + "forbidden:\n  - gradle/wrapper/\n  - docs/private\n")
+        Files.writeString(file, validYaml("scoped") + "\nforbidden:\n  - gradle/wrapper/\n  - docs/private\n")
         git(repo, "add", ".")
         git(repo, "commit", "-q", "-m", "main config")
         git(repo, "checkout", "-q", "-b", "feat/loosen")
-        Files.writeString(file, validYaml("scoped").replace("path: core/", "path: .") + "forbidden: []\n")
+        Files.writeString(file, validYaml("scoped").replace("path: core/", "path: .") + "\nforbidden: []\n")
 
         val registered = ProjectRegistry(GitProjectConfigSource()).register(repo)
 
