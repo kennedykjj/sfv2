@@ -73,6 +73,21 @@ class EventTest {
     }
 
     @Test
+    fun `AC-1 a gate result event round trips through JSON with its payload`() {
+        val type = EventType.entries.firstOrNull { it.name == "GATE_FINISHED" }
+        assertThat(type).isNotNull()
+        val event = EventFixtures.anEvent(
+            actor = Actor.Factory("gate"),
+            type = requireNotNull(type),
+            payload = mapOf("gate" to "lint", "verdict" to "FAIL", "reason" to "timeout", "summary" to "boom"),
+        )
+
+        val decoded = EventJson.decode(EventJson.encode(event))
+
+        assertThat(decoded).isEqualTo(event)
+    }
+
+    @Test
     fun `reading an event without a field fails naming the field`() {
         val json = EventJson.encode(EventFixtures.anEvent()).replace("\"id\":\"evt-1\",", "")
 
