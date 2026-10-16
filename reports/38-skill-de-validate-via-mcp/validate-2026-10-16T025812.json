@@ -1,0 +1,1 @@
+{"outcome": "staged", "pr": 158, "head": "9491cb7fd9f077e9c5d23f2dd00e3d1875fbb955", "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": ["green daemon sfv2.daemon.ValidateSkillTest", "green daemon sfv2.daemon.ValidationOutcomeTest"], "amendments": [], "agents": []}
