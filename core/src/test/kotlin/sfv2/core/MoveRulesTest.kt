@@ -92,6 +92,7 @@ class MoveRulesTest {
             (STAGED to READY_FOR_PROD) to OWNER_ONLY,
             (STAGED to CODING) to FACTORY_OR_OWNER,
             (READY_FOR_PROD to DONE) to FACTORY_OR_OWNER,
+            (READY_FOR_PROD to STAGED) to FACTORY_OR_OWNER,
         )
         assertThat(MoveRules.table).isEqualTo(expected)
 
