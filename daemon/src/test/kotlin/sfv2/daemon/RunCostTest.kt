@@ -110,6 +110,22 @@ class RunCostTest {
     }
 
     @Test
+    fun `a price table in the V0 layout with model names at the top level is read`() {
+        val v0 = """
+            # US${'$'} per million tokens
+            claude-opus-5-5:   {input: 4.00,  output: 20.00, cache_write_5m: 5.00,  cache_write_1h: 8.00,  cache_read: 0.20}
+            gpt-5:             {input: 1.25, output: 10.00, cache_read: 0.125}
+        """.trimIndent()
+
+        val table = PriceTable.parse(v0)
+
+        assertThat(table.priceOf("claude-opus-5-5")?.output).isEqualByComparingTo("20.00")
+        assertThat(table.priceOf("gpt-5")?.cacheRead).isEqualByComparingTo("0.125")
+        assertThat(table.priceOf("gpt-5")?.cacheWrite1h).isEqualByComparingTo("0")
+        assertThat(table.priceOf("not-listed")).isNull()
+    }
+
+    @Test
     fun `AC-2 a model missing from the price table gives unknown, not zero, and names the model`() {
         val usage = mapOf("model-x" to TokenCounts(input = 1000, output = 1000))
 
