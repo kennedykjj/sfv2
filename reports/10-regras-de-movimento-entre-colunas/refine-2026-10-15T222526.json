@@ -1,0 +1,1 @@
+{"issue":10,"slug":"regras-de-movimento-entre-colunas","pipeline":"refine","started_at":"2026-10-15T00:00:00Z","finished_at":"2026-10-15T00:30:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":16294,"duration_s":11}],"rounds":{"3":1,"6":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
