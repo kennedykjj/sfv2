@@ -14,6 +14,7 @@ internal object Tokens {
     val faint = Color(0xFF8F98A3)
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
+    val sand = Color(0xFFC7B9A6)
 }
 
 internal val sans = FontFamily.SansSerif
@@ -25,6 +26,12 @@ internal object Texts {
     const val CONNECTING = "Conectando ao daemon…"
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
+    const val BOARD = "Esteira"
+    const val WAITS_FOR_YOU = "Aguarda você"
+    const val EMPTY_COLUMN = "Vazia"
+    const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
+    const val LOADING_BOARD = "Carregando a esteira…"
+    const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
 
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
@@ -40,6 +47,8 @@ internal object Texts {
     const val COST_UNKNOWN_REASON = "falta preço de um modelo"
 
     fun cardNotFound(id: String) = "Card #$id não encontrado."
+
+    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
 
     /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
     data class Explanation(val reason: String, val step: String, val command: String?)

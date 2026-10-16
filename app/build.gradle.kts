@@ -2,6 +2,7 @@ plugins {
     id("sfv2.kotlin-jvm")
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 dependencies {
