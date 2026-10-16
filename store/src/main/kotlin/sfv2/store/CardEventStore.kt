@@ -1,10 +1,13 @@
 package sfv2.store
 
+import java.time.Instant
 import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventJson
+import sfv2.core.ExternalRef
+import sfv2.core.TextHash
 
 /** A card together with its stored id. */
 data class StoredCard(val id: String, val card: Card)
@@ -19,6 +22,19 @@ class CardEventStore(private val database: Database) {
             // Insert-then-update keeps the card's rowid, so cards() order stays stable across changes.
             queries.insertCardIfAbsent(id = cardId, title = card.title, column_name = card.column.name)
             queries.updateCard(title = card.title, column_name = card.column.name, id = cardId)
+            // The card is the whole state: the stored references mirror its list, in order.
+            queries.deleteReferences(cardId)
+            card.references.forEachIndexed { index, ref ->
+                queries.insertReference(
+                    cardId = cardId,
+                    position = index.toLong(),
+                    provider = ref.provider,
+                    externalId = ref.externalId,
+                    url = ref.url,
+                    importedAt = ref.importedAt.toString(),
+                    textHash = ref.textHash.value,
+                )
+            }
             queries.insertEvent(
                 id = event.id.value,
                 cardId = cardId,
@@ -35,12 +51,25 @@ class CardEventStore(private val database: Database) {
 
     fun card(cardId: String): Card? =
         queries.cardById(cardId).executeAsOneOrNull()
-            ?.let { Card.create(it.title, Column.valueOf(it.column_name)) }
+            ?.let { assemble(cardId, it.title, it.column_name) }
 
     /** All cards in insertion order. */
     fun cards(): List<StoredCard> =
         queries.allCards().executeAsList()
-            .map { StoredCard(it.id, Card.create(it.title, Column.valueOf(it.column_name))) }
+            .map { StoredCard(it.id, assemble(it.id, it.title, it.column_name)) }
+
+    private fun assemble(cardId: String, title: String, columnName: String): Card =
+        queries.referencesByCard(cardId).executeAsList().fold(Card.create(title, Column.valueOf(columnName))) { card, row ->
+            card.withReference(
+                ExternalRef(
+                    provider = row.provider,
+                    externalId = row.external_id,
+                    url = row.url,
+                    importedAt = Instant.parse(row.imported_at),
+                    textHash = TextHash(row.text_hash),
+                ),
+            )
+        }
 
     private fun Actor.kind(): String = when (this) {
         Actor.Owner -> "owner"
