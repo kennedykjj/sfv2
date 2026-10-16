@@ -10,6 +10,7 @@ import java.nio.file.Path
 import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -305,6 +306,29 @@ class OwnerMovesTest {
     }
 
     @Test
+    fun `AC-1 a move with no answer closes the connection to the silent daemon`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = SilentDaemon(dir.resolve("daemon.sock"))
+        try {
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier {
+                    SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 200)
+                        .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+                },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(noAnswer))
+            assertThat(daemon.hungUp.await(3, TimeUnit.SECONDS)).isTrue()
+            assertThat(daemon.requests).hasSize(1)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
     fun `AC-2 a daemon that answers within the deadline still gives Accepted`() {
         val dir = Files.createTempDirectory("sfv2m")
         val token = dir.resolve("owner.token")
@@ -441,6 +465,30 @@ class FakeDaemon(socket: Path, private val reply: (String) -> String) {
                 }
             } catch (e: IOException) {
                 // closed by the test
+            }
+        }
+    }
+
+    fun close() = server.close()
+}
+
+/** Accepts one connection, reads the request and never answers; [hungUp] opens when the client closes its side. */
+class SilentDaemon(socket: Path) {
+    val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val hungUp = CountDownLatch(1)
+    private val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX).also { it.bind(UnixDomainSocketAddress.of(socket)) }
+
+    init {
+        Thread.ofPlatform().daemon().start {
+            try {
+                server.accept().use { client ->
+                    val reader = Channels.newInputStream(client).bufferedReader()
+                    reader.readLine()?.let { requests.add(it) }
+                    if (reader.read() == -1) hungUp.countDown()
+                }
+            } catch (e: IOException) {
+                // a reset by the client is also a hang-up
+                hungUp.countDown()
             }
         }
     }
