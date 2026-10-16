@@ -6,6 +6,7 @@ import sfv2.core.Card
 import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventJson
+import sfv2.core.EventType
 import sfv2.core.ExternalRef
 import sfv2.core.TextHash
 
@@ -62,6 +63,23 @@ class CardEventStore(private val database: Database) {
     fun eventsAfter(seq: Long): List<StoredEvent> =
         queries.eventsAfter(seq).executeAsList()
             .map { StoredEvent(it.seq, it.card_id, EventJson.decode(it.payload_json)) }
+
+    /** RUN_COST_RECORDED events with `from <= at < toExclusive`, in seq order; only these rows are decoded. */
+    fun costEventsBetween(from: Instant, toExclusive: Instant): List<StoredEvent> =
+        queries.costEventsBetween(fromAt = from.bound(), toAt = toExclusive.bound()).executeAsList()
+            .map { StoredEvent(it.seq, it.card_id, EventJson.decode(it.payload_json)) }
+
+    /** Highest seq of the card's events of [type] (and of [actor]'s kind when given), or null when none. */
+    fun lastSeq(cardId: String, type: EventType, actor: Actor? = null): Long? =
+        if (actor == null) {
+            queries.lastSeqByType(cardId = cardId, type = type.name).executeAsOne().MAX
+        } else {
+            queries.lastSeqByTypeAndActor(cardId = cardId, type = type.name, actor = actor.kind()).executeAsOne().MAX
+        }
+
+    // Stored `at` is Instant.toString() ending in "Z"; without the "Z" a bound sorts just below every
+    // stored text of the same instant (with or without fraction), so >= and < compare correctly as text.
+    private fun Instant.bound(): String = toString().removeSuffix("Z")
 
     fun events(cardId: String): List<Event> =
         queries.eventPayloadsByCard(cardId).executeAsList().map { EventJson.decode(it) }
