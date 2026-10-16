@@ -64,6 +64,11 @@ class CardEventStore(private val database: Database) {
         queries.eventsAfter(seq).executeAsList()
             .map { StoredEvent(it.seq, it.card_id, EventJson.decode(it.payload_json)) }
 
+    /** The [limit] newest events, newest first; reads only those rows, never the whole history. */
+    fun latestEvents(limit: Long): List<StoredEvent> =
+        queries.latestEvents(limit).executeAsList()
+            .map { StoredEvent(it.seq, it.card_id, EventJson.decode(it.payload_json)) }
+
     /** RUN_COST_RECORDED events with `from <= at < toExclusive`, in seq order; only these rows are decoded. */
     fun costEventsBetween(from: Instant, toExclusive: Instant): List<StoredEvent> =
         queries.costEventsBetween(fromAt = from.bound(), toAt = toExclusive.bound()).executeAsList()
