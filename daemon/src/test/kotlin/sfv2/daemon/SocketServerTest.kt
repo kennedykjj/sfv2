@@ -337,7 +337,7 @@ class SocketServerTest {
         subscribe().use { first ->
             subscribe().use { second ->
                 val id = createCard("Write docs")
-                reply("""{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT"}""")
+                reply("""{"cmd":"card.move","actor":"owner","proof":"$proof","id":"$id","to":"READY_FOR_REFINEMENT"}""")
 
                 val seenByFirst = first.events(2)
                 val seenBySecond = second.events(2)
@@ -355,7 +355,7 @@ class SocketServerTest {
         withCardServer { _ ->
             val firstId = createCard("First")
             val seen = subscribe(after = 0).use { it.nextEvent() }.seq()
-            val moved = reply("""{"cmd":"card.move","actor":"owner","id":"$firstId","to":"READY_FOR_REFINEMENT"}""")
+            val moved = reply("""{"cmd":"card.move","actor":"owner","proof":"$proof","id":"$firstId","to":"READY_FOR_REFINEMENT"}""")
             val secondId = createCard("Second")
             assertThat(moved.getValue("ok").jsonPrimitive.boolean).isTrue()
 
