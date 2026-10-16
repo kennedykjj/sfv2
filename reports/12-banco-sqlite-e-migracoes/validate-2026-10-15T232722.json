@@ -1,0 +1,1 @@
+{"issue":12,"slug":"banco-sqlite-e-migracoes","pipeline":"validate","started_at":"2026-10-16T02:24:00Z","finished_at":"2026-10-16T02:30:00Z","outcome":"ok","agents":[{"role":"engineer","tokens":24456,"duration_s":43}],"rounds":{"review":1},"gates_failed":[],"flaky":[],"gates_reused":["green store sfv2.store.ModuleTest"],"manual_edit":false}
