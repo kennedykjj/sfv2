@@ -306,6 +306,34 @@ Agent-written review pages in the iframe are re-themed by `EMBED_CSS` in `script
 ### Keyboard and Live Updates
 Esc folds Request changes (the note stays), then closes the maximized panel or the wide card view, then clears the selection on the belt, in that order (not while typing); in the maximized lifecycle it first closes the note box, then lets go of a held card. In the work area's Decide mode, with the focus outside a text field, a select or an iframe and no wide view open, A approves, R opens Request changes and N skips to the next waiting card (Enter in the note sends it); the keys do nothing in Run, Card and Calm. The footer reads `A approve · R request changes · N skip` and shows only where the primary pointer is fine. Arrows, Home and End move between the card view's tabs, and between the days of a History chart by day. Opening a card moves focus to its title, closing returns it to the work area's title. The overview is read every 2s, the Feed every 5s, the card shown in the work area every 15s, an open card view every 5s, the open History every 10s and Settings every 10s, but a region is rewritten only when its markup changed, so focus, scroll, the open select and typed text survive; clocks tick on their own. The first read shows "Reading the factory…", and a failed read raises a "Not updating" alert with the error.
 
+## Target: the Board (sfv2 app)
+
+Decided by the owner on 2026-10-16 after the interactive reference `docs/design/interface-alvo.html` (open it in a browser: it works). Where this section and the rest of the document disagree, this section wins for the sfv2 desktop app (Compose). The reference is a visual and behavioral target, not code to copy; sample numbers in it (medians, costs per run, history) are illustrative.
+
+**What changes against the belt and the work area above**
+
+- **The belt becomes the Board.** Each column of the board is a belt segment: header with name and count, a rail under it, and the cards of that column below. Ten columns, in board order. The board scrolls sideways and vertically; column headers stay at the top, column footers (estimated cost of the column) stay at the bottom, and every column stretches to the full scroll height.
+- **Column minimap** above the board: one box per column, proportional to its rendered width, with the count; the window of what is visible is outlined; a click scrolls to the column. The edges of the board fade while there is more to see sideways.
+- **Resizable columns.** A grip in each header (a small pill, always visible, brighter on hover and focus) resizes the column; double click restores its default; Left and Right keys resize it from the grip. **Fit to window** (on by default): when the window is wider than the columns, they grow together in proportion; when narrower, the board scrolls and never shrinks a column below its minimum (200 px as cards, 96 px as chips). **Equalize** restores every default. Empty columns collapse into a 46 px strip with the count and a vertical name; a click restores them.
+- **Two densities**: Cards (title, stage progress, time, cost, gates, blockers) and Chips (the number only, as the token of the belt).
+- **The work area becomes a side panel** that opens on a click on a card, full height under the header, resizable from its left edge (360 to 680 px), closed with Esc. Tabs: Summary, Spec, Events, Runs. At the top, the card's path through the ten columns; at the bottom, a fixed footer: for a card that waits for the owner it is the decision (Approve with its destination, Request change, "n of N decisions"); otherwise a link to the issue. Under 880 px of window width the panel overlays the board instead of sharing the row.
+- **The pulse strip** between the header and the board (only in the Factory view): the factory in words (the state of #73 and the phrase of #74, in Plex Mono), the pool of sessions as small squares with the active runs, the day's ceiling as a meter with the estimated spend, and the forecast of when the queue empties. Under 1100 px it becomes a 2 by 2 grid, under 880 px one column.
+- **"Where the time goes"**: one stacked bar with the median minutes per stage of the cards delivered today; the stretches that wait for the owner are hatched in the accent, and the sentence above says how much of the lead time they are.
+- **Command palette** (Ctrl K): cards first those that wait for the owner, then the views.
+
+**Color by stage (replaces "do not color-code columns")**
+
+The stage hues of the pool bar now also mark the board: `refine` for Refinement, a new `develop` hue for Coding (teal, `#7fcdbf` dark, `#17806f` light), `validate` for Validation, `ok` for Ready for Prod and Done. Gates (Spec Review, Staged) keep the accent. Queues and Inbox stay neutral. A stage hue appears only on the 3 px top edge of its column, the card number, the step bars, the dial and the minimap tick; never as a fill of a panel and never on text of running copy. Each theme defines `develop` next to `refine` and `validate`. The accent still marks only what waits for the owner and the action that answers it.
+
+**Cards on the board**
+
+A card is a 12 px radius button on a 70% panel wash with a hairline border: number (mono, in the stage hue), layer chip, then at the right the state (the dial and "há 6 min" when it runs; the pulsing accent dot and "espera você · 3 h 50 min" when it waits; "bloqueada por #n" in `bad` when blocked). Below: the title (14 px), the step bar of the pipeline (when running), and a meta line with gate chips, PR and CI, lead time, estimated cost (always `est.`) and the `manual` and `adiada` chips. A card that waits for the owner has two small buttons, Decide (accent) and View spec.
+
+**Continuous motion (replaces "a fourth continuous animation")**
+
+Four, all stopped under reduced motion: the cooldown dial on a running card, the pulse of a waiting dot, the rail of a column while that column has a running card, and the cursor of the speech line in the pulse strip.
+
+
 ## Known deviations
 
 Values that fewer than three rules use and that have no named role. They stay as they are on the page until a rule widens the ramp or the scale.
@@ -325,8 +353,8 @@ Values that fewer than three rules use and that have no named role. They stay as
 
 ### Don't:
 - **Don't** set uppercase or wide-tracked type, or anything under 12px.
-- **Don't** color-code columns or cards; position and name identify a stage, and the dot's state is carried by its fill too.
+- **Don't** fill a column or a card with a stage hue; the hue is only the top edge, the number, the step bars, the dial and the minimap tick (see Target: the Board) too.
 - **Don't** use the accent as decoration, for money or for titles, or the outcome colors for anything but results.
 - **Don't** add emoji or icon fonts; text labels carry actions (the few inline SVG marks are the maximize and external-link glyphs, and the lock beside the reason a card in the maximized lifecycle cannot move).
 - **Don't** link a font or an asset from the network, or add a build step; the dashboard is one self-contained file.
-- **Don't** add resting shadows or a fourth continuous animation.
+- **Don't** add resting shadows or a fifth continuous animation (the four are listed in Target: the Board).
