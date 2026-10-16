@@ -92,3 +92,68 @@ class SystemWorktreeGit(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : Wo
         const val TIMEOUT_SECONDS = 60L
     }
 }
+
+sealed interface MergeResult {
+    data object Merged : MergeResult
+
+    data object Conflict : MergeResult
+
+    /** Any git failure that is not a conflict: no network or credential, no identity, non-zero exit. */
+    data object Failed : MergeResult
+}
+
+/** Brings the card's branch up to date with `origin/main`. */
+fun interface BranchSync {
+    fun mergeMain(worktree: Path): MergeResult
+}
+
+/**
+ * `git fetch` and `git merge` without a shell. Hooks and fsmonitor are switched off and the commit identity is fixed,
+ * so nothing from the repository's own config runs inside the daemon process.
+ */
+class SystemBranchSync(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : BranchSync {
+
+    override fun mergeMain(worktree: Path): MergeResult {
+        if (git(worktree, "fetch", "origin") != 0) return MergeResult.Failed
+        return when (git(worktree, "merge", "--no-edit", "origin/main")) {
+            0 -> MergeResult.Merged
+            else -> if (hasUnmergedPaths(worktree)) abortMerge(worktree) else MergeResult.Failed
+        }
+    }
+
+    private fun abortMerge(worktree: Path): MergeResult {
+        git(worktree, "merge", "--abort")
+        return MergeResult.Conflict
+    }
+
+    private fun hasUnmergedPaths(worktree: Path): Boolean = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD") == 0
+
+    /** Exit code of git, or -1 when it could not start or timed out. */
+    private fun git(worktree: Path, vararg args: String): Int {
+        val command = listOf(
+            "git", "-C", worktree.toString(),
+            "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+            "-c", "user.name=sfv2 factory", "-c", "user.email=factory@sfv2.invalid",
+        ) + args
+        val process = try {
+            ProcessBuilder(command)
+                .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
+                .start()
+        } catch (e: IOException) {
+            return -1
+        }
+        try {
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) return -1
+            return process.exitValue()
+        } finally {
+            process.destroyForcibly()
+        }
+    }
+
+    private companion object {
+        const val TIMEOUT_SECONDS = 120L
+    }
+}
