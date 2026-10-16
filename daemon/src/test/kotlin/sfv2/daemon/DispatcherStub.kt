@@ -61,9 +61,5 @@ class Dispatcher(
     fun onEvent(event: StoredEvent) {}
 }
 
-fun RunPool.isLocked(cardId: String): Boolean = false
-
-fun RunPool.hasRoom(): Boolean = false
-
 @Suppress("UNUSED_PARAMETER")
 fun EventStream.addListener(listener: (StoredEvent) -> Unit) {}
