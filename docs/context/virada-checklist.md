@@ -47,6 +47,6 @@ A V0 e a sfv2 **não podem rodar juntas no mesmo projeto**: duas fábricas no me
 
 ## 7. Fechar a Virada
 
-1. Comparar custo e lead time por card nos dois (critério 4). **A confirmar**: o relatório do #61 não aparece como comando da CLI (`sfv2 --help` não lista `report`).
+1. Comparar custo e lead time por card nos dois (critério 4). **A confirmar**: o relatório do #61 não aparece como comando da CLI (não achei comando `report` no código da CLI).
 2. Arquivar a V0 para este repositório (critério 5): remover o projeto da config da V0 e, no fim, `.shipfloor/` deixa de ser lido. Alterar `.shipfloor/` é à mão (CLAUDE.md).
 3. Fechar o #62 e mover o item para Done no board (card manual fica parado na coluna; ver `factory-operations.md`).
