@@ -20,6 +20,8 @@ _Product Owner_
 - AC-6: Dado um card já no último modelo da escada, quando um gate do develop falha por capacidade, então o modelo permanece o mesmo, sem erro.
 - AC-7: Dado uma falha de ambiente (timeout ou start_error) ou uma falha de gate fora de Coding, quando o próximo run do card é montado, então o modelo não sobe.
 - AC-8: Dado dois cards, quando o gate de um falha por capacidade, então só o degrau desse card sobe; o do outro permanece. Quando um card sai de Coding, seu degrau volta ao modelo padrão.
+- AC-9: Dado um gate do develop que falhou com `reason` `tests_failed` (o gate verde dos testes de aceitação, #31) ou `exit_code`, quando o próximo run do card é montado, então o modelo sobe; e dado `reason` `assertion_edited`, `setup_error`, `no_assertion_failure`, `no_test_ran`, `tests_passed_before_impl` (falhas de regra ou de ambiente de teste, não de capacidade), `timeout` ou `start_error`, então o modelo NÃO sobe. O conjunto que sobe é fechado e fica numa constante com o motivo de cada item.
+- AC-10: Dado `ModelStepUp.onEvent` chamado de dentro de `EventStream.publish` (sob o lock único do `EventRecorder`), quando chega um `GATE_FINISHED`, então ele só enfileira o evento e volta na hora, sem consulta ao banco, e o card é resolvido numa thread própria; o mesmo vale para o `CARD_MOVED` que zera o degrau.
 
 **Fora de escopo:** UI; persistir degraus entre reinícios do daemon; o launcher concreto; notificações e horário silencioso (S6-08); tela de configuração do dono.
 
@@ -38,7 +40,7 @@ _Tech Lead_
 **Contratos:**
 - `class WorkHours(start: LocalTime, end: LocalTime, days: Set<DayOfWeek>, zone: ZoneId) : WorkSchedule`: `isWorkTime(now)` converte para `zone`; se `start < end` vale `start <= t < end` no dia; se `start > end` (cruza a meia-noite) vale `t >= start` no dia D ou `t < end` no dia seguinte a D, com D em `days`; `start == end` é inválido.
 - `WorkHours.from(raw: Map<String, Any?>?): WorkSchedule`: lê `work_hours.start` / `end` (`HH:mm`), `days` (`mon`..`sun`; padrão todos) e `timezone` (padrão `UTC`); ausente → `AlwaysWorkTime`; inválido → `InvalidWorkHoursException(field, message)` (`RuntimeException`) nomeando o campo (ex.: `work_hours.days`), sem ecoar o valor inteiro do arquivo.
-- `class ModelStepUp(ladder: List<String>, store: CardEventStore)`: `fun modelFor(cardId: String): String` (degrau do card; padrão = `ladder.first()`); `fun onEvent(event: StoredEvent)`: em `GATE_FINISHED` com `verdict=FAIL`, `reason=exit_code` e card hoje em `Column.CODING`, sobe um degrau até o último; `reason` `timeout`/`start_error`, ou card fora de Coding, não sobe (G9: só falha de capacidade); em `CARD_MOVED` com `payload["from"] == "CODING"`, remove o degrau do card. Estado em `ConcurrentHashMap`; `onEvent` não toma lock próprio nem bloqueia (roda dentro de `EventStream.publish`).
+- `class ModelStepUp(ladder: List<String>, store: CardEventStore)`: `fun modelFor(cardId: String): String` (degrau do card; padrão = `ladder.first()`); `fun onEvent(event: StoredEvent)`: em `GATE_FINISHED` com `verdict=FAIL`, `reason` em {`exit_code`, `tests_failed`} (AC-9) e card hoje em `Column.CODING` (resolvido fora do `publish`, AC-10), sobe um degrau até o último; `reason` `timeout`/`start_error`, ou card fora de Coding, não sobe (G9: só falha de capacidade); em `CARD_MOVED` com `payload["from"] == "CODING"`, remove o degrau do card. Estado em `ConcurrentHashMap`; `onEvent` não toma lock próprio nem bloqueia (roda dentro de `EventStream.publish`).
 - `ladder` vazia → `require` falha na construção.
 - Fiação: `Dispatcher` já recebe `WorkSchedule`; `addListener(modelStepUp::onEvent)` e a leitura de `work_hours` do `factory.yml` entram na composição (`Main.kt`) quando o dispatcher for criado lá; o launcher concreto (outro card) chama `modelFor(cardId)`.
 - Log `key=value` só com `card` e `step`.
@@ -60,6 +62,8 @@ _Tech Lead_
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ModelStepUpTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ModelStepUpTest.kt` |
 | AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ModelStepUpTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ModelStepUpTest.kt` |
+| AC-10 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ModelStepUpTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
