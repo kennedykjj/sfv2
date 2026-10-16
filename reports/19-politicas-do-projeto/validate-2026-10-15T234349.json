@@ -1,0 +1,1 @@
+{"outcome": "staged", "pr": 112, "head": "226f00c55e10d0a475b007de9adf2882ebd5fe7b", "rounds": 0, "failed_gates": [], "amendments": [], "flaky": [], "gates_reused": ["build", "green core sfv2.core.ProjectPoliciesTest"]}
