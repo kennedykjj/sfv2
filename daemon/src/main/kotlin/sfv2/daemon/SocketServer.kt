@@ -108,7 +108,7 @@ class SocketServer private constructor(
         is Request.CardCloseDraft, is Request.CardCloseConfirm -> closure?.handle(request) ?: Response.Error("card closure is not available")
         is Request.CostSummary -> costSummary?.handle(request) ?: Response.Error("cost summary is not available")
         Request.MilestoneList, is Request.MilestoneConfirm -> milestones?.handle(request) ?: Response.Error("milestone commands are not available")
-        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, Request.ReportCsv, is Request.EventsRecent ->
+        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, is Request.CardDetail, Request.ReportCsv, is Request.EventsRecent ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 
