@@ -308,7 +308,7 @@ class DevelopPipeline(
         }
         val worktree = worktrees.ensure(project, cardId, card.title)
         var failed: List<GateResult> = emptyList()
-        var redPassed = false
+        var redPassed = redProvenSinceSpec(cardId)
         for (round in 1..maxRounds) {
             val outcome = playRound(cardId, worktree.path, redPassed, failed)
             redPassed = outcome.redPassed
@@ -320,6 +320,20 @@ class DevelopPipeline(
             }
         }
         block(cardId, failed)
+    }
+
+    /**
+     * True when every red gate of the card already passed since its spec was last produced: the QA tests were proven
+     * red then and the implementation committed afterwards would make a new red gate impossible (a card sent back to
+     * Coding after a blocked run, or after a restart, must not replay the QA).
+     */
+    private fun redProvenSinceSpec(cardId: String): Boolean {
+        val events = store.events(cardId)
+        val lastSpec = events.indexOfLast { it.type == EventType.CARD_MOVED && it.payload["to"] == Column.SPEC_REVIEW.name }
+        val afterSpec = events.drop(lastSpec + 1)
+        val reds = afterSpec.filter { it.type == EventType.GATE_FINISHED && it.payload["gate"]?.endsWith("-red") == true }
+        if (reds.isEmpty()) return false
+        return reds.groupBy { it.payload["gate"] }.values.all { runs -> runs.any { it.payload["verdict"] == "PASS" } }
     }
 
     /** Where a round ended: whether the tests were proven red, and the gates that failed (empty when all are green). */
