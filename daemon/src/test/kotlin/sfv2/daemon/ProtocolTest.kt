@@ -6,7 +6,10 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
@@ -128,6 +131,134 @@ class ProtocolTest {
             assertThat(lines[0]).startsWith("card_id,title,").endsWith("cost_usd_estimate,cost_status")
             assertThat(lines[1]).startsWith("done-1,\"Shipped\",90,")
             assertThat(lines[1].split(",")).hasSameSizeAs(lines[0].split(","))
+        }
+    }
+
+    private val auditColumns = listOf("event_id", "at", "type", "actor", "from", "to", "cost_usd_estimate", "cost_status")
+
+    private fun auditEvents(t0: Instant) = listOf(
+        Event(EventId("e1"), t0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Secret issue text")),
+        Event(EventId("e2"), t0.plusSeconds(60), Actor.Agent("dev"), EventType.RUN_COST_RECORDED, mapOf("cost_usd" to "0.0421", "status" to "KNOWN", "note" to "free text")),
+        Event(EventId("e3"), t0.plusSeconds(120), Actor.Factory("gate"), EventType.RUN_COST_RECORDED, mapOf("status" to "UNKNOWN")),
+        Event(EventId("e4"), t0.plusSeconds(180), Actor.Owner, EventType.OWNER_APPROVED, mapOf("from" to "SPEC_REVIEW", "to" to "READY_FOR_DEV")),
+        Event(EventId("e5"), t0.plusSeconds(240), Actor.Owner, EventType.CARD_MOVED, mapOf("from" to "READY_FOR_DEV", "to" to "free text, not a column")),
+    )
+
+    private fun withAudit(dir: Path, events: List<Event>, block: (CardEventStore, CardCommands, (String, String) -> JsonObject) -> Unit) {
+        Database.open(dir.resolve("audit.db")).use { db ->
+            val store = CardEventStore(db)
+            events.forEach { store.recordChange("c1", Card.create("T", Column.CODING), it) }
+            val t0 = Instant.parse("2026-10-16T10:00:00Z")
+            val commands = CardCommands(store, Clock.fixed(t0, ZoneOffset.UTC), OwnerProof.create(dir.resolve("owner.token"), SecureRandom()))
+            val export = { id: String, format: String ->
+                Json.parseToJsonElement(render(commands.handle(parseRequest("""{"cmd":"audit.export","id":"$id","format":"$format"}""")))).jsonObject
+            }
+            try {
+                block(store, commands, export)
+            } finally {
+                commands.events.close()
+            }
+        }
+    }
+
+    private fun cell(row: JsonObject, key: String): String =
+        row[key]?.takeUnless { it is JsonNull }?.jsonPrimitive?.content.orEmpty()
+
+    @Test
+    fun `AC-1 AC-3 AC-4 json export has one chronological record per event with the closed columns`(@TempDir dir: Path) {
+        withAudit(dir, auditEvents(Instant.parse("2026-10-16T10:00:00Z"))) { _, _, export ->
+            val reply = export("c1", "json")
+
+            assertThat(reply.getValue("ok").jsonPrimitive.boolean).isTrue()
+            val doc = Json.parseToJsonElement(reply.getValue("text").jsonPrimitive.content).jsonObject
+            assertThat(doc.getValue("card").jsonPrimitive.content).isEqualTo("c1")
+            val rows = doc.getValue("events").jsonArray.map { it.jsonObject }
+            assertThat(rows.map { cell(it, "event_id") }).containsExactly("e1", "e2", "e3", "e4", "e5")
+            assertThat(rows.map { cell(it, "actor") }).containsExactly("owner", "agent:dev", "factory:gate", "owner", "owner")
+            assertThat(rows.map { cell(it, "type") }.first()).isEqualTo("CARD_CREATED")
+            assertThat(rows.all { it.keys.toList() == auditColumns }).isTrue()
+            assertThat(cell(rows[0], "at")).isEqualTo("2026-10-16T10:00:00Z")
+            assertThat(rows.map { cell(it, "at") }).isSorted()
+
+            // AC-3: known cost carries value and status; UNKNOWN is empty, never zero; non-cost events carry none.
+            assertThat(cell(rows[1], "cost_usd_estimate")).isEqualTo("0.0421")
+            assertThat(cell(rows[1], "cost_status")).isEqualTo("KNOWN")
+            assertThat(cell(rows[2], "cost_usd_estimate")).isEmpty()
+            assertThat(cell(rows[2], "cost_status")).isEqualTo("UNKNOWN")
+            assertThat(cell(rows[0], "cost_status")).isEmpty()
+            assertThat(cell(rows[3], "cost_usd_estimate")).isEmpty()
+
+            // AC-4: the owner approval has actor, moment and what was approved.
+            assertThat(cell(rows[3], "type")).isEqualTo("OWNER_APPROVED")
+            assertThat(cell(rows[3], "at")).isEqualTo("2026-10-16T10:03:00Z")
+            assertThat(cell(rows[3], "from")).isEqualTo("SPEC_REVIEW")
+            assertThat(cell(rows[3], "to")).isEqualTo("READY_FOR_DEV")
+
+            // Closed field list: a destination that is not a board column and the rest of the payload do not leak.
+            assertThat(cell(rows[4], "to")).isEmpty()
+            assertThat(reply.getValue("text").jsonPrimitive.content).doesNotContain("Secret issue text").doesNotContain("free text")
+        }
+    }
+
+    @Test
+    fun `AC-2 AC-3 csv export has a header and the same rows and columns as the json`(@TempDir dir: Path) {
+        withAudit(dir, auditEvents(Instant.parse("2026-10-16T10:00:00Z"))) { _, _, export ->
+            val json = Json.parseToJsonElement(export("c1", "json").getValue("text").jsonPrimitive.content).jsonObject
+                .getValue("events").jsonArray.map { it.jsonObject }
+            val reply = export("c1", "csv")
+
+            assertThat(reply.getValue("ok").jsonPrimitive.boolean).isTrue()
+            val lines = reply.getValue("text").jsonPrimitive.content.trim().lines()
+            assertThat(lines[0]).isEqualTo(auditColumns.joinToString(","))
+            assertThat(lines).hasSize(json.size + 1)
+            lines.drop(1).zip(json).forEach { (line, row) ->
+                assertThat(line.split(",", limit = auditColumns.size).map { it.removeSurrounding("\"") })
+                    .isEqualTo(auditColumns.map { cell(row, it) })
+            }
+            assertThat(lines[3].split(",")[6]).isEmpty()
+            assertThat(lines[3].split(",")[7]).isEqualTo("UNKNOWN")
+        }
+    }
+
+    @Test
+    fun `AC-5 csv cells starting with a formula character are neutralized`(@TempDir dir: Path) {
+        val t0 = Instant.parse("2026-10-16T10:00:00Z")
+        val events = listOf(
+            Event(EventId("=SUM(1)"), t0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "T")),
+            Event(EventId("@evil"), t0.plusSeconds(1), Actor.Owner, EventType.AGENT_REPORTED, emptyMap()),
+            Event(EventId("-1"), t0.plusSeconds(2), Actor.Owner, EventType.AGENT_REPORTED, emptyMap()),
+            Event(EventId("+1"), t0.plusSeconds(3), Actor.Owner, EventType.AGENT_REPORTED, emptyMap()),
+        )
+        withAudit(dir, events) { _, _, export ->
+            val lines = export("c1", "csv").getValue("text").jsonPrimitive.content.trim().lines()
+
+            val cells = lines.drop(1).flatMap { line -> line.split(",").map { it.removeSurrounding("\"") } }
+            assertThat(cells).noneMatch { it.startsWith("=") || it.startsWith("@") || it.startsWith("+") || it.startsWith("-") }
+            val firstCells = lines.drop(1).map { it.substringBefore(",").removeSurrounding("\"") }
+            assertThat(firstCells).containsExactly("'=SUM(1)", "'@evil", "'-1", "'+1")
+        }
+    }
+
+    @Test
+    fun `AC-6 AC-7 unknown card and invalid format are errors with the id, and export leaves the card untouched`(@TempDir dir: Path) {
+        withAudit(dir, auditEvents(Instant.parse("2026-10-16T10:00:00Z"))) { store, _, export ->
+            val cardBefore = store.card("c1")
+            val eventsBefore = store.events("c1")
+            val seqBefore = store.eventsAfter(0).size
+
+            val unknown = export("nope-42", "json")
+            val badFormat = export("c1", "xml")
+            export("c1", "json")
+            export("c1", "csv")
+
+            assertThat(unknown.getValue("ok").jsonPrimitive.boolean).isFalse()
+            assertThat(unknown.getValue("error").jsonPrimitive.content).contains("nope-42")
+            assertThat(unknown).doesNotContainKey("text")
+            assertThat(badFormat.getValue("ok").jsonPrimitive.boolean).isFalse()
+            assertThat(badFormat).doesNotContainKey("text")
+            assertThat(store.card("c1")).isEqualTo(cardBefore)
+            assertThat(store.events("c1")).isEqualTo(eventsBefore)
+            assertThat(store.eventsAfter(0)).hasSize(seqBefore)
         }
     }
 

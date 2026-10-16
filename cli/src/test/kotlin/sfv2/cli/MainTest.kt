@@ -272,6 +272,38 @@ class MainTest {
     }
 
     @Test
+    fun `AC-6 audit export prints the document, defaults to json and needs no token`() {
+        fakeDaemon { listOf("""{"ok":true,"text":"event_id,at\ne1,2026-10-16T10:00:00Z\n"}""") }
+
+        assertThat(run("audit", "export", "c1", "--format", "csv")).isZero()
+        assertThat(out.toString().trim()).isEqualTo("event_id,at\ne1,2026-10-16T10:00:00Z")
+        assertThat(requests[0]).contains("\"audit.export\"").contains("\"c1\"").containsPattern("\"format\"\\s*:\\s*\"csv\"")
+
+        assertThat(run("audit", "export", "c1")).isZero()
+        assertThat(requests[1]).containsPattern("\"format\"\\s*:\\s*\"json\"").doesNotContain("proof")
+    }
+
+    @Test
+    fun `AC-6 audit export of an unknown card or with an invalid format fails with a message and no output`() {
+        fakeDaemon { line ->
+            if (line.contains("\"zz\"")) {
+                listOf("""{"ok":false,"error":"card not found: zz"}""")
+            } else {
+                listOf("""{"ok":false,"error":"invalid format: xml"}""")
+            }
+        }
+
+        assertThat(run("audit", "export", "zz", "--format", "json")).isNotZero()
+        assertThat(err.toString()).contains("card not found: zz")
+        assertThat(out).isEmpty()
+
+        err.clear()
+        assertThat(run("audit", "export", "c1", "--format", "xml")).isNotZero()
+        assertThat(err.toString()).contains("xml")
+        assertThat(out).isEmpty()
+    }
+
+    @Test
     fun `AC-2 a stopped daemon is reported with how to start it and exit 1`() {
         // No socket at all.
         assertThat(run("card", "list")).isEqualTo(1)
