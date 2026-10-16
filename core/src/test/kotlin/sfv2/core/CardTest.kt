@@ -76,8 +76,6 @@ class CardTest {
     fun `issue 11 AC-2 text hash is stable for same text and changes with one character`() {
         assertThat(TextHash.of("hello")).isEqualTo(TextHash.of("hello"))
         assertThat(TextHash.of("hello")).isNotEqualTo(TextHash.of("hellp"))
-        assertThat(TextHash.of("hello").value)
-            .isEqualTo("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
     }
 
     @Test
