@@ -1,0 +1,18 @@
+{
+  "issue": 74,
+  "pipeline": "validate",
+  "outcome": "ok",
+  "pr": 200,
+  "staged_head": "045831648f0107037293a20e8ed0fc012b25c0b2",
+  "qa_commit": "f78feb6ff77077142658a50f36a5c619100fd842",
+  "merge_base": "777a8d04096b56f0e53f8e715b6afcf890cf8a17",
+  "gates": ["forbidden", "migration", "acceptance-intact", "build", "green daemon AssistantPhrasesTest"],
+  "gates_reused": ["green daemon sfv2.daemon.AssistantPhrasesTest"],
+  "flaky": [],
+  "amendments": [],
+  "review": {"red": 0, "yellow": 1, "nit": 0, "rounds": 0},
+  "ci": "success (guard, build)",
+  "agents": [],
+  "tokens": "not measured",
+  "duration": "not measured"
+}
