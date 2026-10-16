@@ -23,6 +23,15 @@ sealed interface Request {
         override fun toString(): String = "CardMove(actor=$actor, id=$id, to=$to, proof=${if (proof == null) "null" else "***"})"
     }
 
+    data class CardApprove(val actor: Actor, val id: String, val proof: String? = null) : Request {
+        override fun toString(): String = "CardApprove(actor=$actor, id=$id, proof=${if (proof == null) "null" else "***"})"
+    }
+
+    data class CardRequestChange(val actor: Actor, val id: String, val note: String? = null, val proof: String? = null) : Request {
+        override fun toString(): String =
+            "CardRequestChange(actor=$actor, id=$id, note=${if (note == null) "null" else "***"}, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data class ProjectAdd(val actor: Actor, val path: String, val proof: String? = null) : Request {
         override fun toString(): String = "ProjectAdd(actor=$actor, path=$path, proof=${if (proof == null) "null" else "***"})"
     }
@@ -80,6 +89,16 @@ fun parseRequest(line: String): Request {
             val to = stringField(obj, "to") ?: return Request.Rejected("missing to")
             val column = Column.entries.firstOrNull { it.name == to } ?: return Request.Rejected("unknown column")
             Request.CardMove(actor, id, column, stringField(obj, "proof"))
+        }
+        "card.approve" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardApprove(actor, id, stringField(obj, "proof"))
+        }
+        "card.request-change" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardRequestChange(actor, id, stringField(obj, "note"), stringField(obj, "proof"))
         }
         "project.add" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
