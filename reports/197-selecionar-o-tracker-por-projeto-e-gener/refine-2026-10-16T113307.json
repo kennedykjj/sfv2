@@ -1,0 +1,1 @@
+{"issue": 197, "slug": "selecionar-o-tracker-por-projeto-e-gener", "pipeline": "refine", "started_at": "2026-10-16T11:30:00Z", "finished_at": "2026-10-16T11:50:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 16114, "duration_s": 10}], "rounds": {"po": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
