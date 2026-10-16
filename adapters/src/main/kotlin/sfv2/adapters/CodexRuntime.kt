@@ -14,7 +14,13 @@ import sfv2.ports.SessionResult
 
 /** Runs an external command and sends its stdout to a file. No shell is involved. */
 interface ProcessRunner {
-    fun run(command: List<String>, workingDir: Path, stdoutFile: Path, timeout: Duration): ProcessOutcome
+    fun run(
+        command: List<String>,
+        workingDir: Path,
+        stdoutFile: Path,
+        timeout: Duration,
+        env: Map<String, String> = emptyMap(),
+    ): ProcessOutcome
 }
 
 sealed interface ProcessOutcome {

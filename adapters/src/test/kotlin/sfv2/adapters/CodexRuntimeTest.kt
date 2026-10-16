@@ -37,12 +37,24 @@ object CodexRuntimeFixtures {
 }
 
 class RecordingProcessRunner(private val outcome: ProcessOutcome) : ProcessRunner {
-    data class Call(val command: List<String>, val workingDir: Path, val stdoutFile: Path, val timeout: Duration)
+    data class Call(
+        val command: List<String>,
+        val workingDir: Path,
+        val stdoutFile: Path,
+        val timeout: Duration,
+        val env: Map<String, String> = emptyMap(),
+    )
 
     val calls = mutableListOf<Call>()
 
-    override fun run(command: List<String>, workingDir: Path, stdoutFile: Path, timeout: Duration): ProcessOutcome {
-        calls += Call(command, workingDir, stdoutFile, timeout)
+    override fun run(
+        command: List<String>,
+        workingDir: Path,
+        stdoutFile: Path,
+        timeout: Duration,
+        env: Map<String, String>,
+    ): ProcessOutcome {
+        calls += Call(command, workingDir, stdoutFile, timeout, env)
         return outcome
     }
 }
