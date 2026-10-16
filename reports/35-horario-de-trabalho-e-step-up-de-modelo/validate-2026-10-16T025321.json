@@ -1,0 +1,14 @@
+{
+  "outcome": "staged",
+  "pr": 156,
+  "head": "b17205cc0e6b5de6c51f7afb2a9d8c75e39ef4e9",
+  "rounds": 0,
+  "agents": [],
+  "gates": ["forbidden", "migration", "acceptance-intact", "build", "green daemon sfv2.daemon.WorkHoursTest", "green daemon sfv2.daemon.ModelStepUpTest"],
+  "failed_gates": [],
+  "gates_reused": ["green daemon sfv2.daemon.WorkHoursTest", "green daemon sfv2.daemon.ModelStepUpTest"],
+  "flaky": [],
+  "amendments": [],
+  "review": {"blockers": 0, "should_fix": 1, "nits": 1, "cybersec": false, "ux": false},
+  "ci": {"build": "pass", "guard": "pass"}
+}
