@@ -1,0 +1,1 @@
+{"issue":64,"slug":"esteira","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T01:00:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":43157,"duration_s":120}],"rounds":{"4":0},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
