@@ -10,14 +10,16 @@ _Product Owner_
 **Problem:** Máquina trocada ou banco apagado hoje perde o estado dos cards, embora a branch e o PR de cada card continuem no GitHub. O trabalho não pode se perder junto com o banco.
 **Audience:** O desenvolvedor sozinho que troca de máquina ou perde o banco local, e o dentro de empresa que precisa recuperar o estado sem refazer a entrega.
 **Acceptance criteria**
-- **AC-1** — Dado um banco apagado e um PR aberto da fábrica, quando o dono roda `sfv2 card rebuild`, então o card é recriado com o mesmo id e título do PR na coluna Staged.
+- **AC-1** — Dado um banco apagado e um PR aberto da fábrica, quando o dono roda `sfv2 card rebuild`, então o card é recriado com o mesmo id e título do PR na coluna Validation (nunca Staged: Staged significa "validado e com o CI do head verde", gravado pelo validate com `head` e `pr`, e a reconstrução não pode afirmar isso; o validate reabre o mesmo PR, espera o CI do head e só então grava o Staged que a entrega autônoma e a entrega no PR exigem).
 - **AC-2** — Dado um PR da fábrica já mergeado, quando roda `sfv2 card rebuild`, então o card é recriado na coluna Done.
 - **AC-3** — Dado um PR da fábrica fechado sem merge, quando roda `sfv2 card rebuild`, então nenhum card é criado para ele.
 - **AC-4** — Dado um PR cuja branch não segue o formato de branch do projeto para o id do card, ou cujo id não é válido, quando roda `sfv2 card rebuild`, então ele é ignorado e nada é gravado.
 - **AC-5** — Dado um card que já existe no banco, quando roda `sfv2 card rebuild` (uma ou várias vezes), então esse card não é alterado nem duplicado.
 - **AC-6** — Dado um card recriado, quando se lê o histórico, então há um evento de criação do dono marcado como reconstruído, com o número do PR, e o card pertence ao projeto.
 - **AC-7** — Dado que o forge falha ao listar os PRs, quando roda `sfv2 card rebuild`, então o comando termina com erro que nomeia a operação e nada é gravado.
-- **AC-8** — Dado o forge falso e a camada e2e, quando o mesmo card percorre a entrega autônoma e a entrega no PR, então chega a Done nos dois modos; e apagar o banco e reconstruir recupera o estágio (Staged com PR aberto, Done com PR mergeado).
+- **AC-9** — Dado um PR aberto de fork (`fromFork`) ou de autor diferente do login autenticado no forge, mesmo com branch e título no formato do card, quando roda `sfv2 card rebuild`, então é ignorado e nada é gravado (o card nasce de um evento do dono; PR de terceiro não pode fabricá-lo).
+- **AC-10** — Dado mais de 30 PRs no repositório, quando roda `sfv2 card rebuild`, então todos são considerados (a listagem usa `--limit 1000`); se o forge devolver exatamente o limite, o comando termina com erro `listagem truncada` em vez de reconstruir só uma parte.
+- **AC-8** — Dado o forge falso e a camada e2e, quando o mesmo card percorre a entrega autônoma e a entrega no PR, então chega a Done nos dois modos; e apagar o banco e reconstruir recupera o estágio (Validation com PR aberto, de onde o validate leva a Staged com `head` e `pr`; Done com PR mergeado).
 **Out of scope:** Recuperar cards sem PR (Inbox até Validation), histórico anterior, custos e eventos de gate; reconstruir automaticamente na subida do daemon; PR fechado sem merge; cards importados e suas referências externas (fase 4).
 **Product fit:** Serve "A fábrica é dona do próprio estado": o estado mínimo volta do forge, sem depender do banco. Não contradiz o posicionamento nem o que está fora de escopo.
 **Touches UI:** no
@@ -29,18 +31,18 @@ _UX/UI Designer_ — n/a
 _Tech Lead_
 
 **Contratos:**
-- `Forge` (porta): `fun listPullRequests(): List<PullRequestSummary>` com `data class PullRequestSummary(val number: Int, val branch: String, val title: String, val state: PullRequestState)`; `PullRequestState` é o existente (`Open`, `Merged`, `ClosedUnmerged`). Falha do forge lança `ForgeException`.
+- `Forge` (porta): `fun listPullRequests(): List<PullRequestSummary>` com `data class PullRequestSummary(val number: Int, val branch: String, val title: String, val state: PullRequestState, val author: String, val fromFork: Boolean)` e `fun authenticatedLogin(): String` (`gh api user --jq .login`, validado por `^[A-Za-z0-9-]{1,39}$`); `PullRequestState` é o existente (`Open`, `Merged`, `ClosedUnmerged`). Falha do forge lança `ForgeException`.
 - Protocolo do daemon: `Request.CardRebuild(actor, project: String?, proof)` (`card.rebuild`, só dono, com prova) e resposta `Response.CardsResult` com os cards recriados.
 - CLI: `sfv2 card rebuild [--project <nome>]`; imprime uma linha por card recriado (mesmo formato de `card list`).
 
 **Camadas e arquivos:**
 - `ports`: `ports/src/main/kotlin/sfv2/ports/Forge.kt`, `ports/src/main/kotlin/sfv2/ports/FakeForge.kt` (lista as entradas com estado; respeita `failNext("listPullRequests")`).
-- `adapters`: `adapters/src/main/kotlin/sfv2/adapters/GhForge.kt` — `gh pr list --repo <repo> --state all --json number,headRefName,title,state,mergedAt`, mesma validação de repo do restante; `MERGED` → `Merged`, `CLOSED` → `ClosedUnmerged`, `OPEN` → `Open(head)`.
+- `adapters`: `adapters/src/main/kotlin/sfv2/adapters/GhForge.kt` — `gh pr list --repo <repo> --state all --limit 1000 --json number,headRefName,title,state,author,isCrossRepository`, mesma validação de repo do restante; `MERGED` → `Merged`, `CLOSED` → `ClosedUnmerged`, `OPEN` → `Open(head)`.
 - `daemon`: `daemon/src/main/kotlin/sfv2/daemon/CardRebuild.kt` (novo; lógica), `daemon/src/main/kotlin/sfv2/daemon/CardCommands.kt` (despacho), `daemon/src/main/kotlin/sfv2/daemon/Protocol.kt` (parse de `card.rebuild`).
 - `cli`: `cli/src/main/kotlin/sfv2/cli/CardCommands.kt` (`CardRebuild`, registrado em `withCardCommands`).
 - `e2e`: teste de saída da fase 3.
 
-**Regra de reconstrução:** para cada PR listado, o id do card sai da branch casando o `branchFormat` do projeto com `{id}` = UUID válido; só vale se `branchName(branchFormat, id, title)` reconstruir exatamente a branch do PR (o título do PR é o do card). Corpo e título do PR são dado não confiável e nunca viram instrução. `Open` → `STAGED`; `Merged` → `DONE`; `ClosedUnmerged` ou branch que não casa → ignorado. Card com o mesmo id já no banco → ignorado. Cada card novo é gravado por `recorder.record` com um evento `CARD_CREATED` do ator dono, payload `title`, `origin=rebuilt`, `pr=<número>`, e `store.assignProject`. Projeto: `--project` ou, sem a opção, o único projeto registrado; zero ou vários projetos sem a opção → erro. Log `key=value` só com ids, sem título.
+**Regra de reconstrução:** para cada PR listado, o id do card sai da branch casando o `branchFormat` do projeto com `{id}` = UUID válido; só vale se `branchName(branchFormat, id, title)` reconstruir exatamente a branch do PR (o título do PR é o do card). Corpo e título do PR são dado não confiável e nunca viram instrução. `Open` → `VALIDATION`; `Merged` → `DONE`; só PR que não é de fork e cujo autor é o `authenticatedLogin()`; `ClosedUnmerged` ou branch que não casa → ignorado. Card com o mesmo id já no banco → ignorado. Cada card novo é gravado por `recorder.record` com um evento `CARD_CREATED` do ator dono, payload `title`, `origin=rebuilt`, `pr=<número>`, e `store.assignProject`. Projeto: `--project` ou, sem a opção, o único projeto registrado; zero ou vários projetos sem a opção → erro. Log `key=value` só com ids, sem título.
 
 **Migração:** nenhuma (payload de evento é mapa livre; sem esquema novo).
 
@@ -56,6 +58,8 @@ _Tech Lead_
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardRebuildTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardRebuildTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardRebuildTest.kt` |
+| AC-9 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardRebuildTest.kt` |
+| AC-10 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardRebuildTest.kt` |
 | AC-8 | e2e | `e2e/src/test/kotlin/sfv2/e2e/PhaseThreeExitTest.kt` |
 
 ## Security
