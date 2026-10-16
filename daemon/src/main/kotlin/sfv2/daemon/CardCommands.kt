@@ -1,7 +1,9 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
 import java.util.UUID
 import sfv2.core.Actor
 import sfv2.core.AssistantStates
@@ -224,8 +226,37 @@ class CardCommands(
         return moved
     }
 
-    private fun viewOf(id: String, card: Card): CardView =
-        CardView(id, card.title, card.column, blocked = AssistantStates.hasOpenBlock(store.events(id)))
+    private fun viewOf(id: String, card: Card): CardView {
+        val events = store.events(id)
+        return CardView(
+            id,
+            card.title,
+            card.column,
+            blocked = AssistantStates.hasOpenBlock(events),
+            enteredAt = enteredAt(card.column, events),
+            cost = totalCost(events),
+        )
+    }
+
+    /** The last move into the current column, or the creation when the card never moved. */
+    private fun enteredAt(column: Column, events: List<Event>): Instant? =
+        events.lastOrNull { it.type == EventType.CARD_MOVED && it.payload["to"] == column.name }?.at
+            ?: events.firstOrNull { it.type == EventType.CARD_CREATED }?.at
+
+    private fun totalCost(events: List<Event>): CardListCost {
+        val runs = events.filter { it.type == EventType.RUN_COST_RECORDED }.map { run ->
+            if (run.payload["status"] == "KNOWN") run.payload["cost_usd"]?.toBigDecimalOrNull() else null
+        }
+        val known = runs.filterNotNull()
+        return when {
+            runs.isEmpty() -> CardListCost(CostStatus.NONE)
+            known.isEmpty() -> CardListCost(CostStatus.UNKNOWN)
+            else -> CardListCost(
+                if (known.size == runs.size) CostStatus.KNOWN else CostStatus.PARTIAL,
+                known.fold(BigDecimal.ZERO, BigDecimal::add),
+            )
+        }
+    }
 
     private fun show(id: String): Response {
         val card = store.card(id) ?: return notFound(id)
