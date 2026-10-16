@@ -52,8 +52,21 @@ class AutonomousDeliveryTest {
         database.close()
     }
 
+    private val pushed = mutableListOf<String>()
+    private var resolverOutcome: ConflictOutcome = ConflictOutcome.OverLimit
+    private val resolverCalls = mutableListOf<String>()
+
     private fun delivery(maxPolls: Int = 3) = AutonomousDelivery(
         store, recorder, { forge }, { policies }, { pauses++ }, maxPolls, clock, DaemonLog { _, _ -> },
+        conflicts = ConflictResolver { cardId, _ ->
+            resolverCalls.add(cardId)
+            resolverOutcome
+        },
+        publisher = BranchPublisher { _, branch ->
+            pushed.add(branch)
+            PushResult.Pushed
+        },
+        worktreeOf = { dir.resolve("wt-$it") },
     )
 
     private fun record(cardId: String, column: Column, actor: Actor, type: EventType, payload: Map<String, String>) {
@@ -227,6 +240,51 @@ class AutonomousDeliveryTest {
 
         assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
         assertThat(forge.merges.map { it.head }).containsExactly(pr.head)
+    }
+
+    @Test
+    fun `AC-4 a resolved conflict publishes the new head and returns the card to Validation, it is not merged before the gates are green again`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.Resolved("head-2")
+
+        delivery().deliver("c1")
+
+        val branch = WorktreeManager.branchName(policies.conventions.branchFormat, "c1", "Delivery")
+        assertThat(resolverCalls).containsExactly("c1")
+        assertThat(pushed).containsExactly(branch)
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(lastMove("c1").payload).containsEntry("to", "VALIDATION").containsEntry("reason", "conflict_round")
+        assertThat(lastMove("c1").payload).containsKey("round")
+        assertThat(lastMove("c1").actor).isEqualTo(Actor.Factory("deliver"))
+        assertThat(merged("c1")).isEmpty()
+        assertThat(delivery().deliver("c1")).isEqualTo(DeliveryOutcome.Skipped)
+        assertThat(column("c1")).isNotEqualTo(Column.DONE)
+    }
+
+    @Test
+    fun `AC-2 a conflict over the limits goes back to the owner as merge_conflict`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.OverLimit
+
+        returned(delivery().deliver("c1"), "c1", "merge_conflict")
+
+        assertThat(pushed).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 a conflict that exhausted the rounds blocks the card with an explicit reason`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.RoundsExhausted
+
+        delivery().deliver("c1")
+
+        val blocked = store.events("c1").last { it.type == EventType.CARD_BLOCKED }
+        assertThat(requireNotNull(blocked.payload["reason"])).contains("conflict_rounds_exhausted")
+        assertThat(pushed).isEmpty()
+        assertThat(merged("c1")).isEmpty()
     }
 
     @Test
