@@ -12,7 +12,7 @@ object RuntimeFixtures {
         worktree: Path = Path.of("/nonexistent/wt/21"),
         model: String = "model-x",
         mcpConfig: Path = Path.of("/nonexistent/mcp.json"),
-    ): SessionRequest = SessionRequest(stage, worktree, model, mcpConfig)
+    ): SessionRequest = SessionRequest(stage, worktree, model, mcpConfig, "prompt")
 }
 
 class RuntimeTest {
