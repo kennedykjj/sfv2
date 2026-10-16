@@ -235,7 +235,7 @@ class SpecGatesTest {
             "Product" to "**Acceptance criteria**\n- **AC-1** — primeiro criterio\n**Touches UI:** no",
             "Architecture" to "Camada unica. Arquivos: `daemon/src/main/kotlin/A.kt`.",
             "Test plan" to "| AC | Layer | Test file |\n|---|---|---|\n| AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/XTest.kt` |",
-            "Security" to "_Revisao_ — n/a",
+            "Security" to "n/a",
             "Rollback" to "n/a",
             "Decisions" to "- nada",
         )
