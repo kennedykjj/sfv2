@@ -15,6 +15,8 @@ _Product Owner_
 - AC-1: Dado o modo NORMAL, quando o estado do assistente muda para um estado novo, então a skin emite um comando de pop-up com a frase correspondente ao estado e começa pela animação de entrada.
 - AC-2: Dado o modo SILENT, quando o estado muda, então nenhum pop-up e nenhuma animação são emitidos.
 - AC-3: Dado um pop-up já exibido para o estado X, quando o mesmo estado X é notificado de novo, então nenhum novo pop-up é emitido.
+- AC-5: Dado um pop-up que já chegou a `GONE` para o estado X, quando o shell volta a notificar o mesmo estado X (ele consulta o estado a cada ciclo, não só quando muda), então nenhum pop-up novo é emitido: a skin lembra o último estado notificado e só reage a um estado diferente dele, senão o mesmo aviso reapareceria a cada ciclo.
+- AC-6: Dado a passagem de SILENT para NORMAL com o estado igual ao último notificado, quando o modo volta, então nenhum pop-up é emitido (o silêncio não acumula avisos para depois); o primeiro estado diferente volta a avisar.
 - AC-4: Dado um pop-up emitido, quando o tempo decorrido avança, então a fase vai de entrada, a permanência e a saída, e após a saída o pop-up deixa de existir, determinado só pelo tempo (Clock/Instant por parâmetro).
 
 **Fora de escopo:** janela Compose e shell (#63); a skin do tray e outras skins; escolha do modo silencioso pelo usuário e persistência; som; texto das frases (já em AssistantPhrases); fila de vários pop-ups.
@@ -44,7 +46,7 @@ _Tech Lead_
   - `data class PopupCommand(val state: AssistantState, val phrase: String, val emittedAt: Instant, val motion: MotionPreference)`.
   - `PopupSkin` (imutável): `onState(state: AssistantState, phrase: String, mode: SkinMode, motion: MotionPreference, now: Instant): PopupSkin.Update` com `Update(skin: PopupSkin, command: PopupCommand?)`; `phase(now: Instant): PopupPhase`; `current: PopupCommand?`.
   - Constantes nomeadas: `ENTRY = 400ms`, `STAY = 4000ms`, `EXIT = 260ms`; em `REDUCED`, `ENTRY` e `EXIT` valem 0.
-- **Regras:** SILENT -> sem comando e descarta o pop-up atual (`GONE`); mesmo estado do pop-up em curso -> sem comando, sem reiniciar; estado novo -> novo comando e fase `ENTRY`; a fase é função de `now - emittedAt`.
+- **Regras:** o `PopupSkin` guarda o último estado notificado (`lastState`), mesmo depois de `GONE`, e só emite quando o estado difere dele (AC-3, AC-5, AC-6); em SILENT o estado notificado também atualiza o `lastState`, sem emitir. SILENT -> sem comando e descarta o pop-up atual (`GONE`); mesmo estado do pop-up em curso -> sem comando, sem reiniciar; estado novo -> novo comando e fase `ENTRY`; a fase é função de `now - emittedAt`.
 - **Arquivos:** `app/src/main/kotlin/sfv2/app/PopupSkin.kt`, `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` (2).
 - **Migração:** nenhuma (sem banco, sem contrato externo). Sem janela Compose: o `app` é um stub até o #63.
 
@@ -57,6 +59,8 @@ _Tech Lead_
 | AC-2 | app | `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` |
 | AC-3 | app | `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` |
 | AC-4 | app | `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` |
+| AC-5 | app | `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` |
+| AC-6 | app | `app/src/test/kotlin/sfv2/app/PopupSkinTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
