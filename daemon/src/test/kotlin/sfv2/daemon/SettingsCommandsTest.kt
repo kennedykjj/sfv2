@@ -90,7 +90,7 @@ class SettingsCommandsTest {
         proof: String? = token,
     ): Response = commands.handle(Request.SettingsSave(actor, settings, proof))
 
-    private fun savedEvents(): List<StoredEvent> =
+    private fun savedEvents(): List<Event> =
         cards.events(SettingsCommands.SETTINGS_CARD_ID).filter { it.type.name == "SETTINGS_SAVED" }
 
     private fun assertRefusedNaming(response: Response, field: String) {
