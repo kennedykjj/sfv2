@@ -110,6 +110,9 @@ sealed interface Request {
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
 
+    /** Read-only: the audit trail of card [id]; [format] is validated by the handler. */
+    data class AuditExport(val id: String, val format: String) : Request
+
     /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
     data class CostSummary(val from: Instant, val to: Instant) : Request
 
@@ -158,6 +161,7 @@ sealed interface Response {
     data class CardsResult(val cards: List<CardView>) : Response
     data class BoardImportResult(val cards: List<CardView>, val ignored: List<IgnoredRow>) : Response
     data class ReportResult(val csv: String) : Response
+    data class AuditResult(val text: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
     data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
@@ -263,6 +267,10 @@ fun parseRequest(line: String): Request {
             Request.CardDetail(id)
         }
         "report.csv" -> Request.ReportCsv
+        "audit.export" -> {
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.AuditExport(id, stringField(obj, "format") ?: "json")
+        }
         "events.subscribe" -> parseSubscribe(obj)
         "events.recent" -> parseRecent(obj)
         "cost.summary" -> {
@@ -426,6 +434,10 @@ fun render(response: Response): String = when (response) {
     is Response.ReportResult -> buildJsonObject {
         put("ok", true)
         put("csv", response.csv)
+    }.toString()
+    is Response.AuditResult -> buildJsonObject {
+        put("ok", true)
+        put("text", response.text)
     }.toString()
     is Response.ProjectResult -> buildJsonObject {
         put("ok", true)
