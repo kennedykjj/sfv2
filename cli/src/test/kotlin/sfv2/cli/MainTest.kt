@@ -7,6 +7,7 @@ import java.nio.channels.ClosedChannelException
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CopyOnWriteArrayList
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -338,5 +339,200 @@ class MainTest {
 
         assertThat(out).isEmpty()
         assertThat(requests).isEmpty()
+    }
+
+    // ---- sfv2 doctor ----
+
+    private val checkNames = listOf("java", "git", "gh", "claude", "socket", "banco", "serviço", "permissões", "ambiente do serviço")
+    private val secret = "s3cr3t-do-not-print"
+
+    private fun binDir(): Path = runtimeDir.resolve("bin")
+
+    private fun dataHome(): Path = runtimeDir.resolve("data")
+
+    private fun configHome(): Path = runtimeDir.resolve("config")
+
+    private fun serviceEnvPath(): Path = configHome().resolve("sfv2").resolve("service.env")
+
+    private fun chmod(path: Path, mode: String) = Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode))
+
+    private fun fakeTool(name: String) {
+        Files.createDirectories(binDir())
+        val file = binDir().resolve(name)
+        Files.writeString(file, "#!/bin/sh\nexit 0\n")
+        chmod(file, "rwxr-xr-x")
+    }
+
+    /** A machine where every check passes: tools on PATH, daemon listening, database, unit, token, service.env. */
+    private fun healthyMachine() {
+        listOf("java", "git", "gh", "claude").forEach { fakeTool(it) }
+        fakeDaemon { listOf("""{"ok":true,"result":[]}""") }
+        chmod(socketDir(), "rwx------")
+        Files.writeString(tokenPath(), "$secret\n")
+        chmod(tokenPath(), "rw-------")
+        val dataDir = Files.createDirectories(dataHome().resolve("sfv2"))
+        chmod(dataDir, "rwx------")
+        Files.writeString(dataDir.resolve("sfv2.db"), "")
+        Files.createDirectories(configHome().resolve("systemd").resolve("user"))
+        Files.writeString(configHome().resolve("systemd").resolve("user").resolve("sfv2.service"), "[Service]\n")
+        Files.createDirectories(serviceEnvPath().parent)
+        Files.writeString(serviceEnvPath(), "TOKEN=$secret\n")
+        chmod(serviceEnvPath(), "rw-------")
+    }
+
+    private fun runDoctor(): Int =
+        runCli(
+            listOf("doctor"),
+            "1.2.3",
+            { out.appendLine(it) },
+            { err.appendLine(it) },
+            env = mapOf(
+                "XDG_RUNTIME_DIR" to runtimeDir.toString(),
+                "XDG_DATA_HOME" to dataHome().toString(),
+                "XDG_CONFIG_HOME" to configHome().toString(),
+                "HOME" to runtimeDir.resolve("home").toString(),
+                "PATH" to binDir().toString(),
+            ),
+        )
+
+    private fun doctorLines(): List<String> = out.toString().lines().filter { it.isNotBlank() }
+
+    private fun checkLine(name: String): String =
+        doctorLines().singleOrNull { it.startsWith("OK $name") || it.startsWith("FAIL $name") }
+            ?: error("no line for check '$name' in:\n$out")
+
+    @Test
+    fun `AC-1 doctor prints one OK or FAIL line per check`() {
+        healthyMachine()
+
+        runDoctor()
+
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        checkNames.forEach { assertThat(checkLine(it)).startsWith("OK $it") }
+    }
+
+    @Test
+    fun `AC-2 a failing check prints FAIL with a concrete instruction`() {
+        healthyMachine()
+        Files.delete(binDir().resolve("gh"))
+
+        runDoctor()
+
+        val line = checkLine("gh")
+        assertThat(line).startsWith("FAIL gh — ")
+        assertThat(line.substringAfter("FAIL gh — ").trim()).isNotBlank()
+    }
+
+    @Test
+    fun `AC-3 doctor exits 0 when every check passes`() {
+        healthyMachine()
+
+        assertThat(runDoctor()).isZero()
+
+        assertThat(doctorLines().filter { it.startsWith("FAIL") }).isEmpty()
+        assertThat(err).isEmpty()
+    }
+
+    @Test
+    fun `AC-4 one failing check exits non-zero and the other checks are still listed`() {
+        healthyMachine()
+        Files.delete(binDir().resolve("claude"))
+
+        assertThat(runDoctor()).isEqualTo(1)
+
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(checkLine("claude")).startsWith("FAIL claude")
+        checkNames.filter { it != "claude" }.forEach { assertThat(checkLine(it)).startsWith("OK $it") }
+    }
+
+    @Test
+    fun `AC-5 doctor without a running daemon fails socket, banco and serviço with hints and no error`() {
+        listOf("java", "git", "gh", "claude").forEach { fakeTool(it) }
+
+        assertThat(runDoctor()).isEqualTo(1)
+
+        listOf("socket", "banco", "serviço").forEach {
+            val line = checkLine(it)
+            assertThat(line).startsWith("FAIL $it — ")
+            assertThat(line.substringAfter("— ").trim()).isNotBlank()
+        }
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(err).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 a stale socket file nobody listens on is a FAIL for socket`() {
+        listOf("java", "git", "gh", "claude").forEach { fakeTool(it) }
+        Files.createDirectories(socketDir())
+        ServerSocketChannel.open(StandardProtocolFamily.UNIX).use {
+            it.bind(UnixDomainSocketAddress.of(socketDir().resolve("daemon.sock")))
+        }
+
+        assertThat(runDoctor()).isEqualTo(1)
+
+        assertThat(checkLine("socket")).startsWith("FAIL socket — ")
+    }
+
+    @Test
+    fun `AC-6 doctor output never contains the token or the service env content`() {
+        healthyMachine()
+        runDoctor()
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(out.toString() + err.toString()).doesNotContain(secret)
+
+        // Also on the failure path, where modes and paths are printed.
+        out.clear()
+        err.clear()
+        chmod(tokenPath(), "rw-r--r--")
+        chmod(serviceEnvPath(), "rw-r--r--")
+        runDoctor()
+        assertThat(checkLine("permissões")).startsWith("FAIL permissões")
+        assertThat(out.toString() + err.toString()).doesNotContain(secret).doesNotContain("TOKEN=")
+    }
+
+    @Test
+    fun `AC-7 a token more open than 0600 fails permissões with the chmod 600 command and the path`() {
+        healthyMachine()
+        chmod(tokenPath(), "rw-r--r--")
+
+        assertThat(runDoctor()).isEqualTo(1)
+
+        val line = checkLine("permissões")
+        assertThat(line).startsWith("FAIL permissões")
+        assertThat(line).contains("chmod 600").contains(tokenPath().toString())
+        assertThat(out.toString()).doesNotContain(secret)
+    }
+
+    @Test
+    fun `AC-7 a data directory open to group or others fails permissões with the chmod 700 command`() {
+        healthyMachine()
+        val dataDir = dataHome().resolve("sfv2")
+        chmod(dataDir, "rwxr-xr-x")
+
+        assertThat(runDoctor()).isEqualTo(1)
+
+        val line = checkLine("permissões")
+        assertThat(line).startsWith("FAIL permissões")
+        assertThat(line).contains("chmod 700").contains(dataDir.toString())
+    }
+
+    @Test
+    fun `AC-8 ambiente do serviço checks service env mode 0600 and warns about the systemd PATH`() {
+        healthyMachine()
+
+        runDoctor()
+
+        val ok = checkLine("ambiente do serviço")
+        assertThat(ok).startsWith("OK ambiente do serviço").contains("PATH").contains("systemd")
+
+        out.clear()
+        chmod(serviceEnvPath(), "rw-rw-r--")
+        assertThat(runDoctor()).isEqualTo(1)
+        assertThat(checkLine("ambiente do serviço")).startsWith("FAIL ambiente do serviço").contains("chmod 600")
+
+        out.clear()
+        Files.delete(serviceEnvPath())
+        assertThat(runDoctor()).isEqualTo(1)
+        assertThat(checkLine("ambiente do serviço")).startsWith("FAIL ambiente do serviço").contains(serviceEnvPath().toString())
     }
 }

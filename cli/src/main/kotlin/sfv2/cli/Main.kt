@@ -29,7 +29,8 @@ fun runCli(
     err: (String) -> Unit,
     env: Map<String, String>,
 ): Int {
-    val command = Sfv2Command(version).withCardCommands(CliEnvironment(env, out, err))
+    val cli = CliEnvironment(env, out, err)
+    val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli)
     return try {
         command.parse(args)
         0
