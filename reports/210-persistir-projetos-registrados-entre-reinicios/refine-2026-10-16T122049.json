@@ -1,0 +1,1 @@
+{"issue": 210, "slug": "persistir-projetos-registrados-entre-reinicios", "pipeline": "refine", "started_at": "2026-10-16T12:00:00Z", "finished_at": "2026-10-16T12:20:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 16046, "duration_s": 23}], "rounds": {"3": 1, "6": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
