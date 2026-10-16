@@ -1,0 +1,12 @@
+{
+  "issue": 39,
+  "slug": "pipeline-de-refine",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "rounds": {"qa": 1, "implementation": 0},
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": []
+}
