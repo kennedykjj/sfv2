@@ -125,7 +125,7 @@ class ServiceInstaller(
             |# Uncomment and edit; one KEY=value per line, no quotes needed.
             |#
             |# Turns the dispatcher on (it is off by default):
-            |# SFV2_DISPATCHER_ENABLED=1
+            |# SFV2_DISPATCHER_ENABLED=true
             |#
             |# systemd user services get a minimal PATH; list the directories with git, gh and your agent CLIs:
             |# PATH=/usr/local/bin:/usr/bin:/bin

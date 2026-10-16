@@ -155,6 +155,26 @@ class ProjectPoliciesTest {
         }
     }
 
+    /** Reads the DoR field by name so its absence fails an assertion, not the compilation. */
+    private fun dorOf(policies: ProjectPolicies): Set<String> {
+        val getter = policies.javaClass.methods.firstOrNull { it.name == "getDor" }
+        assertThat(getter).describedAs("ProjectPolicies.dor exists").isNotNull()
+        return (requireNotNull(getter).invoke(policies) as Set<*>).map { (it as Enum<*>).name }.toSet()
+    }
+
+    @Test
+    fun `AC-3 of #86 the DoR policy is off by default and a dor list turns on the named fields`() {
+        assertThat(dorOf(defaults)).isEmpty()
+        assertThat(dorOf(ProjectPolicies.from(mapOf("delivery_mode" to "pr")))).isEmpty()
+        assertThat(dorOf(ProjectPolicies.from(mapOf("dor" to emptyList<String>())))).isEmpty()
+        assertThat(dorOf(ProjectPolicies.from(mapOf("dor" to listOf("title", "acceptance_criteria")))))
+            .containsExactlyInAnyOrder("TITLE", "ACCEPTANCE_CRITERIA")
+        listOf<Any>("title", listOf("title", "owner")).forEach { value ->
+            val ex = assertThrows<InvalidPolicyException> { ProjectPolicies.from(mapOf("dor" to value)) }
+            assertThat(ex.field).describedAs("value $value").startsWith("dor")
+        }
+    }
+
     @Test
     fun `AC-6 partial policies keep present fields and default the rest`() {
         val policies = ProjectPolicies.from(
