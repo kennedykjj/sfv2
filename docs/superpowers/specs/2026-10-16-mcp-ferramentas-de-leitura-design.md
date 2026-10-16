@@ -14,6 +14,8 @@ _Product Owner_
 - AC-1: Dado um agente conectado ao servidor MCP, quando ele chama as ferramentas de leitura para um card do próprio projeto, então recebe o card, a spec, os critérios de revisão do projeto (`.shipfloor/review-criteria.md` em main), as políticas e as camadas do projeto.
 - AC-2: Dado um agente de um projeto, quando ele pede a leitura de um card de outro projeto, então a leitura é recusada com erro que diz o que aconteceu e o id do card, sem devolver conteúdo.
 - AC-3: Dado texto vindo de fora (issue, ticket, comentário) no card ou na spec, quando o agente o lê por qualquer ferramenta, então o texto chega marcado como não confiável, separado do conteúdo da própria fábrica.
+- AC-4: Dado o servidor MCP, quando uma requisição chega sem o token de sessão no cabeçalho `Authorization: Bearer`, com token inválido, com `Origin` de navegador ou com `Host` diferente de `127.0.0.1:<porta>`, então é recusada antes de qualquer leitura, sem dizer qual das condições falhou e sem eco do token.
+- AC-5: Dado uma ferramenta que lê arquivo ou spec acima de 256 KiB, quando é chamada, então o agente recebe erro com o id do card ou o nome do arquivo e nenhum conteúdo parcial.
 
 **Fora de escopo**
 - Ferramentas de escrita (mudar card, spec, eventos) e transição de colunas.
@@ -56,9 +58,16 @@ _Tech Lead_
 | AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/McpReadToolsTest.kt` |
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/McpReadToolsTest.kt` |
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/McpReadToolsTest.kt` |
+| AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/McpReadToolsTest.kt` |
+| AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/McpReadToolsTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **Primeira porta de um agente para o daemon:** o token de sessão vem de `SecureRandom` (32 bytes), é comparado em tempo constante, só vale para o repositório da sessão e nunca aparece em log, erro ou resposta. Ele não dá acesso ao `owner.token` nem a nenhum comando do socket de `card.*` ou `project.*`.
+- **Servidor só em loopback**, no cabeçalho `Authorization` (nunca na URL), com checagem de `Host` e recusa de `Origin` presente: uma página aberta no navegador do dono não pode chamar o servidor (AC-4).
+- **Ferramentas só leem e não têm argumento de projeto:** o projeto vem da sessão (sem confused deputy); card sem vínculo ou de outro projeto falha fechado.
+- **Todo texto livre sai como `Untrusted`:** o agente trata o envelope como dado, nunca como instrução (ARCHITECTURE, regra 6); tamanho limitado (AC-5).
+- **Registrar para #29:** as ferramentas de pedido nunca aceitam ator nem prova do dono; o MCP fala sempre como `agent:<papel>` (restrição do #115).
 
 ## Rollback
 n/a
