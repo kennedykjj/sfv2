@@ -148,6 +148,6 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         const val CONFIG_FILE = ".shipfloor/factory.yml"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
-        val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions")
+        val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions", "tracker", "jira_site", "jira_project")
     }
 }

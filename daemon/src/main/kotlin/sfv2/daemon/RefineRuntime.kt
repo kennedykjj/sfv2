@@ -79,6 +79,8 @@ class RefineRuntime private constructor(
                 recorder = recorder,
                 trackerOf = { cardId -> ProjectDelivery.trackerOf(projectOf(cardId, store, registry), dataDir.resolve("tracker")) },
                 policiesOf = { cardId -> projectOf(cardId, store, registry).policies },
+                projectOf = { cardId -> projectOf(cardId, store, registry) },
+                prLinkOf = { project, pr -> ProjectDelivery.pullRequestUrl(project, pr) },
                 clock = clock,
                 log = log,
             )

@@ -63,6 +63,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 closure = CardClosure.forProjects(
                     store, commands.recorder, registry,
                     { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
+                    { project, pr -> ProjectDelivery.pullRequestUrl(project, pr) },
                     ownerProof, clock, StderrDaemonLog,
                 ),
                 onClose = {
