@@ -39,7 +39,7 @@ class CardCommands(
         is Request.CardRequestChange -> requestChange(request)
         Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
-        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList -> Response.Error("not a card command")
+        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild -> Response.Error("not a card command")
     }
 
     private fun create(request: Request.CardCreate): Response {

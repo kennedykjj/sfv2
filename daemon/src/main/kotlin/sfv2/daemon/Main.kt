@@ -50,6 +50,11 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 socketPath,
                 commands = commands,
                 projects = projects,
+                rebuild = CardRebuild.forProjects(
+                    store, commands.recorder, registry,
+                    { project -> ProjectDelivery.forgeOf(project, dataDir.resolve("forge")) },
+                    ownerProof, clock, StderrDaemonLog,
+                ),
                 onClose = {
                     runCatching { refine.close() }
                     database.close()

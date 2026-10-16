@@ -31,6 +31,7 @@ class SocketServer private constructor(
     private val pause: (Long) -> Unit,
     private val commands: CardCommands?,
     private val projects: ProjectCommands?,
+    private val rebuild: CardRebuild?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
 
@@ -95,6 +96,7 @@ class SocketServer private constructor(
         is Request.Rejected -> Response.Error(request.message)
         is Request.ProjectAdd, Request.ProjectList ->
             projects?.handle(request) ?: Response.Error("project commands are not available")
+        is Request.CardRebuild -> rebuild?.handle(request) ?: Response.Error("card rebuild is not available")
         is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
@@ -154,6 +156,7 @@ class SocketServer private constructor(
             commands: CardCommands? = null,
             projects: ProjectCommands? = null,
             onClose: () -> Unit = {},
+            rebuild: CardRebuild? = null,
         ): SocketServer {
             prepareDirectory(path)
             val lock = acquireLock(path)
@@ -175,7 +178,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, projects, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {

@@ -38,6 +38,11 @@ sealed interface Request {
 
     data object ProjectList : Request
 
+    /** Recreates the cards of [project] (null: the only registered project) from its pull requests. */
+    data class CardRebuild(val actor: Actor, val project: String? = null, val proof: String? = null) : Request {
+        override fun toString(): String = "CardRebuild(actor=$actor, project=$project, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -104,6 +109,10 @@ fun parseRequest(line: String): Request {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val path = stringField(obj, "path") ?: return Request.Rejected("missing path")
             Request.ProjectAdd(actor, path, stringField(obj, "proof"))
+        }
+        "card.rebuild" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            Request.CardRebuild(actor, stringField(obj, "project"), stringField(obj, "proof"))
         }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
