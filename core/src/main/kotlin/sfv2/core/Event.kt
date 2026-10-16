@@ -34,6 +34,7 @@ enum class EventType {
     MILESTONE_PENDING,
     MILESTONE_CONFIRMED,
     EXTERNAL_TEXT_CHANGED,
+    SETTINGS_SAVED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */
