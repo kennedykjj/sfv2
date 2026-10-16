@@ -93,6 +93,28 @@ internal object Texts {
             NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
         }
 
+    const val CLOSURE_OPEN = "Fechamento no tracker"
+    const val CLOSURE_TITLE = "Fechamento"
+    const val CLOSURE_LOADING = "Pedindo o rascunho ao daemon…"
+    const val CLOSURE_STATUS = "Status"
+    const val CLOSURE_SUMMARY = "Resumo"
+    const val CLOSURE_PR = "Pull request"
+    const val CLOSURE_NOTICE = "Isto é o que será postado no tracker; o título do card não é enviado."
+    const val CLOSURE_CONFIRM = "Confirmar fechamento"
+    const val CLOSURE_CONFIRMING = "Confirmando…"
+    const val CLOSURE_CLOSED = "Fechado no tracker"
+
+    fun closureRefused(reason: String): String = "O daemon não montou o rascunho de fechamento: $reason"
+
+    fun closureFailed(reason: String): String =
+        "A escrita no tracker falhou e o card segue em Done. Tente de novo. Resposta do daemon: $reason"
+
+    fun closureNotSent(cause: NotSentCause): String =
+        when (cause) {
+            NotSentCause.DAEMON_UNAVAILABLE -> "Nada foi enviado: o daemon está indisponível. Confira com sfv2 doctor e tente de novo."
+            NotSentCause.NO_OWNER_PROOF -> "Nada foi enviado: o arquivo do token do dono não foi encontrado. Rode sfv2 service install e tente de novo."
+        }
+
     /** What the move means to the owner, for the destination chooser and the drop button. */
     fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
         when {

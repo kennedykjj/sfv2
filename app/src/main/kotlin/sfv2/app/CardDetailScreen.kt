@@ -20,10 +20,15 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -38,6 +43,7 @@ import java.util.Locale
 
 private val COMPACT_WIDTH = 860.dp
 private const val OWNER_APPROVED = "OWNER_APPROVED"
+private const val DONE_COLUMN = "DONE"
 private val INSTANT_FORMAT = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("pt-BR"))
 
 /** `16 out 14:32`, in the given zone. */
@@ -50,18 +56,20 @@ internal fun TimelineEvent.isOwnerApproval(): Boolean = type == OWNER_APPROVED &
 private fun body(color: Color = Tokens.soft) = TextStyle(fontFamily = sans, fontSize = 14.sp, color = color)
 private fun tabular(style: TextStyle) = style.copy(fontFeatureSettings = "tnum")
 
+/** [closure] is the closure screen's controller; without it (no daemon socket) a Done card has no closing action. */
 @Composable
 fun CardDetailScreen(
     cardId: String,
     state: CardDetailState,
     onBack: () -> Unit,
     zone: ZoneId = ZoneId.systemDefault(),
+    closure: ClosureController? = null,
 ) {
     when (state) {
         CardDetailState.Disconnected -> ConnectionScreen(ConnectionState.Disconnected(DisconnectReason.NOT_RESPONDING))
         CardDetailState.NotFound -> NotFound(cardId, onBack)
         CardDetailState.Loading -> Page { Header(cardId, null, null); Section(Texts.SPEC) { Muted(Texts.LOADING_CARD) } }
-        is CardDetailState.Loaded -> Page { Detail(state.detail, zone) }
+        is CardDetailState.Loaded -> Page { Detail(state.detail, zone, closure) }
     }
 }
 
@@ -127,8 +135,9 @@ private fun Header(cardId: String, detail: CardDetail?, total: CostTotal?) {
 }
 
 @Composable
-private fun Detail(detail: CardDetail, zone: ZoneId) {
+private fun Detail(detail: CardDetail, zone: ZoneId, closure: ClosureController?) {
     Header(detail.id, detail, detail.total)
+    if (closure != null && detail.column == DONE_COLUMN) ClosureEntry(detail, closure)
     Section(Texts.SPEC) {
         if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
             Faint(Texts.NO_SPEC)
@@ -155,6 +164,25 @@ private fun Detail(detail: CardDetail, zone: ZoneId) {
                 BasicText(formatCost(detail.total.costUsd), style = tabular(bold))
             }
         }
+    }
+}
+
+/** The way into the closure screen; only a Done card has it. Opening it asks for the draft but sends nothing. */
+@Composable
+private fun ClosureEntry(detail: CardDetail, closure: ClosureController) {
+    var open by remember(detail.id) { mutableStateOf(false) }
+    if (open) {
+        Section(Texts.CLOSURE_OPEN) { ClosureScreen(closure, detail.events, detail.id) { open = false } }
+    } else {
+        BasicText(
+            Texts.CLOSURE_OPEN,
+            modifier = Modifier
+                .heightIn(min = 24.dp)
+                .border(1.dp, Tokens.edgeHi, RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) { open = true }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            style = body(Tokens.text),
+        )
     }
 }
 

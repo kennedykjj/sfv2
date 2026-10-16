@@ -99,13 +99,14 @@ private fun openNoticePorts(requests: MutableSharedFlow<WindowRequest>): NoticeP
 }
 
 @Composable
-private fun OpenCard(cardId: String, source: CardDetailSource?, onBack: () -> Unit) {
+private fun OpenCard(cardId: String, source: CardDetailSource?, closure: ClosureCommands?, onBack: () -> Unit) {
     val model = remember(cardId) {
         CardDetailModel(cardId, source ?: CardDetailSource { throw IOException("no runtime dir") })
     }
+    val controller = remember(cardId, closure) { closure?.let { ClosureController(it, Dispatchers.IO) } }
     val state by model.state.collectAsState()
     LaunchedEffect(model) { withContext(Dispatchers.IO) { model.refresh() } }
-    CardDetailScreen(cardId, state, onBack)
+    CardDetailScreen(cardId, state, onBack, closure = controller)
 }
 
 private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
@@ -143,6 +144,10 @@ fun main() {
         )
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
+    val closureCommands = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        SocketClosureCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE))
+    }
 
     val owner = board?.let {
         val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
@@ -188,7 +193,7 @@ fun main() {
             val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
             when {
-                openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource) { openCardId = null }
+                openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource, closureCommands) { openCardId = null }
                 showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
                 feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                     val feedState by feed.client.state.collectAsState()
