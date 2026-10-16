@@ -12,11 +12,12 @@ object ColumnTimes {
     private val medianColumns = setOf(Column.REFINEMENT, Column.CODING, Column.VALIDATION)
     private val meanWaitColumns = setOf(Column.SPEC_REVIEW, Column.STAGED)
 
+    /** Stays whose end falls in [from, toExclusive); open stays and columns without stays are left out. */
     fun of(eventsByCard: List<List<Event>>, from: Instant, toExclusive: Instant): Map<Column, ColumnTime> {
         val stays = mutableMapOf<Column, MutableList<Long>>()
         for (events in eventsByCard) {
             for ((column, seconds, end) in concludedStays(events)) {
-                if (end < from || !end.isBefore(toExclusive)) continue
+                if (end.isBefore(from) || !end.isBefore(toExclusive)) continue
                 stays.getOrPut(column) { mutableListOf() }.add(seconds)
             }
         }
@@ -39,14 +40,14 @@ object ColumnTimes {
 
     private data class Stay(val column: Column, val seconds: Long, val end: Instant)
 
+    /** Each CARD_MOVED closes the stay in the previous column; the card starts in Inbox at CARD_CREATED. */
     private fun concludedStays(events: List<Event>): List<Stay> {
-        val steps = events.filter { it.type == EventType.CARD_CREATED || it.type == EventType.CARD_MOVED }
-        var since = steps.firstOrNull { it.type == EventType.CARD_CREATED }?.at ?: return emptyList()
-        var column = Column.INBOX
+        var since = events.firstOrNull { it.type == EventType.CARD_CREATED }?.at ?: return emptyList()
+        var column: Column? = Column.INBOX
         val stays = mutableListOf<Stay>()
-        for (move in steps.filter { it.type == EventType.CARD_MOVED }) {
-            stays += Stay(column, Duration.between(since, move.at).seconds, move.at)
-            column = Column.entries.firstOrNull { it.name == move.payload["to"] } ?: continue
+        for (move in events.filter { it.type == EventType.CARD_MOVED }) {
+            column?.let { stays += Stay(it, Duration.between(since, move.at).seconds, move.at) }
+            column = Column.entries.firstOrNull { it.name == move.payload["to"] }
             since = move.at
         }
         return stays
