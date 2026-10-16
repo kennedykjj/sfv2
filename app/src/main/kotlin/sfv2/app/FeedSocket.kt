@@ -8,6 +8,9 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Path
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -125,15 +128,35 @@ class SocketFeedTransport(private val socket: Path) : FeedTransport {
     }
 }
 
-/** `cost.summary` over the daemon's socket; a missing or invalid `limits` means no limits, never an error. */
-class SocketCostSummarySource(private val socket: Path) : CostSummarySource {
+/**
+ * `cost.summary` over the daemon's socket, asking for days in [zone]. A missing or invalid `limits` means no limits,
+ * and missing `stages`/`days` (an older daemon) mean empty lists, never an error.
+ */
+class SocketCostSummarySource(private val socket: Path, private val zone: ZoneId = ZoneOffset.UTC) : CostSummarySource {
     override fun summary(from: Instant, to: Instant): CostSummary {
-        val reply = call(socket, buildJsonObject { put("cmd", "cost.summary"); put("from", from.toString()); put("to", to.toString()) })
+        val reply = call(
+            socket,
+            buildJsonObject {
+                put("cmd", "cost.summary")
+                put("from", from.toString())
+                put("to", to.toString())
+                put("zone", zone.id)
+            },
+        )
         val result = reply["result"] as? JsonObject ?: throw IOException("daemon sent a cost summary without result")
         val limits = result["limits"] as? JsonObject
         val cards = (result["cards"] as? JsonArray).orEmpty().mapNotNull { element ->
             val card = element as? JsonObject ?: return@mapNotNull null
             CardCost(text(card, "card") ?: return@mapNotNull null, decimal(card["costUsd"]), statusOf(text(card, "status")))
+        }
+        val stages = (result["stages"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val stage = element as? JsonObject ?: return@mapNotNull null
+            StageCost(text(stage, "stage") ?: return@mapNotNull null, decimal(stage["costUsd"]), statusOf(text(stage, "status")))
+        }
+        val days = (result["days"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val day = element as? JsonObject ?: return@mapNotNull null
+            val date = text(day, "day")?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return@mapNotNull null
+            DayCost(date, decimal(day["costUsd"]), statusOf(text(day, "status")))
         }
         val reached = (result["cardsReached"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.toSet()
         return CostSummary(
@@ -143,6 +166,8 @@ class SocketCostSummarySource(private val socket: Path) : CostSummarySource {
             limits = CostLimitsInfo(limits?.let { decimal(it["perCardUsd"]) }, limits?.let { decimal(it["perDayUsd"]) }),
             dayReached = (result["dayReached"] as? JsonPrimitive)?.booleanOrNull ?: false,
             cardsReached = reached,
+            stages = stages,
+            days = days,
         )
     }
 

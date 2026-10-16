@@ -75,6 +75,8 @@ object Texts {
 
     const val COST_TITLE = "Custo do dia"
     const val COST_BY_CARD = "Por card"
+    const val COST_BY_STAGE = "Por estágio"
+    const val COST_BY_DAY = "Por dia"
     const val COST_TOTAL = "Total do dia"
     const val ESTIMATE_TAG = "estimativa"
     const val ESTIMATE_SUFFIX = "est."

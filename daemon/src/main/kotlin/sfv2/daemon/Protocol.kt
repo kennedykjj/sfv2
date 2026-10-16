@@ -1,7 +1,10 @@
 package sfv2.daemon
 
 import java.math.BigDecimal
+import java.time.DateTimeException
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -115,8 +118,8 @@ sealed interface Request {
     /** Read-only: the audit trail of card [id]; [format] is validated by the handler. */
     data class AuditExport(val id: String, val format: String) : Request
 
-    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
-    data class CostSummary(val from: Instant, val to: Instant) : Request
+    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them; days are in [zone]. */
+    data class CostSummary(val from: Instant, val to: Instant, val zone: ZoneId = ZoneOffset.UTC) : Request
 
     /** Read-only: the time per column of the stays that ended in [from, to). */
     data class ColumnTimes(val from: Instant, val to: Instant) : Request
@@ -149,6 +152,12 @@ data class IgnoredRow(val id: String, val reason: String)
 /** The cost of one card in the period asked. */
 data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostStatus)
 
+/** The cost of one stage (`unknown` when the event has none) in the period asked. */
+data class StageCost(val stage: String, val costUsd: BigDecimal, val status: CostStatus)
+
+/** The cost of one local day (`AAAA-MM-DD`) in the period asked. */
+data class DayCost(val day: String, val costUsd: BigDecimal, val status: CostStatus)
+
 /** A reply to the client. */
 sealed interface Response {
     /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
@@ -172,6 +181,8 @@ sealed interface Response {
         val limits: CostLimits,
         val dayReached: Boolean,
         val cardsReached: List<String>,
+        val stages: List<StageCost> = emptyList(),
+        val days: List<DayCost> = emptyList(),
     ) : Response
 
     data object Pong : Response
@@ -296,7 +307,8 @@ fun parseRequest(line: String): Request {
         "cost.summary" -> {
             val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
             val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
-            Request.CostSummary(from, to)
+            val zone = if (obj["zone"] == null) ZoneOffset.UTC else zoneField(obj, "zone") ?: return Request.Rejected("invalid zone")
+            Request.CostSummary(from, to, zone)
         }
         "column.times" -> {
             val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
@@ -335,6 +347,15 @@ private fun parseRows(obj: JsonObject): List<BoardRow>? {
 
 private fun instantField(obj: JsonObject, key: String): Instant? =
     stringField(obj, key)?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+private fun zoneField(obj: JsonObject, key: String): ZoneId? =
+    stringField(obj, key)?.let {
+        try {
+            ZoneId.of(it)
+        } catch (e: DateTimeException) {
+            null
+        }
+    }
 
 private fun stringField(obj: JsonObject, key: String): String? {
     val primitive = obj[key] as? JsonPrimitive ?: return null
@@ -572,6 +593,30 @@ fun render(response: Response): String = when (response) {
                 )
                 put("dayReached", response.dayReached)
                 put("cardsReached", JsonArray(response.cardsReached.map { JsonPrimitive(it) }))
+                put(
+                    "stages",
+                    JsonArray(
+                        response.stages.map { cost ->
+                            buildJsonObject {
+                                put("stage", cost.stage)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
+                put(
+                    "days",
+                    JsonArray(
+                        response.days.map { cost ->
+                            buildJsonObject {
+                                put("day", cost.day)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
             },
         )
     }.toString()
