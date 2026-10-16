@@ -163,6 +163,8 @@ class PhaseExitTest {
         val developGates = object : DevelopGates {
             override fun red(cardId: String, worktree: Path) = gate(cardId, listOf("daemon-red"))
 
+            override fun layers(worktree: Path) = project.layers
+
             override fun green(cardId: String, layer: ProjectLayer, worktree: Path) =
                 gate(cardId, listOf("daemon-tests", "daemon-build", "scope"))
         }
