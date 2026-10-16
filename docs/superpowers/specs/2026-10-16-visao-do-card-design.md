@@ -17,6 +17,8 @@ _Product Owner_
 - **AC-5** — Dado um card com runs, quando a visão abre, então o custo total do card é exibido e é a soma dos custos dos runs.
 - **AC-6** — Dado um card sem spec, sem eventos ou sem runs, quando a visão abre, então a seção vazia mostra um estado vazio explícito, sem erro.
 - **AC-7** — Dado que o daemon está indisponível, quando o dono abre a visão do card, então vê o estado de desconexão do app, sem dados inventados.
+- **AC-9** — Dado um card com mais de 500 eventos, ou uma spec acima de 64 KiB, ou um valor de payload acima de 512 caracteres, quando a visão abre, então o daemon devolve só os 500 eventos mais recentes com `truncated: true`, a spec cortada com o aviso `spec cortada`, e os valores de payload cortados, e a visão mostra os avisos em vez de crescer sem limite.
+- **AC-10** — Dado um run cujo custo é desconhecido (`status` `UNKNOWN`, sem `cost_usd`), quando a visão abre, então a linha mostra `US$ ?` com o motivo que o daemon gravou, o total fica `UNKNOWN` ou `PARTIAL` conforme o caso e nunca soma zero em silêncio.
 - **AC-8** — Dado um card que recebe novo evento ou run com a visão aberta, quando o daemon o registra, então a visão reflete o dado novo sem reabrir.
 **Out of scope:** Editar a spec, aprovar ou liberar a entrega pela visão (ações do dono ficam em outro item); mover o card; visão agregada de custo por projeto; exibir texto de transcrição dos runs; exportar a trilha.
 **Product fit:** Serve "toda ação é um evento com ator" e "custo medido das transcrições, rotulado como estimativa". Não contradiz o posicionamento nem o que está fora de escopo: é leitura do estado que o daemon possui.
@@ -29,7 +31,7 @@ _UX/UI Designer_
 - **Cabeçalho:** `#n` em mono (cor `text`, não accent: o accent é só para o que espera o dono), título em 24px/600 (Section), coluna em Meta 13px `muted`, e à direita o custo total em Headline 17px `text`: `US$ 1,36 est.` (Estimate Rule; `US$ ?` com a explicação "falta preço de um modelo" quando faltar preço, nunca zero).
 - **Seções:** cada uma é um painel (`panel`, borda `edge`, raio 16px, padding 16/24) com título Headline 17px; texto da spec em Body 14px, `soft`, máx. 64ch, em prosa sem renderizar HTML. Reaproveitar `Tokens`/`Texts` de `ConnectionScreen.kt` (mover para arquivo comum) sem componente novo além de um `Panel` e de linhas.
 - **Linha do tempo:** lista em ordem cronológica (mais antigo primeiro). Cada linha: instante em mono 12px `faint` (`16 out 14:32`), marca quadrada/ponto, ator em 600, tipo em `soft`. Evento de aprovação do dono: marca cheia `text` e tag `assinada pelo dono` (componente `tag`, 13px); eventos de agentes têm marca vazada `muted` e sem tag, assim o estado não depende só de cor.
-- **Runs:** tabela simples alinhada à direita nos números (tabular-nums): início, estágio, modelo, duração, custo `US$ 0,42 est.`; linha final "Total" = soma, em `text` 600. Sem texto de transcrição.
+- **Runs:** tabela simples alinhada à direita nos números (tabular-nums): instante do registro, estágio, runtime, modelos (os nomes que o daemon grava na chave `tokens` do evento), custo `US$ 0,42 est.`; o evento de custo não grava início nem duração do run, então a tabela não mostra coluna de duração (inventá-la a partir de outros eventos seria dado falso); linha final "Total" = soma, em `text` 600. Sem texto de transcrição.
 - **Estados vazios (um por seção, linha `faint` 14px):** `Este card ainda não tem spec.` · `Nenhum evento registrado.` · `Nenhum run ainda.` (custo total no cabeçalho: `US$ 0,00 est.` só quando há zero runs medidos; sem preço, `US$ ?`).
 - **Carregando:** cabeçalho com `#n` e sem skeleton, seções com `Lendo o card…` (`muted`); sem animação nova.
 - **Erro / daemon indisponível (AC-7):** reutilizar `ConnectionScreen` (estado Desconectado e explicação) no lugar da visão, sem dados antigos nem inventados; ao reconectar a visão volta sozinha. Card inexistente: `Card #n não encontrado.` com botão ghost `Voltar`.
@@ -41,7 +43,7 @@ _UX/UI Designer_
 ## Architecture
 _Tech Lead_
 
-**Contrato novo (daemon):** `{"cmd":"card.detail","id":"<id>"}` → `{"ok":true,"detail":{"card":{id,title,column},"spec":{"status":"valid|missing","text":"..."},"events":[{id,at,actor,type,payload}],"runs":[{run_id,at,stage,runtime,status,cost_usd,estimate}],"total":{"status":"KNOWN|PARTIAL|UNKNOWN","cost_usd":"..."}}}`; card inexistente → `{"ok":false,"error":"card not found: <id>"}` (igual a `card.show`). `card.show` não muda. Eventos usam o mesmo formato de `renderEvent` (ator `owner`, `agent:<role>`, `factory:<comp>`). Runs são derivados dos eventos `RUN_COST_RECORDED` (payload já tem `run_id`, `stage`, `runtime`, `status`, `cost_usd`, `estimate`); o total soma os `cost_usd` e vira `PARTIAL` se algum run for `PARTIAL`/`UNKNOWN`.
+**Contrato novo (daemon):** `{"cmd":"card.detail","id":"<id>"}` → `{"ok":true,"detail":{"card":{id,title,column},"spec":{"status":"valid|missing","text":"..."},"events":[{id,at,actor,type,payload}],"runs":[{run_id,at,stage,runtime,status,cost_usd,estimate}],"total":{"status":"KNOWN|PARTIAL|UNKNOWN","cost_usd":"..."}}}`; card inexistente → `{"ok":false,"error":"card not found: <id>"}` (igual a `card.show`). `card.show` não muda. Limites no daemon: só os 500 eventos mais recentes (com `truncated`), spec de até 64 KiB e valor de payload de até 512 caracteres, tudo cortado em fronteira de caractere (AC-9). Eventos usam o mesmo formato de `renderEvent` (ator `owner`, `agent:<role>`, `factory:<comp>`). Runs são derivados dos eventos `RUN_COST_RECORDED` (o `RunCostRecorder` grava `run_id`, `stage`, `runtime`, `estimate`, `tokens` no formato `modelo:in/out/cacheRead/cacheWrite5m/cacheWrite1h;...`, `status` e `cost_usd`; `UNKNOWN` traz `reason` e não traz `cost_usd`; `PARTIAL` traz `unpriced_models`); o total soma os `cost_usd` e vira `PARTIAL` se algum run for `PARTIAL`/`UNKNOWN`.
 
 **Camada daemon:**
 - `daemon/.../Protocol.kt`: `Request.CardDetail(id)`, `Response.CardDetailResult(...)`, parse de `card.detail`, render da resposta; `SocketServer.kt` roteia o novo pedido como leitura (sem prova do dono).
@@ -69,6 +71,8 @@ _Tech Lead_
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SocketServerTest.kt` |
 | AC-7 | app | `app/src/test/kotlin/sfv2/app/CardDetailModelTest.kt` |
 | AC-8 | app | `app/src/test/kotlin/sfv2/app/CardDetailModelTest.kt` |
+| AC-9 | app | `app/src/test/kotlin/sfv2/app/CardDetailModelTest.kt` |
+| AC-10 | app | `app/src/test/kotlin/sfv2/app/CardDetailModelTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
