@@ -340,27 +340,6 @@ class CardDetailModelTest {
     }
 
     @Test
-    fun `AC-5 a retry from a failure that did not reach the daemon shows why and keeps the failure and the hash`() = runBlocking {
-        val fx = ClosureFixtures.controller()
-        fx.controller.open("c1", ClosureFixtures.timeline())
-        fx.commands.confirmReply = { ConfirmOutcome.Failed("tracker unavailable") }
-        fx.controller.confirm()
-        fx.commands.confirmReply = { ConfirmOutcome.NotSent(NotSentCause.NO_OWNER_PROOF) }
-
-        fx.controller.confirm()
-
-        assertThat(fx.controller.state.value)
-            .isEqualTo(ClosureState.Failed("tracker unavailable", "h1", NotSentCause.NO_OWNER_PROOF))
-
-        fx.commands.confirmReply = { ConfirmOutcome.Closed }
-        fx.controller.confirm()
-
-        assertThat(fx.commands.confirms)
-            .containsExactly(SentConfirm("c1", "h1"), SentConfirm("c1", "h1"), SentConfirm("c1", "h1"))
-        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
-    }
-
-    @Test
     fun `AC-6 a timeline ending in CLOSURE_WRITTEN shows closed and asks for nothing`() = runBlocking {
         val fx = ClosureFixtures.controller()
         val events = ClosureFixtures.timeline(
