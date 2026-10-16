@@ -26,6 +26,7 @@ class ValidationOutcomeTest {
 
     /** Runs a fake validate session that reports [report], then applies it with [gates]. */
     private fun validate(dir: Path, report: String, gates: GatesState, check: (CardEventStore, ValidationDecision) -> Unit) {
+        Files.createDirectories(dir)
         val database = Database.open(dir.resolve("factory.db"))
         val store = CardEventStore(database)
         val events = EventStream(store)
