@@ -1,0 +1,11 @@
+{
+  "outcome": "ok",
+  "pr": 171,
+  "head": "c9cd28bacb5b155daa60b614e7a5a1bbcc06b3ae",
+  "agents": [{"name": "qa-engineer", "mode": "amend", "tokens": 19853, "rounds": 1}],
+  "rounds": 1,
+  "failed_gates": ["ci build (compile of DevelopPipelineTest after merge with main)"],
+  "amendments": ["daemon/src/test/kotlin/sfv2/daemon/DevelopPipelineTest.kt: ValidateGates stub returns ValidateGateResults(emptyList()) after #170 changed the return type"],
+  "flaky": [],
+  "gates_reused": ["green daemon sfv2.daemon.ProcessGateRunnerTest", "green daemon sfv2.daemon.DevelopPipelineTest", "green daemon sfv2.daemon.ValidatePipelineTest"]
+}
