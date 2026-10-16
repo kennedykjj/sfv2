@@ -124,26 +124,65 @@ class AutonomousDelivery(
 
     private fun followMain(cardId: String, card: Card, commit: String): DeliveryOutcome {
         val forge = forge(cardId)
+        val base = mapOf("merge_commit" to commit)
+        val events = store.events(cardId)
+        val mergedEvent = events.lastOrNull { it.type == EventType.PR_MERGED }
+        val prNumber = mergedEvent?.payload?.get("pr")?.toIntOrNull()
+        val rerunEarlier = events.any { it.type == EventType.MAIN_CI_RERUN && it.payload["merge_commit"] == commit }
+        var rerun = rerunEarlier
+        var sawPending = false
         var result: ChecksState = ChecksState.Pending
         try {
             for (poll in 1..maxPolls) {
                 result = forge.checks(commit)
-                if (result != ChecksState.Pending || poll == maxPolls) break
+                if (result is ChecksState.Failed) {
+                    if (!rerun) {
+                        forge.rerunChecks(commit)
+                        record(cardId, card, EventType.MAIN_CI_RERUN, base + ("pr" to prNumber?.toString().orEmpty()))
+                        rerun = true
+                    } else if (rerunEarlier || sawPending) {
+                        return revertMerge(cardId, card, forge, result, base, prNumber, mergedEvent?.payload?.get("head").orEmpty())
+                    }
+                } else if (result == ChecksState.Pending) {
+                    sawPending = true
+                } else {
+                    break
+                }
+                if (poll == maxPolls) break
                 pause.await()
                 if (Thread.currentThread().isInterrupted) return DeliveryOutcome.Skipped
             }
         } catch (e: ForgeException) {
-            return returnToOwner(cardId, card, "forge_failed", mapOf("merge_commit" to commit))
+            return returnToOwner(cardId, card, "forge_failed", base)
         }
-        return when (val state = result) {
+        return when (result) {
             ChecksState.Passed -> {
-                move(cardId, card, Column.DONE, mapOf("merge_commit" to commit, "ci" to "green"))
+                move(cardId, card, Column.DONE, base + ("ci" to "green"))
                 log.log("delivery_done", mapOf("card" to cardId))
                 DeliveryOutcome.Done
             }
-            is ChecksState.Failed ->
-                returnToOwner(cardId, card, redReason(state), mapOf("merge_commit" to commit))
-            ChecksState.Pending -> returnToOwner(cardId, card, "main_ci_timeout", mapOf("merge_commit" to commit))
+            is ChecksState.Failed -> returnToOwner(cardId, card, "rerun_not_started", base)
+            ChecksState.Pending -> returnToOwner(cardId, card, "main_ci_timeout", base)
+        }
+    }
+
+    private fun revertMerge(
+        cardId: String,
+        card: Card,
+        forge: Forge,
+        state: ChecksState.Failed,
+        base: Map<String, String>,
+        prNumber: Int?,
+        head: String,
+    ): DeliveryOutcome {
+        val reason = redReason(state)
+        val number = prNumber ?: return returnToOwner(cardId, card, "revert_failed $reason", base)
+        val ref = PullRequestRef(number, "", head)
+        return try {
+            val revertPr = forge.revert(ref)
+            returnToOwner(cardId, card, reason, base + ("revert_pr" to revertPr.number.toString()))
+        } catch (e: ForgeException) {
+            returnToOwner(cardId, card, "revert_failed $reason", base)
         }
     }
 
