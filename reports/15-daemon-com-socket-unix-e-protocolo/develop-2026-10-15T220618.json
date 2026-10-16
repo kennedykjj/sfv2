@@ -1,0 +1,1 @@
+{"issue":15,"slug":"daemon-com-socket-unix-e-protocolo","pipeline":"develop","started_at":"2026-10-16T01:05:00Z","finished_at":"2026-10-16T01:20:00Z","outcome":"blocked","agents":[],"rounds":{},"gates_failed":["scope techlead"],"flaky":[],"gates_reused":[],"manual_edit":false}
