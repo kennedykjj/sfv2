@@ -5,6 +5,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
+import io.ktor.server.response.ApplicationSendPipeline
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
@@ -58,10 +59,18 @@ class McpServerFactory(
         val guard = AtomicReference<McpRequestGuard?>(null)
         val engine = embeddedServer(CIO, host = LOOPBACK, port = port) {
             intercept(ApplicationCallPipeline.Plugins) {
-                if (authorize(guard.get(), call.request.headers) == null) {
+                val headers = call.request.headers
+                if (authorize(guard.get(), headers) == null) {
                     log.log("mcp_refused", mapOf("reason" to "unauthorized"))
                     call.respond(HttpStatusCode.Unauthorized)
                     finish()
+                } else if (headers[MCP_SESSION_ID] == null) {
+                    val token = headers[HttpHeaders.Authorization]?.removePrefix("Bearer ")
+                    if (token != null) {
+                        call.response.pipeline.intercept(ApplicationSendPipeline.Before) {
+                            call.response.headers[MCP_SESSION_ID]?.let { sessions.bind(it, token) }
+                        }
+                    }
                 }
             }
             mcpStreamableHttp {
@@ -76,7 +85,12 @@ class McpServerFactory(
     }
 
     private fun authorize(guard: McpRequestGuard?, headers: Headers): McpSession? =
-        guard?.authorize(headers[HttpHeaders.Host], headers[HttpHeaders.Origin], headers[HttpHeaders.Authorization])
+        guard?.authorize(
+            headers[HttpHeaders.Host],
+            headers[HttpHeaders.Origin],
+            headers[HttpHeaders.Authorization],
+            headers[MCP_SESSION_ID],
+        )
 
     internal fun serverFor(session: McpSession): Server {
         val tools = McpReadTools(session, store, specs, registry, files, log)
@@ -87,19 +101,19 @@ class McpServerFactory(
         val cardId = idSchema()
         val none = ToolSchema()
         server.addTool("card_get", "Reads a card of this project: title, column, references.", cardId) { request ->
-            toolResult { tools.cardGet(request.cardId()).let(::cardJson) }
+            toolResult("card_get") { tools.cardGet(request.cardId()).let(::cardJson) }
         }
         server.addTool("spec_get", "Reads the registered spec of a card of this project.", cardId) { request ->
-            toolResult { tools.specGet(request.cardId()).let { buildJsonObject { put("cardId", it.cardId); put("spec", untrusted(it.spec)) } } }
+            toolResult("spec_get") { tools.specGet(request.cardId()).let { buildJsonObject { put("cardId", it.cardId); put("spec", untrusted(it.spec)) } } }
         }
         server.addTool("review_criteria_get", "Reads the project's review criteria from main.", none) {
-            toolResult { tools.reviewCriteriaGet().let { buildJsonObject { put("criteria", untrusted(it.criteria)) } } }
+            toolResult("review_criteria_get") { tools.reviewCriteriaGet().let { buildJsonObject { put("criteria", untrusted(it.criteria)) } } }
         }
         server.addTool("policies_get", "Reads the project's delivery policies.", none) {
-            toolResult { policiesJson(tools.policiesGet()) }
+            toolResult("policies_get") { policiesJson(tools.policiesGet()) }
         }
         server.addTool("layers_get", "Reads the project's layers.", none) {
-            toolResult {
+            toolResult("layers_get") {
                 buildJsonObject {
                     putJsonArray("layers") {
                         tools.layersGet().forEach { add(buildJsonObject { put("name", it.name); put("path", it.path) }) }
@@ -110,11 +124,14 @@ class McpServerFactory(
         return server
     }
 
-    private fun toolResult(block: () -> JsonObject): CallToolResult =
+    private fun toolResult(tool: String, block: () -> JsonObject): CallToolResult =
         try {
             CallToolResult(content = listOf(TextContent(text = block().toString())), isError = false)
         } catch (e: McpToolException) {
             CallToolResult(content = listOf(TextContent(text = e.message ?: "tool refused")), isError = true)
+        } catch (e: RuntimeException) {
+            log.log("mcp_tool_failed", mapOf("tool" to tool, "code" to INTERNAL, "error" to e.javaClass.simpleName))
+            CallToolResult(content = listOf(TextContent(text = "tool failed (code=$INTERNAL)")), isError = true)
         }
 
     private fun CallToolRequest.cardId(): String =
@@ -157,5 +174,7 @@ class McpServerFactory(
 
     private companion object {
         const val LOOPBACK = "127.0.0.1"
+        const val MCP_SESSION_ID = "Mcp-Session-Id"
+        const val INTERNAL = "internal"
     }
 }

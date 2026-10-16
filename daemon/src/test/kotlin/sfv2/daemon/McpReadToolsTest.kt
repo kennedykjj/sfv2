@@ -185,6 +185,29 @@ class McpReadToolsTest {
     }
 
     @Test
+    fun `AC-3 a card id outside the allowed pattern is refused before any lookup and never logged`() {
+        aCard("c1", alpha, "Add login", "# Spec")
+        val lines = mutableListOf<Pair<String, Map<String, String>>>()
+        val logged = McpReadTools(McpSession(alpha.repo), store, specs, ProjectRegistry(McpFixtures.FakeConfigSource()), files) { event, fields ->
+            lines.add(event to fields)
+        }
+        val bad = listOf("../x", "a/b", "a\nb", "a b", "", "a".repeat(65), "açao", "c1\n", "c1/../c1")
+
+        bad.forEach { id ->
+            listOf({ logged.cardGet(id) }, { logged.specGet(id) }).forEach { call ->
+                assertThatThrownBy { call() }
+                    .isInstanceOf(McpToolException::class.java)
+                    .hasMessage("argument cardId is invalid")
+            }
+        }
+
+        assertThat(lines.map { it.first }).contains("mcp_refused")
+        assertThat(lines.filter { it.first == "mcp_refused" }).allMatch { it.second["reason"] == "invalid_card_id" }
+        assertThat(lines.flatMap { it.second.values }).noneMatch { value -> bad.filter { it.length > 1 }.any { value.contains(it) } }
+        assertThat(tools.cardGet("c1").title.text).isEqualTo("Add login")
+    }
+
+    @Test
     fun `AC-5 spec or file above 256 KiB is refused with id or file name and no partial content`() {
         val atLimit = "a".repeat(McpFixtures.LIMIT)
         val over = "b".repeat(McpFixtures.LIMIT + 1)
