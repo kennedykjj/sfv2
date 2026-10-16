@@ -300,6 +300,37 @@ class CardImportTest {
     }
 
     @Test
+    fun `AC-3 of #55 a reimport with a different hash warns the owner with ids and hashes only`() {
+        val old = item("7", "Old title", "old secret body")
+        val id = seedCard(old, Column.CODING, title = "Old title")
+        val changed = item("7", "New title", "new secret body")
+        tracker.seed(changed)
+
+        importById("7")
+
+        val warnings = store.events(id).filter { it.type.name == "EXTERNAL_TEXT_CHANGED" }
+        assertThat(warnings).hasSize(1)
+        val warning = warnings.single()
+        assertThat(warning.payload["externalId"]).isEqualTo("7")
+        assertThat(warning.payload["previousHash"]).isEqualTo(old.textHash)
+        assertThat(warning.payload["newHash"]).isEqualTo(changed.textHash)
+        assertThat(warning.payload.values.joinToString(" ")).doesNotContain("title", "secret")
+
+        importById("7")
+        assertThat(store.events(id).filter { it.type.name == "EXTERNAL_TEXT_CHANGED" }).hasSize(1)
+    }
+
+    @Test
+    fun `AC-3 of #55 a reimport with the same hash emits no warning`() {
+        tracker.seed(item("7"))
+        val id = cardsOf(importById("7")).single().id
+
+        importById("7")
+
+        assertThat(store.events(id).filter { it.type.name == "EXTERNAL_TEXT_CHANGED" }).isEmpty()
+    }
+
+    @Test
     fun `AC-12 a search skips closed issues while an import by id accepts one`() {
         tracker.seed(item("1", "Topic open"))
         tracker.seed(item("2", "Topic closed", state = TrackerItemState.CLOSED))

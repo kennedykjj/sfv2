@@ -16,6 +16,11 @@ enum class Signer(val key: String) {
     POLICY("policy"),
 }
 
+enum class Milestone(val key: String) {
+    STARTED("started"),
+    PR_OPENED("pr_opened"),
+}
+
 data class Conventions(val commitFormat: String, val branchFormat: String)
 
 class InvalidPolicyException(val field: String, message: String) : RuntimeException(message)
@@ -24,6 +29,7 @@ data class ProjectPolicies(
     val deliveryMode: DeliveryMode,
     val signers: Map<ExternalEffect, Signer>,
     val conventions: Conventions,
+    val milestones: Set<Milestone> = emptySet(),
 ) {
     companion object {
         private const val DEFAULT_COMMIT_FORMAT = "{type}({scope}): {subject}"
@@ -54,7 +60,16 @@ data class ProjectPolicies(
                         conventions, "branch_format", DEFAULT_BRANCH_FORMAT, BRANCH_PLACEHOLDERS, "id",
                     ),
                 ),
+                milestones = readMilestones(raw["milestones"]),
             )
+        }
+
+        private fun readMilestones(raw: Any?): Set<Milestone> {
+            if (raw == null) return emptySet()
+            if (raw !is List<*>) invalid("milestones", raw)
+            return raw.map { item ->
+                Milestone.entries.firstOrNull { it.key == item } ?: invalid("milestones", item)
+            }.toSet()
         }
 
         private fun readSigners(raw: Map<*, *>?): Map<ExternalEffect, Signer> {
