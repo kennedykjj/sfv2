@@ -3,11 +3,13 @@ package sfv2.daemon
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Clock
 import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 import org.snakeyaml.engine.v2.exceptions.YamlEngineException
 import sfv2.core.InvalidPolicyException
 import sfv2.core.ProjectPolicies
+import sfv2.store.ProjectPathStore
 
 /** [build] and [test] are command tokens (split on spaces, no shell); [ran] is the text a passing test run prints. */
 data class ProjectLayer(
@@ -34,7 +36,12 @@ class ProjectNotFoundException(message: String) : RuntimeException(message)
 class ProjectAlreadyRegisteredException(message: String) : RuntimeException(message)
 
 /** Projects the daemon knows, in memory. A refused registration changes nothing. */
-class ProjectRegistry(private val source: ProjectConfigSource) {
+class ProjectRegistry(
+    private val source: ProjectConfigSource,
+    private val paths: ProjectPathStore? = null,
+    private val log: DaemonLog = StderrDaemonLog,
+    private val clock: Clock = Clock.systemUTC(),
+) {
 
     private val projects = LinkedHashMap<Path, Project>()
 
@@ -44,11 +51,32 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         if (canonical in projects) {
             throw ProjectAlreadyRegisteredException("project already registered: $canonical")
         }
-        val text = source.read(canonical)
-            ?: throw ProjectNotFoundException("$CONFIG_FILE not found on main in $canonical")
-        val project = parse(text, canonical)
+        val project = load(canonical)
+        paths?.add(canonical.toString(), clock.instant())
         projects[canonical] = project
         return project
+    }
+
+    /** Registers in memory the persisted paths, reading each `factory.yml` from main now; failures are logged per path. */
+    @Synchronized
+    fun restore() {
+        for (stored in paths?.all().orEmpty()) {
+            try {
+                val canonical = canonicalRepo(Path.of(stored))
+                if (canonical in projects) continue
+                projects[canonical] = load(canonical)
+            } catch (e: InvalidProjectConfigException) {
+                log.log("project_restore_failed", mapOf("path" to stored, "field" to e.field))
+            } catch (e: ProjectNotFoundException) {
+                log.log("project_restore_failed", mapOf("path" to stored, "field" to "path"))
+            }
+        }
+    }
+
+    private fun load(canonical: Path): Project {
+        val text = source.read(canonical)
+            ?: throw ProjectNotFoundException("$CONFIG_FILE not found on main in $canonical")
+        return parse(text, canonical)
     }
 
     @Synchronized
@@ -148,6 +176,6 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         const val CONFIG_FILE = ".shipfloor/factory.yml"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
-        val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions", "dor")
+        val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions", "tracker", "jira_site", "jira_project", "dor")
     }
 }

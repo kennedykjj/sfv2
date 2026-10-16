@@ -22,50 +22,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-/** Tokens of DESIGN.md (Charcoal) used by this screen. */
-private object Tokens {
-    val ground = Color(0xFF0A0A0A)
-    val panel = Color(0xFF14171B)
-    val edge = Color(0xFF2A2F39)
-    val text = Color(0xFFF2F1EE)
-    val soft = Color(0xFFD6D8DA)
-    val muted = Color(0xFFA3ABB6)
-    val ok = Color(0xFF9FCBAA)
-    val warn = Color(0xFFDCB872)
-}
-
-/** Every user-facing string of the shell, in one place for the future i18n. */
-internal object Texts {
-    const val TITLE = "sfv2"
-    const val CONNECTING = "Conectando ao daemon…"
-    const val CONNECTED = "Conectado ao daemon"
-    const val DISCONNECTED = "Desconectado do daemon"
-
-    /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
-    data class Explanation(val reason: String, val step: String, val command: String?)
-
-    fun explain(reason: DisconnectReason): Explanation =
-        when (reason) {
-            DisconnectReason.SERVICE_NOT_INSTALLED ->
-                Explanation("O serviço sfv2 não está instalado.", "Instale com", "sfv2 service install")
-            DisconnectReason.START_FAILED ->
-                Explanation("O serviço sfv2 não iniciou.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.START_TIMED_OUT ->
-                Explanation("O daemon não respondeu a tempo.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.NOT_RESPONDING ->
-                Explanation("O daemon parou de responder.", "A janela volta sozinha quando ele voltar.", null)
-            DisconnectReason.NO_RUNTIME_DIR ->
-                Explanation("Não encontrei o diretório de runtime do usuário (XDG_RUNTIME_DIR).", "Veja o estado com", "sfv2 doctor")
-        }
-}
-
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 
 @Composable
 fun ConnectionScreen(state: ConnectionState) {

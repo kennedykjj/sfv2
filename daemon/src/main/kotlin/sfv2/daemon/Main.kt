@@ -10,6 +10,8 @@ import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 import sfv2.store.CardEventStore
 import sfv2.store.Database
+import sfv2.store.ProjectPathStore
+import sfv2.store.SpecStore
 
 /** Outcome of starting the daemon; only [main] turns a failure into a process exit. */
 sealed interface DaemonLaunch {
@@ -25,9 +27,11 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
         val ownerProof = OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom())
         val clock = Clock.systemUTC()
         val store = CardEventStore(database)
-        val commands = CardCommands(store, clock, ownerProof)
+        val specs = SpecStore(database, resolveDatabasePath(env, socketPath).parent.resolve("specs"))
+        val commands = CardCommands(store, clock, ownerProof, specs = specs)
         val source = GitProjectConfigSource()
-        val registry = ProjectRegistry(source)
+        val registry = ProjectRegistry(source, ProjectPathStore(database), StderrDaemonLog, clock)
+        registry.restore()
         val projects = ProjectCommands(registry, ownerProof)
         val dataDir = resolveDatabasePath(env, socketPath).parent
         val refine = RefineRuntime.start(
@@ -63,9 +67,11 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 closure = CardClosure.forProjects(
                     store, commands.recorder, registry,
                     { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
+                    { project, pr -> ProjectDelivery.pullRequestUrl(project, pr) },
                     ownerProof, clock, StderrDaemonLog,
                 ),
                 milestones = refine.milestones,
+                costSummary = refine.costSummary,
                 onClose = {
                     runCatching { refine.close() }
                     database.close()

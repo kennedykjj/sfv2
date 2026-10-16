@@ -13,6 +13,8 @@ import sfv2.core.EventType
 import sfv2.core.MoveDecision
 import sfv2.core.MoveRules
 import sfv2.store.CardEventStore
+import sfv2.store.SpecRead
+import sfv2.store.SpecStore
 
 /** Applies the core rules to card commands and writes through the store. A refusal writes nothing. */
 class CardCommands(
@@ -22,6 +24,7 @@ class CardCommands(
     private val log: DaemonLog = StderrDaemonLog,
     subscriberQueueLimit: Int = EventStream.DEFAULT_QUEUE_LIMIT,
     closeGrace: Duration = EventStream.DEFAULT_CLOSE_GRACE,
+    private val specs: SpecStore? = null,
 ) {
 
     /** Live feed of every recorded change. */
@@ -39,8 +42,15 @@ class CardCommands(
         is Request.CardRequestChange -> requestChange(request)
         Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
+        is Request.CardDetail -> detail(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(store.cards()) { store.events(it) }))
-        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm -> Response.Error("not a card command")
+        is Request.EventsRecent -> recent(request.limit)
+        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
+    }
+
+    private fun recent(limit: Int): Response {
+        val newest = store.latestEvents(limit + 1L)
+        return Response.EventsRecentResult(newest.take(limit).reversed(), truncated = newest.size > limit)
     }
 
     private fun create(request: Request.CardCreate): Response {
@@ -169,6 +179,12 @@ class CardCommands(
     private fun show(id: String): Response {
         val card = store.card(id) ?: return notFound(id)
         return Response.CardResult(CardView(id, card.title, card.column))
+    }
+
+    private fun detail(id: String): Response {
+        val card = store.card(id) ?: return notFound(id)
+        val spec = specs?.read(id) ?: SpecRead.NotRegistered(id)
+        return Response.CardDetailResult(CardDetail.build(id, card, spec, store.events(id)))
     }
 
     private fun notFound(id: String): Response = Response.Error("card not found: $id")
