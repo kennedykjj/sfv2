@@ -1,0 +1,1 @@
+{"outcome": "staged", "agents": [], "rounds": 0, "failed_gates": [], "gates_reused": ["green core sfv2.core.FactorySettingsTest", "green daemon sfv2.daemon.SettingsCommandsTest", "green app sfv2.app.SettingsDraftTest"], "flaky": [], "amendments": []}
