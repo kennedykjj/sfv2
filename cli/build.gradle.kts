@@ -6,6 +6,7 @@ plugins {
 dependencies {
     implementation(project(":core"))
     implementation(libs.clikt)
+    implementation(libs.kotlinx.serialization.json)
 }
 
 application {
