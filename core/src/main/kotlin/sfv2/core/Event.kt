@@ -21,6 +21,8 @@ enum class EventType {
     GATE_FINISHED,
     LOCK_RELEASED,
     RUN_COST_RECORDED,
+    AGENT_REPORTED,
+    AGENT_WRITE_REQUESTED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */
