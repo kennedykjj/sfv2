@@ -47,6 +47,8 @@ class McpServerFactoryTest {
 
     @AfterEach
     fun tearDown() {
+        // HttpClient.close() waits for its selector thread and connections, so their fds are released before the next test class.
+        http.close()
         endpoint.close()
         database.close()
     }
