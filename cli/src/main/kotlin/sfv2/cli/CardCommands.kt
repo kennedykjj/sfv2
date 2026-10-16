@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -66,7 +67,9 @@ class CliEnvironment(
 private fun cardLine(card: JsonElement): String {
     val obj = card as? JsonObject ?: return card.toString()
     fun field(name: String) = (obj[name] as? JsonPrimitive)?.contentOrNull.orEmpty()
-    return "${field("id")}  ${field("column")}  ${field("title")}"
+    val blocked = (obj["blocked"] as? JsonPrimitive)?.booleanOrNull == true
+    val line = "${field("id")}  ${field("column")}  ${field("title")}"
+    return if (blocked) "$line  BLOQUEADO" else line
 }
 
 private fun parseColumn(text: String): Column? {
@@ -137,6 +140,23 @@ class CardApprove(private val cli: CliEnvironment) : CliktCommand(name = "approv
         val token = cli.ownerToken()
         val request = buildJsonObject {
             put("cmd", "card.approve")
+            put("actor", "owner")
+            put("id", id)
+            put("proof", token)
+        }
+        cli.out(cardLine(cli.call(request)))
+    }
+}
+
+class CardUnblock(private val cli: CliEnvironment) : CliktCommand(name = "unblock") {
+    private val id by argument(help = "Card id")
+
+    override fun help(context: Context) = "Unblock a blocked card, keeping its column."
+
+    override fun run() {
+        val token = cli.ownerToken()
+        val request = buildJsonObject {
+            put("cmd", "card.unblock")
             put("actor", "owner")
             put("id", id)
             put("proof", token)
@@ -275,7 +295,7 @@ class EventsCommand(private val cli: CliEnvironment) : CliktCommand(name = "even
 /** Registers the card group and the events command on [root]. */
 fun Sfv2Command.withCardCommands(cli: CliEnvironment): Sfv2Command =
     subcommands(
-        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardRebuild(cli), CardImportBoard(cli), CardShow(cli)),
+        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardUnblock(cli), CardRequestChange(cli), CardRebuild(cli), CardImportBoard(cli), CardShow(cli)),
         EventsCommand(cli),
         AuditGroup().subcommands(AuditExport(cli)),
     ) as Sfv2Command
