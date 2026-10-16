@@ -24,7 +24,7 @@ import kotlinx.serialization.json.put
 import sfv2.core.Column
 
 private const val DAEMON_DOWN_MESSAGE = "daemon não está rodando; inicie com `./gradlew :daemon:run`"
-private const val EXIT_FAILURE = 1
+const val EXIT_FAILURE = 1
 
 /** What every command needs: where the daemon is and where to write. */
 class CliEnvironment(
