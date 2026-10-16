@@ -10,9 +10,11 @@ review_criteria: .shipfloor/review-criteria.md
 # build-logic/ and the wrapper hold the test conventions (#2): implementers do not touch them.
 forbidden: [build-logic/, gradle/wrapper/, .github/]
 acceptance_assertions: 'assert|assertThat|assertEquals|@Disabled|@Ignore|@Test\(enabled'
+# 0 = sem limite de WIP no projeto (sem o bloco, valem os padrões da fábrica: refine 2, develop 4).
+# Quantos runs rodam ao mesmo tempo continua limitado pelo pool da máquina (~/.shipfloor/config.yml).
 limits:
   refine: {wip: 0}
-  develop: {wip: 4}
+  develop: {wip: 0}
 layers:
   - name: core
     path: core/
