@@ -1,0 +1,1 @@
+{"outcome":"ok","pr":203,"head":"e6bb6a1b36a193bb1db8335a5d4089db021101be","agents":[],"rounds":0,"failed_gates":[],"flaky":[],"gates_reused":["green core sfv2.core.ProjectPoliciesTest","green daemon sfv2.daemon.ConventionTextTest","green daemon sfv2.daemon.ValidatePipelineTest","green daemon sfv2.daemon.WorktreeManagerTest"],"amendments":[]}
