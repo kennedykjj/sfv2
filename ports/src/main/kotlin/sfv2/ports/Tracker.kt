@@ -37,7 +37,8 @@ value class ExternalText(val value: String) {
 }
 
 /** [textHash] is the SHA-256 hex of title, NUL, body. Build items with [TrackerItem.of]. */
-data class TrackerItem(
+@ConsistentCopyVisibility
+data class TrackerItem private constructor(
     val id: String,
     val title: ExternalText,
     val body: ExternalText,
@@ -46,6 +47,14 @@ data class TrackerItem(
     val state: TrackerItemState,
     val textHash: String,
 ) {
+    init {
+        validateUrl(id, url)
+        if (textHash != hash(title, body)) throw TrackerException("Tracker item $id has an inconsistent text hash")
+    }
+
+    /** Same item in the [TrackerItemState.CLOSED] state. */
+    fun closed(): TrackerItem = copy(state = TrackerItemState.CLOSED)
+
     companion object {
         private const val MAX_URL_LENGTH = 2048
         private const val HTTPS_PREFIX = "https://"
@@ -57,10 +66,7 @@ data class TrackerItem(
             labels: List<ExternalText>,
             url: String,
             state: TrackerItemState,
-        ): TrackerItem {
-            validateUrl(id, url)
-            return TrackerItem(id, title, body, labels, url, state, hash(title, body))
-        }
+        ): TrackerItem = TrackerItem(id, title, body, labels, url, state, hash(title, body))
 
         private fun validateUrl(id: String, url: String) {
             if (!url.startsWith(HTTPS_PREFIX)) throw TrackerException("Tracker item $id has a non-https url")
