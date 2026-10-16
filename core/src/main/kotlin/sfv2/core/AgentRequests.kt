@@ -10,8 +10,12 @@ object AgentRequests {
     private const val MAX_SUMMARY_BYTES = 4096
     private val WORK_COLUMNS = setOf(Column.REFINEMENT, Column.CODING, Column.VALIDATION)
 
+    /** The conflict stage also runs while the autonomous delivery holds the card in Ready for Prod. */
+    const val CONFLICT_ROLE = "conflict"
+    private val CONFLICT_COLUMNS = WORK_COLUMNS + Column.READY_FOR_PROD
+
     fun reportCompletion(cardId: String, card: Card, role: String, summary: String, id: EventId, at: Instant): Event {
-        requireWorkColumn(cardId, card)
+        requireWorkColumn(cardId, card, role)
         val trimmed = summary.trim()
         if (trimmed.isEmpty()) throw AgentRequestRefusedException("empty summary refused for card $cardId")
         if (trimmed.toByteArray(Charsets.UTF_8).size > MAX_SUMMARY_BYTES) {
@@ -24,7 +28,7 @@ object AgentRequests {
     }
 
     fun requestWrite(cardId: String, card: Card, role: String, path: String, bytes: Int, id: EventId, at: Instant): Event {
-        requireWorkColumn(cardId, card)
+        requireWorkColumn(cardId, card, role)
         if (path.isBlank() || path.startsWith("/") || path.any { it.isISOControl() }) {
             throw AgentRequestRefusedException("invalid write path refused for card $cardId")
         }
@@ -35,8 +39,9 @@ object AgentRequests {
         )
     }
 
-    private fun requireWorkColumn(cardId: String, card: Card) {
-        if (card.column !in WORK_COLUMNS) {
+    private fun requireWorkColumn(cardId: String, card: Card, role: String) {
+        val allowed = if (role == CONFLICT_ROLE) CONFLICT_COLUMNS else WORK_COLUMNS
+        if (card.column !in allowed) {
             throw AgentRequestRefusedException("card $cardId is in ${card.column.name}, outside the agent work columns")
         }
     }
