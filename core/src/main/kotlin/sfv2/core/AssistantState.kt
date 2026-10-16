@@ -22,7 +22,6 @@ data class AssistantCard(val column: Column, val events: List<Event>)
 
 object AssistantStates {
     private val workColumns = setOf(Column.REFINEMENT, Column.CODING, Column.VALIDATION, Column.READY_FOR_PROD)
-    private val waitingColumns = setOf(Column.SPEC_REVIEW, Column.STAGED)
 
     /** Precedence: NIGHT > TIRED > BLOCKED > WAITING_OWNER > WORKING > IDLE. */
     fun derive(cards: List<AssistantCard>, now: Instant, rules: AssistantStateRules): AssistantState {
@@ -31,7 +30,7 @@ object AssistantStates {
             isNight(now, rules) -> AssistantState.NIGHT
             failuresInWindow(sorted, now, rules) >= rules.tiredFailures -> AssistantState.TIRED
             sorted.any { hasOpenBlock(it.events) } -> AssistantState.BLOCKED
-            sorted.any { it.column in waitingColumns } -> AssistantState.WAITING_OWNER
+            sorted.any { it.column in OWNER_WAIT_COLUMNS } -> AssistantState.WAITING_OWNER
             sorted.any { it.column in workColumns } -> AssistantState.WORKING
             else -> AssistantState.IDLE
         }
