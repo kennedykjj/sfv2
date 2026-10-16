@@ -10,6 +10,8 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.dbus.java.core)
+    implementation(libs.dbus.java.transport.native.unixsocket)
 }
 
 compose.desktop {
