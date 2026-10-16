@@ -44,7 +44,13 @@ class CardCommands(
         is Request.CardShow -> show(request.id)
         is Request.CardDetail -> detail(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(store.cards()) { store.events(it) }))
-        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm -> Response.Error("not a card command")
+        is Request.EventsRecent -> recent(request.limit)
+        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
+    }
+
+    private fun recent(limit: Int): Response {
+        val newest = store.latestEvents(limit + 1L)
+        return Response.EventsRecentResult(newest.take(limit).reversed(), truncated = newest.size > limit)
     }
 
     private fun create(request: Request.CardCreate): Response {

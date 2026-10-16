@@ -137,13 +137,13 @@ class CardImport private constructor(
 
     private fun upsert(item: TrackerItem, project: Project): CardView {
         val current = existing(project, item.id)
-        return if (current == null) create(item, project) else reimport(item, current)
+        return if (current == null) create(item, project) else reimport(item, current, project)
     }
 
     private fun existing(project: Project, externalId: String): StoredCard? =
         store.cards().firstOrNull { stored ->
             store.projectOf(stored.id) == project.repo &&
-                stored.card.references.any { it.provider == PROVIDER && it.externalId == externalId }
+                stored.card.references.any { it.provider == project.policies.tracker.provider && it.externalId == externalId }
         }
 
     private fun create(
@@ -153,14 +153,15 @@ class CardImport private constructor(
         origin: String = "imported",
         extra: Map<String, String> = emptyMap(),
     ): CardView {
-        val card = Card.create(normalizeTitle(item.title.value, item.id), column).withReference(refOf(item))
+        val provider = project.policies.tracker.provider
+        val card = Card.create(normalizeTitle(item.title.value, item.id), column).withReference(refOf(item, provider))
         val id = UUID.randomUUID().toString()
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
             at = clock.instant(),
-            actor = Actor.Adapter(PROVIDER),
+            actor = Actor.Adapter(provider),
             type = EventType.CARD_CREATED,
-            payload = mapOf("title" to card.title, "origin" to origin, "provider" to PROVIDER, "externalId" to item.id) + extra,
+            payload = mapOf("title" to card.title, "origin" to origin, "provider" to provider, "externalId" to item.id) + extra,
         )
         recorder.record(id, card, event)
         store.assignProject(id, project.repo)
@@ -187,39 +188,40 @@ class CardImport private constructor(
         log.log("card_blocked_by_dor", mapOf("card" to id, "externalId" to item.id, "missing" to keys))
     }
 
-    private fun reimport(item: TrackerItem, current: StoredCard): CardView {
+    private fun reimport(item: TrackerItem, current: StoredCard, project: Project): CardView {
+        val provider = project.policies.tracker.provider
         val old = current.card
-        val oldRef = old.references.first { it.provider == PROVIDER && it.externalId == item.id }
+        val oldRef = old.references.first { it.provider == provider && it.externalId == item.id }
         val changed = oldRef.textHash != TextHash(item.textHash)
         val frozen = changed && old.column !in EDITABLE_TITLE_COLUMNS
-        val payload = mutableMapOf("provider" to PROVIDER, "externalId" to item.id, "changed" to changed.toString())
+        val payload = mutableMapOf("provider" to provider, "externalId" to item.id, "changed" to changed.toString())
         var card = old
         if (changed) {
             val title = if (frozen) old.title else normalizeTitle(item.title.value, item.id)
             card = old.references.fold(Card.create(title, old.column)) { acc, ref ->
-                acc.withReference(if (ref === oldRef) refOf(item) else ref)
+                acc.withReference(if (ref === oldRef) refOf(item, provider) else ref)
             }
             if (frozen) payload["title_frozen"] = "true" else payload["title"] = title
         }
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
             at = clock.instant(),
-            actor = Actor.Adapter(PROVIDER),
+            actor = Actor.Adapter(provider),
             type = EventType.CARD_REIMPORTED,
             payload = payload,
         )
         recorder.record(current.id, card, event)
         if (changed) {
             TextChangeWarning.warnIfChanged(
-                store, recorder, clock, current.id, card, item.id, oldRef.textHash.value, item.textHash,
+                store, recorder, clock, current.id, card, item.id, oldRef.textHash.value, item.textHash, provider,
             )
         }
         log.log("card_reimported", mapOf("card" to current.id, "externalId" to item.id, "changed" to changed.toString()))
         return CardView(current.id, card.title, card.column)
     }
 
-    private fun refOf(item: TrackerItem): ExternalRef =
-        ExternalRef(PROVIDER, item.id, item.url, clock.instant(), TextHash(item.textHash))
+    private fun refOf(item: TrackerItem, provider: String): ExternalRef =
+        ExternalRef(provider, item.id, item.url, clock.instant(), TextHash(item.textHash))
 
     private fun chooseProject(name: String?): Chosen {
         val projects = registry.list()
@@ -242,7 +244,6 @@ class CardImport private constructor(
     companion object {
         private const val CMD = "card.import"
         private const val BOARD_CMD = "card.import_board"
-        private const val PROVIDER = "github"
         private val IN_FLIGHT_V0_COLUMNS = setOf("Ready for Dev", "Coding", "Validation", "Staged", "Ready for Prod")
         private val V0_COLUMNS: Map<String, Column> = mapOf(
             "Inbox" to Column.INBOX,

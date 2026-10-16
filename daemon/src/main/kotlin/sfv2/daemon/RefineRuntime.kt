@@ -21,6 +21,7 @@ class RefineRuntime private constructor(
     private val stepUp: ModelStepUp,
     private val deliveryTrigger: AutonomousDeliveryTrigger,
     val milestones: ExternalMilestones,
+    val costSummary: CostSummaryQuery,
 ) : AutoCloseable {
 
     override fun close() {
@@ -80,6 +81,8 @@ class RefineRuntime private constructor(
                 recorder = recorder,
                 trackerOf = { cardId -> ProjectDelivery.trackerOf(projectOf(cardId, store, registry), dataDir.resolve("tracker")) },
                 policiesOf = { cardId -> projectOf(cardId, store, registry).policies },
+                projectOf = { cardId -> projectOf(cardId, store, registry) },
+                prLinkOf = { project, pr -> ProjectDelivery.pullRequestUrl(project, pr) },
                 clock = clock,
                 log = log,
                 ownerProof = commands.ownerProof,
@@ -242,6 +245,7 @@ class RefineRuntime private constructor(
             return RefineRuntime(
                 dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
                 milestones = milestones,
+                costSummary = CostSummaryQuery(store, control::limits),
             )
         }
 

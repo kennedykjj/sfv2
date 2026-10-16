@@ -1,5 +1,7 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
+import java.time.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -99,6 +101,12 @@ sealed interface Request {
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
 
+    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
+    data class CostSummary(val from: Instant, val to: Instant) : Request
+
+    /** Read-only: the newest [limit] events (1..[MAX_RECENT_EVENTS]) in seq order. */
+    data class EventsRecent(val limit: Int) : Request
+
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
 
@@ -118,8 +126,23 @@ data class MilestoneItem(val card: String, val milestone: String, val text: Stri
 /** A board row that was not imported; [reason] is `unknown_column` or `not_found`. */
 data class IgnoredRow(val id: String, val reason: String)
 
+/** The cost of one card in the period asked. */
+data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostStatus)
+
 /** A reply to the client. */
 sealed interface Response {
+    /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
+    data class EventsRecentResult(val events: List<StoredEvent>, val truncated: Boolean) : Response
+
+    data class CostSummaryResult(
+        val totalUsd: BigDecimal,
+        val status: CostStatus,
+        val cards: List<CardCost>,
+        val limits: CostLimits,
+        val dayReached: Boolean,
+        val cardsReached: List<String>,
+    ) : Response
+
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
     data class CardDetailResult(val detail: JsonObject) : Response
@@ -220,6 +243,12 @@ fun parseRequest(line: String): Request {
         }
         "report.csv" -> Request.ReportCsv
         "events.subscribe" -> parseSubscribe(obj)
+        "events.recent" -> parseRecent(obj)
+        "cost.summary" -> {
+            val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
+            val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
+            Request.CostSummary(from, to)
+        }
         else -> Request.Rejected("unknown cmd")
     }
 }
@@ -232,6 +261,16 @@ private fun parseSubscribe(obj: JsonObject): Request {
     return Request.Subscribe(after)
 }
 
+/** Largest window `events.recent` returns. */
+const val MAX_RECENT_EVENTS = 2000
+
+private fun parseRecent(obj: JsonObject): Request {
+    val primitive = obj["limit"] as? JsonPrimitive
+    val limit = if (primitive == null || primitive.isString) null else primitive.content.toIntOrNull()
+    if (limit == null || limit < 1 || limit > MAX_RECENT_EVENTS) return Request.Rejected("invalid limit")
+    return Request.EventsRecent(limit)
+}
+
 private fun parseRows(obj: JsonObject): List<BoardRow>? {
     val array = obj["rows"] as? JsonArray ?: return null
     return array.map { element ->
@@ -239,6 +278,9 @@ private fun parseRows(obj: JsonObject): List<BoardRow>? {
         BoardRow(stringField(row, "id") ?: return null, stringField(row, "column") ?: return null)
     }
 }
+
+private fun instantField(obj: JsonObject, key: String): Instant? =
+    stringField(obj, key)?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
 private fun stringField(obj: JsonObject, key: String): String? {
     val primitive = obj[key] as? JsonPrimitive ?: return null
@@ -312,20 +354,17 @@ internal fun actorText(actor: Actor): String = when (actor) {
 }
 
 /** Renders a stream event as a single JSON line (without the newline). Pure: no IO. */
-fun renderEvent(stored: StoredEvent): String = buildJsonObject {
-    put(
-        "event",
-        buildJsonObject {
-            put("seq", stored.seq)
-            put("card", stored.cardId)
-            put("id", stored.event.id.value)
-            put("at", stored.event.at.toString())
-            put("actor", actorText(stored.event.actor))
-            put("type", stored.event.type.name)
-            put("payload", JsonObject(stored.event.payload.mapValues { JsonPrimitive(it.value) }))
-        },
-    )
-}.toString()
+fun renderEvent(stored: StoredEvent): String = buildJsonObject { put("event", eventJson(stored)) }.toString()
+
+private fun eventJson(stored: StoredEvent): JsonObject = buildJsonObject {
+    put("seq", stored.seq)
+    put("card", stored.cardId)
+    put("id", stored.event.id.value)
+    put("at", stored.event.at.toString())
+    put("actor", actorText(stored.event.actor))
+    put("type", stored.event.type.name)
+    put("payload", JsonObject(stored.event.payload.mapValues { JsonPrimitive(it.value) }))
+}
 
 /** Renders the line that ends a stream abnormally. Pure: no IO. */
 fun renderStreamError(message: String): String = buildJsonObject { put("error", message) }.toString()
@@ -401,6 +440,42 @@ fun render(response: Response): String = when (response) {
                     }
                 },
             ),
+        )
+    }.toString()
+    is Response.EventsRecentResult -> buildJsonObject {
+        put("ok", true)
+        put("result", JsonArray(response.events.map { eventJson(it) }))
+        put("truncated", response.truncated)
+    }.toString()
+    is Response.CostSummaryResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("totalUsd", response.totalUsd.toPlainString())
+                put("status", response.status.name)
+                put(
+                    "cards",
+                    JsonArray(
+                        response.cards.map { cost ->
+                            buildJsonObject {
+                                put("card", cost.card)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
+                put(
+                    "limits",
+                    buildJsonObject {
+                        put("perCardUsd", response.limits.perCardUsd?.toPlainString())
+                        put("perDayUsd", response.limits.perDayUsd?.toPlainString())
+                    },
+                )
+                put("dayReached", response.dayReached)
+                put("cardsReached", JsonArray(response.cardsReached.map { JsonPrimitive(it) }))
+            },
         )
     }.toString()
     is Response.Error -> buildJsonObject {
