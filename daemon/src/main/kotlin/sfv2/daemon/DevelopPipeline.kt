@@ -367,7 +367,7 @@ class DevelopPipeline(
             type = EventType.CARD_MOVED,
             payload = mapOf("from" to current.column.name, "to" to to.name),
         )
-        recorder.record(cardId, Card.create(current.title, to), event)
+        recorder.record(cardId, current.movedTo(to), event)
         log.log("develop_moved", mapOf("card" to cardId, "to" to to.name))
     }
 

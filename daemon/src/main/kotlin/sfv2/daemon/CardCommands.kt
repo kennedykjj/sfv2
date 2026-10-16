@@ -79,7 +79,7 @@ class CardCommands(
             }
             MoveDecision.Allowed -> Unit
         }
-        val moved = Card.create(current.title, request.to)
+        val moved = current.movedTo(request.to)
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
             at = clock.instant(),
@@ -148,7 +148,7 @@ class CardCommands(
             }
             MoveDecision.Allowed -> Unit
         }
-        val moved = Card.create(current.title, to)
+        val moved = current.movedTo(to)
         val payload = buildMap {
             put("from", current.column.name)
             put("to", to.name)
