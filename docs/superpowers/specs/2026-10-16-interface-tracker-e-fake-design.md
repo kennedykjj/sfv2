@@ -71,7 +71,7 @@ n/a
 _What the pipeline decided on its own; one line each, with the reason._
 - Peso `heavy` pela regra mecânica (mais de 6 critérios), apesar de ser uma camada e 3 arquivos; o dono pode baixar para `light` na revisão.
 - Arquivo de teste novo `TrackerTest.kt`: nenhuma suíte de `ports` cobre o Tracker; segue o par `ForgeTest`/`RuntimeTest`.
-- AC-7 vira o tipo `UntrustedText` em `ports`, não convenção em comentário: o compilador impede tratar título/corpo como `String` comum. A porta única de texto externo (#57) pode reaproveitá-lo.
+- AC-7 vira o tipo `ExternalText` em `ports`, não convenção em comentário: o compilador impede tratar título/corpo como `String` comum. A porta única de texto externo (#57) o embrulha no envelope `UntrustedText` do daemon.
 - Marco é `String` livre: o catálogo de marcos ("comecei", "PR aberto") é decisão do #55, não da porta.
 - O fake segue o estilo do `FakeForge` (`failNext`, listas observáveis), para os testes dos outros módulos usarem igual.
 - Fazer `search` receber `String` simples: a sintaxe de busca do GitHub e do Jira difere e é problema dos adaptadores (#53, #85).
