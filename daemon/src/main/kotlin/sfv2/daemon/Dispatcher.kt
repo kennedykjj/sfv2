@@ -57,6 +57,7 @@ class Dispatcher(
     private val clock: Clock,
     private val tick: Duration,
     private val log: DaemonLog = StderrDaemonLog,
+    private val launchGuard: LaunchGuard = LaunchGuard.Open,
 ) : AutoCloseable {
     private data class Backoff(val retryAt: Instant, val delay: Duration)
 
@@ -73,6 +74,7 @@ class Dispatcher(
         if (pause.isPaused()) return emptyList()
         val now = clock.instant()
         if (!schedule.isWorkTime(now)) return emptyList()
+        if (launchGuard.dayLimitReached()) return emptyList()
         val active = pool.active().map { it.cardId }.toSet()
         running.keys.retainAll(active)
         val started = mutableListOf<DispatchedRun>()
@@ -83,6 +85,7 @@ class Dispatcher(
                 if (limit > 0 && running.values.count { it == stage } >= limit) break
                 val cardId = stored.id
                 if (pool.isLocked(cardId)) continue
+                if (!launchGuard.allows(cardId)) continue
                 if (backoffs[cardId]?.let { now.isBefore(it.retryAt) } == true) continue
                 if (launch(stage, cardId, now)) started.add(DispatchedRun(stage, cardId))
             }
