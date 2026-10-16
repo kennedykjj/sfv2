@@ -1,0 +1,1 @@
+{"outcome":"handed_over","issue":111,"pipeline":"develop","rounds":1,"failed_gates":["build"],"amendments":[{"file":"store/src/test/kotlin/sfv2/store/ModuleTest.kt","reason":"v3.db fixture needs owner-only permissions after main's #120"}],"flaky":[],"gates_reused":["green store ModuleTest"]}
