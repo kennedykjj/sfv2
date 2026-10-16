@@ -16,7 +16,10 @@ data class ModelPrice(
     val cacheWrite1h: BigDecimal = BigDecimal.ZERO,
 )
 
-/** Price table read from `prices.yml`: a top-level `models:` map of model name to per-million prices. */
+/**
+ * Price table read from `prices.yml`: model name to per-million prices, either as top-level keys (the V0 file) or
+ * under a `models:` map.
+ */
 class PriceTable private constructor(private val prices: Map<String, ModelPrice>) {
 
     fun priceOf(model: String): ModelPrice? = prices[model]
@@ -32,8 +35,10 @@ class PriceTable private constructor(private val prices: Map<String, ModelPrice>
             } catch (e: YamlEngineException) {
                 throw InvalidPriceTableException("prices.yml is not valid YAML")
             }
-            val models = (root as? Map<*, *>)?.get("models") as? Map<*, *>
-                ?: throw InvalidPriceTableException("prices.yml must have a top-level models map")
+            val top = root as? Map<*, *> ?: throw InvalidPriceTableException("prices.yml must be a map of models")
+            // The nested form wins only when `models` holds a map of maps; otherwise the model names are the top-level keys.
+            val nested = top["models"] as? Map<*, *>
+            val models = if (nested != null && nested.values.all { it is Map<*, *> }) nested else top
             val parsed = models.entries.associate { (name, raw) ->
                 val key = name as? String ?: throw InvalidPriceTableException("model name must be text")
                 val fields = raw as? Map<*, *> ?: throw InvalidPriceTableException("prices of model $key must be a map")
