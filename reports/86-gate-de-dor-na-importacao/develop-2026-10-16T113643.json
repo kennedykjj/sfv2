@@ -1,0 +1,28 @@
+{
+  "outcome": "done",
+  "issue": 86,
+  "slug": "gate-de-dor-na-importacao",
+  "weight": "standard",
+  "agents": [
+    {"name": "qa-engineer", "tokens": 42951, "duration_s": 72, "rounds": 1},
+    {"name": "engineer (core)", "tokens": 24703, "duration_s": 35, "rounds": 1},
+    {"name": "engineer (daemon)", "tokens": 34861, "duration_s": 71, "rounds": 1}
+  ],
+  "solo_tasks": [],
+  "rounds": {"plan": 0, "qa": 1, "implementation": 0},
+  "gates": {
+    "test-plan": "pass",
+    "scope": "pass",
+    "red": "pass",
+    "acceptance-intact": "pass",
+    "green": "pass",
+    "migration": "pass",
+    "build": "pass",
+    "forbidden": "pass"
+  },
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "commits": ["7d5eb52", "8599053", "8aac4f6", "a738f49"]
+}
