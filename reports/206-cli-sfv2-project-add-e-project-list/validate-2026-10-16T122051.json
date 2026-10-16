@@ -1,0 +1,1 @@
+{"issue":206,"slug":"cli-sfv2-project-add-e-project-list","pipeline":"validate","started_at":"2026-10-16T15:20:00Z","finished_at":"2026-10-16T15:40:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green cli sfv2.cli.MainTest"],"manual_edit":false,"amendments":[]}
