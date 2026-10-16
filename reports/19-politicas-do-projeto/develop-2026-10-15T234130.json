@@ -1,0 +1,1 @@
+{"issue":19,"slug":"politicas-do-projeto","pipeline":"develop","started_at":"2026-10-15T00:00:00Z","finished_at":"2026-10-15T00:30:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":21986,"duration_s":27}],"rounds":{"qa":0,"implementation":0},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
