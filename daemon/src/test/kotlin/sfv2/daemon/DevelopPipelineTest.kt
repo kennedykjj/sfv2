@@ -403,7 +403,7 @@ class DevelopPipelineTest {
         )
         val validate = ValidatePipeline(
             project, store, recorder, worktrees, sessions, 4317, succeeding(0), costRecorder,
-            BranchSync { MergeResult.Merged }, ValidateGates { _, _ -> emptyList() }, configDir, clock, "model-a",
+            BranchSync { MergeResult.Merged }, ValidateGates { _, _ -> ValidateGateResults(emptyList()) }, configDir, clock, "model-a",
         )
         return listOf("refine" to refine, "develop" to develop, "validate" to validate).associate { (name, pipeline) ->
             name to pipeline.javaClass.getDeclaredField("maxRounds").apply { isAccessible = true }.get(pipeline)
