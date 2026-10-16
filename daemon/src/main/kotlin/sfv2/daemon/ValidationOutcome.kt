@@ -71,8 +71,8 @@ class ValidationOutcome(
         if (gates == GatesState.RED) return ValidationDecision.Held
         if (card.column != Column.VALIDATION) return ValidationDecision.Malformed
         return when (val result = ci()) {
-            CiResult.Green -> {
-                val approved = mapOf("ci" to "green") + (head()?.let { mapOf("head" to it) } ?: emptyMap())
+            is CiResult.Green -> {
+                val approved = mapOf("ci" to "green", "pr" to result.pr.toString()) +(head()?.let { mapOf("head" to it) } ?: emptyMap())
                 if (move(cardId, card, Column.STAGED, approved)) ValidationDecision.Staged else ValidationDecision.Malformed
             }
             is CiResult.Red -> {

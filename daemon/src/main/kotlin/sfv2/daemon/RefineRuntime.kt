@@ -197,6 +197,14 @@ class RefineRuntime private constructor(
                     },
                 ),
                 log,
+                PullRequestHandoff(
+                    store = store,
+                    recorder = recorder,
+                    forge = { cardId -> ProjectDelivery.forgeOf(projectOf(cardId, store, registry), dataDir.resolve("forge")) },
+                    policies = { cardId -> projectOf(cardId, store, registry).policies },
+                    clock = clock,
+                    log = log,
+                ),
             )
             val dispatcher = Dispatcher(
                 store = store,
