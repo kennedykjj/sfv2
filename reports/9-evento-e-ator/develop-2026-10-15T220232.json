@@ -1,0 +1,26 @@
+{
+  "outcome": "done",
+  "issue": 9,
+  "slug": "evento-e-ator",
+  "weight": "light",
+  "agents": [
+    {"name": "qa-engineer", "tokens": 20151, "duration_s": 17, "rounds": 1}
+  ],
+  "solo_tasks": ["T1 core: evento, ator e JSON (implementação feita pela Tech Lead, sem engineer)"],
+  "rounds": {"plan": 0, "qa": 1, "implementation": 0},
+  "gates": {
+    "test-plan": "pass",
+    "scope": "pass",
+    "red": "pass",
+    "acceptance-intact": "pass",
+    "green": "pass",
+    "migration": "pass",
+    "build": "pass",
+    "forbidden": "pass"
+  },
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "commits": ["aaa7b24", "49fa97e", "da37a0c", "f4f4f4b"]
+}
