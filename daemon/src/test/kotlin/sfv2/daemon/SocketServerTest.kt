@@ -3,6 +3,7 @@ package sfv2.daemon
 import java.io.IOException
 import java.net.StandardProtocolFamily
 import java.nio.channels.ClosedChannelException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -22,6 +23,7 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
@@ -269,17 +271,177 @@ class SocketServerTest {
     private val fixedNow = Instant.parse("2026-10-15T10:00:00Z")
     private val clock = Clock.fixed(fixedNow, ZoneOffset.UTC)
 
-    private fun withCardServer(block: (CardEventStore) -> Unit) {
+    private fun withCardServer(queueLimit: Int = 1000, block: (CardEventStore) -> Unit) {
         Database.open(runtimeDir.resolve("cards.db")).use { db ->
             val store = CardEventStore(db)
-            startCardServer(store)
+            startCardServer(store, queueLimit)
             block(store)
         }
     }
 
-    private fun startCardServer(store: CardEventStore) {
-        servers.add(SocketServer.start(socketPath(), commands = CardCommands(store, clock)))
+    private fun startCardServer(store: CardEventStore, queueLimit: Int = 1000) {
+        servers.add(
+            SocketServer.start(
+                socketPath(),
+                commands = CardCommands(store, clock, subscriberQueueLimit = queueLimit),
+            ),
+        )
     }
+
+    private class EventStreamClient(private val channel: SocketChannel) : AutoCloseable {
+        private val reader = Channels.newInputStream(channel).bufferedReader(Charsets.UTF_8)
+
+        fun send(line: String) {
+            val out = Channels.newOutputStream(channel)
+            out.write((line + "\n").toByteArray(Charsets.UTF_8))
+            out.flush()
+        }
+
+        fun nextLine(): String? =
+            CompletableFuture.supplyAsync { reader.readLine() }.get(10, TimeUnit.SECONDS)
+
+        fun nextEvent(): JsonObject {
+            val line = requireNotNull(nextLine()) { "stream closed before an event arrived" }
+            return Json.parseToJsonElement(line).jsonObject.getValue("event").jsonObject
+        }
+
+        fun events(count: Int): List<JsonObject> = List(count) { nextEvent() }
+
+        override fun close() = channel.close()
+    }
+
+    private fun subscribe(after: Long? = null): EventStreamClient {
+        val client = EventStreamClient(SocketChannel.open(UnixDomainSocketAddress.of(socketPath())))
+        val extra = if (after == null) "" else ""","after":$after"""
+        client.send("""{"cmd":"events.subscribe"$extra}""")
+        assertThat(client.nextLine()).isEqualTo("""{"ok":true,"result":"subscribed"}""")
+        return client
+    }
+
+    private fun JsonObject.seq(): Long = getValue("seq").jsonPrimitive.long
+
+    private fun bigTitle(n: Int): String = "t$n-" + "x".repeat(30_000)
+
+    @Test
+    fun `AC-1 stream two subscribers receive the same events in the same order`() = withCardServer { _ ->
+        subscribe().use { first ->
+            subscribe().use { second ->
+                val id = createCard("Write docs")
+                reply("""{"cmd":"card.move","actor":"owner","id":"$id","to":"READY_FOR_REFINEMENT"}""")
+
+                val seenByFirst = first.events(2)
+                val seenBySecond = second.events(2)
+
+                assertThat(seenBySecond).isEqualTo(seenByFirst)
+                assertThat(seenByFirst.map { it.str("card") }).containsOnly(id)
+                assertThat(seenByFirst.map { it.seq() }).isSorted().doesNotHaveDuplicates()
+                assertThat(seenByFirst.last().getValue("payload").jsonObject.str("to")).isEqualTo("READY_FOR_REFINEMENT")
+            }
+        }
+    }
+
+    @Test
+    fun `AC-2 stream subscribing after a seq replays the missed events then the new ones without gap or duplicate`() =
+        withCardServer { _ ->
+            val firstId = createCard("First")
+            val seen = subscribe(after = 0).use { it.nextEvent() }.seq()
+            val moved = reply("""{"cmd":"card.move","actor":"owner","id":"$firstId","to":"READY_FOR_REFINEMENT"}""")
+            val secondId = createCard("Second")
+            assertThat(moved.getValue("ok").jsonPrimitive.boolean).isTrue()
+
+            subscribe(after = seen).use { client ->
+                val thirdId = createCard("Third")
+                val received = client.events(3)
+
+                assertThat(received.map { it.str("card") }).containsExactly(firstId, secondId, thirdId)
+                assertThat(received.map { it.seq() }).isSorted().doesNotHaveDuplicates().allMatch { it > seen }
+            }
+        }
+
+    @Test
+    fun `AC-2 stream invalid after is refused`() = withCardServer { _ ->
+        SocketChannel.open(UnixDomainSocketAddress.of(socketPath())).use { channel ->
+            val client = EventStreamClient(channel)
+            client.send("""{"cmd":"events.subscribe","after":"abc"}""")
+
+            assertThat(client.nextLine()).isEqualTo("""{"ok":false,"error":"invalid after"}""")
+        }
+    }
+
+    @Test
+    fun `AC-3 stream a subscriber that never reads does not delay the others or the writes`() =
+        withCardServer(queueLimit = 3) { store ->
+            subscribe().use { slow ->
+                subscribe().use { fast ->
+                    val ids = (1..40).map { n ->
+                        val id = createCard(bigTitle(n))
+                        assertThat(fast.nextEvent().str("card")).isEqualTo(id)
+                        id
+                    }
+
+                    assertThat(ids.flatMap { store.events(it) }).hasSize(40)
+                }
+            }
+        }
+
+    @Test
+    fun `AC-4 stream a subscriber that fell behind is dropped and resumes by its last seq without loss`() =
+        withCardServer(queueLimit = 3) { _ ->
+            subscribe().use { slow ->
+                subscribe().use { fast ->
+                    val all = (1..40).map { n ->
+                        createCard(bigTitle(n))
+                        fast.nextEvent().seq()
+                    }
+
+                    val before = mutableListOf<Long>()
+                    var closing: String? = null
+                    while (closing == null) {
+                        val line = slow.nextLine() ?: break
+                        val parsed = Json.parseToJsonElement(line).jsonObject
+                        if (parsed.containsKey("error")) closing = parsed.str("error") else before.add(parsed.getValue("event").jsonObject.seq())
+                    }
+
+                    assertThat(closing).isEqualTo("subscriber too slow")
+                    assertThat(before).isNotEmpty().isSubsetOf(all)
+                    val resumed = subscribe(after = before.last()).use { client ->
+                        client.events(all.size - before.size).map { it.seq() }
+                    }
+                    assertThat(before + resumed).isEqualTo(all)
+                }
+            }
+        }
+
+    @Test
+    fun `AC-5 stream subscribing without a last event receives only events recorded afterwards`() = withCardServer { _ ->
+        createCard("Old")
+
+        subscribe().use { client ->
+            val newId = createCard("New")
+
+            val first = client.nextEvent()
+
+            assertThat(first.str("card")).isEqualTo(newId)
+        }
+    }
+
+    @Test
+    fun `AC-6 stream a subscriber that disconnects does not affect the others or the daemon`() =
+        withCardServer(queueLimit = 3) { store ->
+            val gone = subscribe()
+            subscribe().use { stayer ->
+                gone.close()
+
+                val ids = (1..10).map { n ->
+                    val id = createCard(bigTitle(n))
+                    assertThat(stayer.nextEvent().str("card")).isEqualTo(id)
+                    id
+                }
+
+                assertThat(ids.flatMap { store.events(it) }).hasSize(10)
+                assertThat(exchange("""{"cmd":"ping"}""")).isEqualTo("""{"ok":true,"result":"pong"}""")
+            }
+        }
 
     private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 
