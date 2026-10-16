@@ -118,12 +118,15 @@ class ComposedDaemon(private val dir: Path, startAt: Instant = Instant.parse("20
     fun cycle(env: Map<String, String> = emptyMap()): List<DispatchedRun> = (runtime ?: start(env)).dispatcher.runCycle()
 
     override fun close() {
+        // Let any refine run started by the dispatcher finish before the directory under it goes away.
+        Thread.getAllStackTraces().keys.filter { it.name.startsWith("refine-") }.forEach { runCatching { it.join(JOIN_MILLIS) } }
         runCatching { runtime?.close() }
         runCatching { commands.events.close() }
         runCatching { database.close() }
     }
 
     companion object {
+        private const val JOIN_MILLIS = 5_000L
         const val VALID_PRICES = "models:\n  model-a:\n    input: 3.00\n    output: 15.00\n"
         const val ENABLED = "dispatcher:\n  enabled: true\n"
         const val LIMITS = "cost:\n  per_card_usd: \"5\"\n  per_day_usd: \"20\"\n"
