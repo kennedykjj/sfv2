@@ -88,14 +88,16 @@ object ColumnTimeLabel {
     }
 }
 
+private val FLOW_ORDER = listOf(Column.REFINEMENT, Column.SPEC_REVIEW, Column.CODING, Column.VALIDATION, Column.STAGED)
+
+// Internal on purpose: the Compose compiler adds a `$stable` field to public classes, and these carry only their own fields.
+
 /** One stage of the flow bar: the column and the seconds its statistic reports. Numbers only, never card text. */
-data class TimeSegment(val column: Column, val seconds: Long)
+internal data class TimeSegment(val column: Column, val seconds: Long)
 
 /** The flow bar ("Onde o tempo vai"): a segment per column with statistics and the share of owner wait. */
-data class TimeSplit(val segments: List<TimeSegment>, val waitPercent: Int) {
+internal data class TimeSplit(val segments: List<TimeSegment>, val waitPercent: Int) {
     companion object {
-        private val FLOW_ORDER = listOf(Column.REFINEMENT, Column.SPEC_REVIEW, Column.CODING, Column.VALIDATION, Column.STAGED)
-
         /** Null when no column has statistics or the total is zero: the bar is then absent, never "0%". */
         fun of(times: Map<Column, ColumnTime>): TimeSplit? {
             val segments = FLOW_ORDER.mapNotNull { column -> times[column]?.let { TimeSegment(column, it.seconds) } }

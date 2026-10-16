@@ -52,7 +52,7 @@ private fun hueColor(hue: StageHue): Color =
  * Built only from column names and numbers; waiting segments are hatched so the color is not the only cue.
  */
 @Composable
-fun FlowBar(split: TimeSplit, dimmed: Boolean, modifier: Modifier = Modifier) {
+internal fun FlowBar(split: TimeSplit, dimmed: Boolean, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.fillMaxWidth().alpha(if (dimmed) 0.55f else 1f)) {
         Column(
             modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = Texts.flowDescription(split) },

@@ -209,7 +209,7 @@ object Texts {
     fun flowWait(percent: Int): String = "$percent% é espera por você"
 
     /** The accessibility reading of the flow bar: every stage with its duration, then the wait phrase. */
-    fun flowDescription(split: TimeSplit): String {
+    internal fun flowDescription(split: TimeSplit): String {
         val stages = split.segments.joinToString(", ") { "${it.column.displayName} ${ColumnTimeLabel.duration(it.seconds)}" }
         return "$FLOW_TITLE: $stages. $FLOW_PHRASE${flowWait(split.waitPercent)}"
     }
