@@ -58,14 +58,14 @@ object AssistantStates {
         else -> false
     }
 
-    /** Same owner-unblock rule as the daemon's budget: only an owner move or approval after the block clears it. */
-    private fun hasOpenBlock(events: List<Event>): Boolean {
+    /** Same owner-unblock rule as the daemon's budget: only an owner move, approval or unblock after the block clears it. */
+    fun hasOpenBlock(events: List<Event>): Boolean {
         val lastBlock = events.indexOfLast { it.type == EventType.CARD_BLOCKED }
         if (lastBlock < 0) return false
         return events.drop(lastBlock + 1).none { isOwnerUnblock(it) }
     }
 
     private fun isOwnerUnblock(event: Event): Boolean =
-        (event.type == EventType.CARD_MOVED && event.actor == Actor.Owner) ||
+        ((event.type == EventType.CARD_MOVED || event.type == EventType.CARD_UNBLOCKED) && event.actor == Actor.Owner) ||
             event.type == EventType.OWNER_APPROVED
 }
