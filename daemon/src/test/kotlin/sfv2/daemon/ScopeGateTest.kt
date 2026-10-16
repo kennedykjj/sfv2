@@ -112,6 +112,31 @@ class ScopeGateTest {
     }
 
     @Test
+    fun `AC-6 GitChangedPaths ignores what the base gained after the branch started`() {
+        val repo = gitRepo()
+        Files.writeString(repo.resolve("a.txt"), "a")
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "base")
+        git(repo, "branch", "-M", "main")
+        git(repo, "switch", "-q", "-c", "feat/x")
+        Files.createDirectories(repo.resolve("daemon"))
+        Files.writeString(repo.resolve("daemon/A.kt"), "class A")
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "card work")
+        git(repo, "switch", "-q", "main")
+        Files.createDirectories(repo.resolve("app"))
+        Files.writeString(repo.resolve("app/Other.kt"), "class Other")
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "main moved on")
+        git(repo, "switch", "-q", "feat/x")
+        Files.writeString(repo.resolve("daemon/B.kt"), "class B")
+
+        val changed = GitChangedPaths().between(repo, "main")
+
+        assertThat(changed).containsExactlyInAnyOrder("daemon/A.kt")
+    }
+
+    @Test
     fun `AC-6 GitChangedPaths refuses a base that starts with a dash`() {
         val repo = gitRepo()
         Files.writeString(repo.resolve("a.txt"), "a")

@@ -23,7 +23,7 @@ sealed interface MoveOutcome {
     data class NotSent(val cause: NotSentCause) : MoveOutcome
 }
 
-enum class NotSentCause { DAEMON_UNAVAILABLE, NO_OWNER_PROOF }
+enum class NotSentCause { DAEMON_UNAVAILABLE, NO_OWNER_PROOF, NO_ANSWER }
 
 /** The board the controller edits optimistically; the monitor implements it. */
 interface BoardEdits {
@@ -93,11 +93,77 @@ class OwnerMoveController(
     fun dismissNotice() {
         mutableState.value = mutableState.value.copy(notice = null)
     }
-
-    private fun noticeFor(outcome: MoveOutcome): MoveNotice? =
-        when (outcome) {
-            MoveOutcome.Accepted -> null
-            is MoveOutcome.Refused -> MoveNotice(NoticeKind.REFUSED, Texts.refused(outcome.reason))
-            is MoveOutcome.NotSent -> MoveNotice(NoticeKind.NOT_SENT, Texts.notSent(outcome.cause))
-        }
 }
+
+private fun noticeFor(outcome: MoveOutcome): MoveNotice? =
+    when (outcome) {
+        MoveOutcome.Accepted -> null
+        is MoveOutcome.Refused -> MoveNotice(NoticeKind.REFUSED, Texts.refused(outcome.reason))
+        is MoveOutcome.NotSent -> MoveNotice(NoticeKind.NOT_SENT, Texts.notSent(outcome.cause))
+    }
+
+/**
+ * What the card view shows while the owner decides on a spec in `SPEC_REVIEW`. [sent] stays true until the card
+ * leaves that column: nothing is optimistic, the column only changes when the daemon event reaches the detail.
+ */
+data class SpecReviewState(
+    val notePending: Boolean = false,
+    val sending: Boolean = false,
+    val sent: Boolean = false,
+    val notice: MoveNotice? = null,
+)
+
+/** Approve or ask for a change from the card view. The daemon stays the judge; one command in flight at a time. */
+class SpecReviewController(
+    private val commands: OwnerCommands,
+    private val io: CoroutineDispatcher,
+) {
+    private val mutableState = MutableStateFlow(SpecReviewState())
+    val state: StateFlow<SpecReviewState> = mutableState
+
+    suspend fun approve(cardId: String) {
+        send(cardId, Column.READY_FOR_DEV, null)
+    }
+
+    /** A blank [note] opens the note field and sends nothing. */
+    suspend fun requestChange(cardId: String, note: String?) {
+        val trimmed = note?.trim()?.takeIf { it.isNotEmpty() }
+        if (mutableState.value.sending) return
+        if (trimmed == null) {
+            mutableState.value = mutableState.value.copy(notePending = true)
+            return
+        }
+        send(cardId, Column.READY_FOR_REFINEMENT, trimmed)
+    }
+
+    fun cancel() {
+        mutableState.value = mutableState.value.copy(notePending = false)
+    }
+
+    fun dismissNotice() {
+        mutableState.value = mutableState.value.copy(notice = null)
+    }
+
+    /** Called with every refreshed detail: once the card left `SPEC_REVIEW` the "sent" mark is no longer needed. */
+    fun onDetail(detail: CardDetail) {
+        if (detail.column != Column.SPEC_REVIEW.name && mutableState.value.sent) {
+            mutableState.value = mutableState.value.copy(sent = false)
+        }
+    }
+
+    private suspend fun send(cardId: String, to: Column, note: String?) {
+        val current = mutableState.value
+        if (current.sending) return
+        mutableState.value = current.copy(sending = true, sent = false, notice = null)
+        val outcome = withContext(io) { commands.move(cardId, Column.SPEC_REVIEW, to, note) }
+        mutableState.value = if (outcome == MoveOutcome.Accepted) {
+            mutableState.value.copy(sending = false, sent = true, notePending = false)
+        } else {
+            mutableState.value.copy(sending = false, notice = noticeFor(outcome))
+        }
+    }
+}
+
+/** The card view offers the owner's actions only for a loaded card waiting in `SPEC_REVIEW`. */
+fun specReviewActionsVisible(state: CardDetailState): Boolean =
+    state is CardDetailState.Loaded && state.detail.column == Column.SPEC_REVIEW.name

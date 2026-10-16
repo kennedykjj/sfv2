@@ -2,8 +2,8 @@ package sfv2.app
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
-import sfv2.core.Column
 import sfv2.core.NotificationType
+import sfv2.core.Column as BoardColumn
 
 /** Color tokens of DESIGN.md (charcoal theme). */
 object Tokens {
@@ -33,11 +33,14 @@ object Texts {
     const val DISCONNECTED = "Desconectado do daemon"
 
     const val BOARD = "Esteira"
+    const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
     const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun goToColumn(column: BoardColumn, count: Int): String = "Ir para ${column.displayName}, ${cardCount(count)}"
 
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
@@ -92,6 +95,18 @@ object Texts {
     const val CANCEL = "Cancelar"
     const val DISMISS = "Entendi"
 
+    const val SPEC_DECISION = "Decisão sobre a spec"
+    const val APPROVE = "Aprovar"
+    const val REQUEST_CHANGE = "Pedir mudança"
+    const val SEND_NOTE = "Enviar"
+    const val SENDING = "Enviando…"
+    const val APPROVAL_SENT = "Aprovação enviada"
+    const val CHANGE_SENT = "Pedido de mudança enviado"
+    const val DISMISS_NOTICE = "Dispensar"
+    const val NOTICE_REFUSED = "Recusado"
+    const val NOTICE_NOT_SENT = "Não enviado"
+    const val NOTE_REQUIRED = "A nota é obrigatória para pedir mudança."
+
     const val OPEN_SETTINGS = "Configurações"
     const val SETTINGS_TITLE = "Configurações"
     const val SETTINGS_LOADING = "Lendo as configurações…"
@@ -141,14 +156,15 @@ object Texts {
         when (cause) {
             NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
             NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
+            NotSentCause.NO_ANSWER -> "Movimento sem resposta do daemon: confira o quadro antes de repetir."
         }
 
-    /** What dropping a held card on [to] means for the owner. */
-    fun moveMeaning(from: Column, to: Column): String =
+    /** What the move means to the owner, for the destination chooser and the drop button. */
+    fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
         when {
-            from == Column.SPEC_REVIEW && to == Column.READY_FOR_DEV -> "Aprovar a spec"
-            from == Column.SPEC_REVIEW && to == Column.READY_FOR_REFINEMENT -> "Devolver à refinagem"
-            to == Column.READY_FOR_PROD -> "Liberar a entrega"
+            from == BoardColumn.SPEC_REVIEW && to == BoardColumn.READY_FOR_DEV -> "Aprovar a spec"
+            to == BoardColumn.READY_FOR_REFINEMENT && from == BoardColumn.SPEC_REVIEW -> "Devolver à refinagem"
+            to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
             else -> "Enviar à refinagem"
         }
 
