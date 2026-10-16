@@ -18,6 +18,7 @@ enum class EventType {
     CARD_CREATED,
     CARD_MOVED,
     OWNER_APPROVED,
+    LOCK_RELEASED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */
