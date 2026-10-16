@@ -16,6 +16,7 @@ import sfv2.store.CardEventStore
 class CardCommands(
     private val store: CardEventStore,
     private val clock: Clock,
+    private val ownerProof: OwnerProof,
     private val log: DaemonLog = StderrDaemonLog,
 ) {
 

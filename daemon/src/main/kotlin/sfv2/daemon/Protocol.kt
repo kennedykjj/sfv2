@@ -14,8 +14,8 @@ import sfv2.core.Column
 sealed interface Request {
     data object Ping : Request
 
-    data class CardCreate(val actor: Actor, val title: String) : Request
-    data class CardMove(val actor: Actor, val id: String, val to: Column) : Request
+    data class CardCreate(val actor: Actor, val title: String, val proof: String? = null) : Request
+    data class CardMove(val actor: Actor, val id: String, val to: Column, val proof: String? = null) : Request
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
