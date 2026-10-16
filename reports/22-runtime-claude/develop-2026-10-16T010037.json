@@ -1,0 +1,1 @@
+{"issue":22,"slug":"runtime-claude","pipeline":"develop","started_at":"2026-10-16T01:00:00Z","finished_at":"2026-10-16T01:20:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":31277,"duration_s":55}],"rounds":{"qa":1,"engineer":1},"gates_failed":[],"flaky":[],"gates_reused":[],"amendments":[],"manual_edit":null}
