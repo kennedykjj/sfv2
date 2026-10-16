@@ -1,0 +1,1 @@
+{"issue":70,"slug":"bandeja-pop-up-e-notificacao-no-linux","pipeline":"validate","started_at":"2026-10-16T16:30:00Z","finished_at":"2026-10-16T17:10:00Z","outcome":"ok","agents":[],"rounds":{"gates":0,"review":0},"gates_failed":[],"flaky":[],"gates_reused":["build","green app sfv2.app.OwnerNoticesTest","green cli sfv2.cli.MainTest"],"manual_edit":false}
