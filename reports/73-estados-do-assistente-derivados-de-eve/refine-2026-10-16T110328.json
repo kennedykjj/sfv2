@@ -1,0 +1,1 @@
+{"issue":73,"slug":"estados-do-assistente-derivados-de-eve","pipeline":"refine","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":17682,"duration_s":26}],"rounds":{"po":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
