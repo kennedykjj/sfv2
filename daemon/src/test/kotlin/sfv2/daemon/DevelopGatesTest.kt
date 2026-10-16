@@ -95,6 +95,28 @@ class DevelopGatesTest {
     }
 
     @Test
+    fun `the plan comes from the spec the card itself changed, not from the newest spec file`() {
+        val specDir = Files.createDirectories(worktree.resolve("docs/superpowers/specs"))
+        val row = { layer: String, file: String -> "## Test plan\n\n| AC | Layer | Test file |\n|---|---|---|\n| AC-1 | $layer | `$file` |\n\n## Security\n" }
+        Files.writeString(specDir.resolve("own.md"), row("daemon", "daemon/src/test/kotlin/sfv2/daemon/OwnTest.kt"))
+        Files.writeString(specDir.resolve("other.md"), row("cli", "cli/src/test/kotlin/sfv2/cli/OtherTest.kt"))
+        Files.setLastModifiedTime(specDir.resolve("other.md"), java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 60_000))
+        val project = Project("alpha", "/repos/alpha", listOf(ProjectLayer("daemon", "daemon/", test = tokens), ProjectLayer("cli", "cli/", test = tokens)), ProjectPolicies.DEFAULT)
+        val recorder = EventRecorder(store, EventStream(store))
+        val paths = object : ChangedPaths {
+            override fun between(worktree: Path, base: String): List<String> = listOf("docs/superpowers/specs/own.md")
+        }
+        val gates = RealDevelopGates(
+            project, store, recorder, GateExecutor(store, recorder, clock, runner), runner, paths, dir.resolve("runs"), clock,
+            head = WorktreeHead { "abcdef1" },
+        )
+
+        val planned = gates.layers(worktree)
+
+        assertThat(planned.map { it.name }).containsExactly("daemon")
+    }
+
+    @Test
     fun `a layer without test command fails its gate with no_test_command`() {
         writeSpec("daemon/src/test/kotlin/sfv2/daemon/FirstTest.kt")
         val layer = ProjectLayer("daemon", "daemon/")

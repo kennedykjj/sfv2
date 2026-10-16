@@ -53,6 +53,7 @@ object AcceptanceRules {
         "AssertionFailedError|AssertionError|expected: ?<.*> but was|" +
             "expect\\(.*\\)\\.[A-Za-z]+\\(.*\\) failed|^\\s*Received:",
     )
+    private val DISABLERS = Regex("@Disabled|@Ignore|@Test\\(enabled|assumeTrue|assumeFalse|Assumptions\\.")
     private val COMMENT_ONLY = Regex("^[+-][ \\t]*(//|/\\*|\\*|#|--|<!--)")
 
     fun red(exitCode: Int?, output: Sequence<String>, patterns: AcceptancePatterns): AcceptanceVerdict {
@@ -79,11 +80,15 @@ object AcceptanceRules {
         return if (ran) AcceptanceVerdict.Ok else AcceptanceVerdict.Rejected(AcceptanceReason.NO_TEST_RAN)
     }
 
+    /**
+     * The diff lines that weaken the QA's tests: an assertion line removed or replaced ([keep] on a `-` line) and a
+     * disabling marker added. Assertions that only get added (by a QA repair, or by a merge of the base) do not count.
+     */
     fun assertionEdit(diff: Sequence<String>, keep: Regex): List<String> =
         diff.map(::truncate)
             .filter { (it.startsWith("+") || it.startsWith("-")) && !it.startsWith("+++ ") && !it.startsWith("--- ") }
             .filterNot { COMMENT_ONLY.containsMatchIn(it) }
-            .filter { keep.containsMatchIn(it) }
+            .filter { line -> if (line.startsWith("-")) keep.containsMatchIn(line) else DISABLERS.containsMatchIn(line) }
             .toList()
 
     private fun truncate(line: String): String = if (line.length > MAX_LINE_LENGTH) line.take(MAX_LINE_LENGTH) else line

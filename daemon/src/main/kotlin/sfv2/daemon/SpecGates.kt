@@ -10,12 +10,22 @@ data class SpecFinding(val gate: SpecGate, val ac: String?, val message: String)
 
 data class SpecCheck(val weight: SpecWeight, val findings: List<SpecFinding>)
 
+/** One row of the spec's Test plan table: the criterion, its layer and its test file ("" when absent). */
+data class PlanRow(val ac: String, val layer: String, val testFile: String)
+
 /** Gates de spec: plano de teste e peso. Função pura: o texto da spec e as camadas entram por parâmetro. */
 object SpecGates {
     private val criterion = Regex("""^\s*(?:-\s+)?\*{0,2}(AC-\d+)\*{0,2}\s*[—:]""")
     private val backticked = Regex("`([^`]+)`")
     private val declaredWeight = Regex("""(?m)^\s*\*\*Weight:\*\*\s*(\S+)""")
     private val touchesUi = Regex("""\*\*Touches UI:\*\*\s*(\S+)""")
+    private val acId = Regex("""AC-\d+""")
+
+    /** Rows of the Test plan table that start with an AC id, in table order. */
+    fun plan(specText: String): List<PlanRow> =
+        planCells(specText)
+            .filter { acId.matches(it.firstOrNull().orEmpty()) }
+            .map { PlanRow(it[0], it.getOrElse(1) { "" }, it.getOrElse(2) { "" }.trim('`').trim()) }
 
     fun check(specText: String, layers: List<SpecLayer>): SpecCheck {
         val findings = mutableListOf<SpecFinding>()
@@ -27,9 +37,7 @@ object SpecGates {
             findings += SpecFinding(SpecGate.TEST_PLAN, null, "nenhum critério AC-n reconhecível na seção Product")
         }
 
-        val rows = section(specText, "Test plan").lines()
-            .filter { it.trim().startsWith("|") }
-            .map { cells(it) }
+        val rows = planCells(specText)
         criteria.forEach { ac ->
             val row = rows.firstOrNull { it.firstOrNull() == ac }
             if (row == null) {
@@ -101,6 +109,11 @@ object SpecGates {
         }
         return Regex(regex).matches(path)
     }
+
+    private fun planCells(specText: String): List<List<String>> =
+        section(specText, "Test plan").lines()
+            .filter { it.trim().startsWith("|") }
+            .map { cells(it) }
 
     private fun section(specText: String, title: String): String {
         val lines = specText.lines()
