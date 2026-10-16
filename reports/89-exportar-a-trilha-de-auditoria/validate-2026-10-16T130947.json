@@ -1,0 +1,1 @@
+{"outcome": "ok", "agents": [{"name": "engineer daemon", "purpose": "resolver conflitos do merge com a main", "tokens": 31309, "duration_s": 57}], "rounds": 1, "failed_gates": [], "gates_reused": [], "flaky": [], "amendments": [], "staged_head": "b6a880755c9543a372e07076ecb693ee205c9e9a"}
