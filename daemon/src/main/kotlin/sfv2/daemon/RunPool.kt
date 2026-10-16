@@ -4,6 +4,7 @@ import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 import sfv2.core.Actor
+import sfv2.core.Card
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
@@ -18,15 +19,35 @@ sealed interface StartDecision {
     data class CardLocked(val holder: RunLock) : StartDecision
 }
 
+/** What the pool needs from the event store to record a lock release. */
+interface LockEventRecorder {
+    fun card(id: String): Card?
+    fun recordChange(id: String, card: Card, event: Event): Long
+}
+
+private class StoreLockEventRecorder(private val store: CardEventStore) : LockEventRecorder {
+    override fun card(id: String): Card? = store.card(id)
+    override fun recordChange(id: String, card: Card, event: Event): Long = store.recordChange(id, card, event)
+}
+
 /** Bounded set of run slots with one lock per card; locks of dead owners are released by [sweep]. */
 class RunPool(
     private val capacity: Int,
-    private val store: CardEventStore,
+    private val store: LockEventRecorder,
     private val clock: Clock,
     private val probe: ProcessProbe,
     private val log: DaemonLog = StderrDaemonLog,
     private val onEvent: (StoredEvent) -> Unit = {},
 ) {
+    constructor(
+        capacity: Int,
+        store: CardEventStore,
+        clock: Clock,
+        probe: ProcessProbe,
+        log: DaemonLog = StderrDaemonLog,
+        onEvent: (StoredEvent) -> Unit = {},
+    ) : this(capacity, StoreLockEventRecorder(store), clock, probe, log, onEvent)
+
     private val locks = linkedMapOf<String, RunLock>()
 
     init {
@@ -50,11 +71,17 @@ class RunPool(
     @Synchronized
     fun sweep(): List<RunLock> {
         val dead = locks.values.filter { !probe.isAlive(it.pid, it.startedAt) }
-        dead.forEach { lock ->
-            locks.remove(lock.cardId)
-            recordRelease(lock)
+        return dead.filter { lock ->
+            val recorded = try {
+                recordRelease(lock)
+                true
+            } catch (e: RuntimeException) {
+                log.log("lock_release_failed", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
+                false
+            }
+            if (recorded) locks.remove(lock.cardId)
+            recorded
         }
-        return dead
     }
 
     @Synchronized
