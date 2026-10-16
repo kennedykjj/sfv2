@@ -1,0 +1,1 @@
+{"issue":122,"slug":"stream-fechar-conexao-assinante-lento","pipeline":"refine","started_at":null,"finished_at":"2026-10-16","outcome":"ok","agents":[{"role":"product-owner","tokens":15959,"duration_s":11}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
