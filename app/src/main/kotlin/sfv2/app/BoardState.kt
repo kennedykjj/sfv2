@@ -104,7 +104,7 @@ internal data class TimeSplit(val segments: List<TimeSegment>, val waitPercent: 
             val total = segments.sumOf { it.seconds }
             if (total <= 0L) return null
             val wait = segments.filter { isWaitingForOwner(it.column) }.sumOf { it.seconds }
-            val percent = (2 * wait + total) / (2 * total)
+            val percent = (200 * wait + total) / (2 * total)
             return TimeSplit(segments, percent.toInt())
         }
     }
