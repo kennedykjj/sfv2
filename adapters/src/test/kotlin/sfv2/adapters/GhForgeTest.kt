@@ -445,5 +445,63 @@ class GhForgeTest {
         return out
     }
 
+    @Test
+    fun `listPullRequests maps state, author and fork flag of every PR`() {
+        val h = harness()
+        h.on(
+            "pr-list",
+            """[
+            {"number":1,"headRefName":"feat/a","headRefOid":"${GhForgeFixtures.HEAD}","title":"A","state":"OPEN","author":{"login":"octocat"},"isCrossRepository":false},
+            {"number":2,"headRefName":"feat/b","headRefOid":"x","title":"B","state":"MERGED","author":{"login":"octocat"},"isCrossRepository":false},
+            {"number":3,"headRefName":"feat/c","headRefOid":"y","title":"C","state":"CLOSED","author":{"login":"stranger"},"isCrossRepository":true}
+            ]""",
+        )
+
+        val listed = h.forge().listPullRequests()
+
+        assertThat(listed.map { it.number }).containsExactly(1, 2, 3)
+        assertThat(listed.map { it.state }).containsExactly(
+            PullRequestState.Open(GhForgeFixtures.HEAD),
+            PullRequestState.Merged,
+            PullRequestState.ClosedUnmerged,
+        )
+        assertThat(listed.map { it.author }).containsExactly("octocat", "octocat", "stranger")
+        assertThat(listed.map { it.fromFork }).containsExactly(false, false, true)
+        assertThat(listed[0].title).isEqualTo("A")
+        assertThat(listed[0].branch).isEqualTo("feat/a")
+        assertThat(h.callsTo("pr list").single()).contains("--state all", "--limit 1000")
+    }
+
+    @Test
+    fun `listPullRequests failure names the operation without leaking stderr`() {
+        val h = harness()
+        h.on("pr-list", err = GhForgeFixtures.SECRET, exit = 1)
+
+        val e = assertThrows<ForgeException> { h.forge().listPullRequests() }
+
+        assertThat(e.message).contains("listPullRequests").doesNotContain("ghp_")
+    }
+
+    @Test
+    fun `authenticatedLogin returns the validated login`() {
+        val h = harness()
+        h.on("api", "octocat\n")
+
+        assertThat(h.forge().authenticatedLogin()).isEqualTo("octocat")
+        assertThat(h.callsTo("api").single()).contains("user", "--jq .login")
+    }
+
+    @Test
+    fun `authenticatedLogin rejects an invalid login and names the operation on failure`() {
+        val h = harness()
+        h.on("api", "bad login; rm -rf\n")
+        val invalid = assertThrows<ForgeException> { h.forge().authenticatedLogin() }
+        assertThat(invalid.message).contains("authenticatedLogin")
+
+        h.on("api", err = GhForgeFixtures.SECRET, exit = 1)
+        val failed = assertThrows<ForgeException> { h.forge().authenticatedLogin() }
+        assertThat(failed.message).contains("authenticatedLogin").doesNotContain("ghp_")
+    }
+
     private fun FakeForge.pushHeadSha(ref: PullRequestRef) = pushHead(ref, GhForgeFixtures.HEAD)
 }

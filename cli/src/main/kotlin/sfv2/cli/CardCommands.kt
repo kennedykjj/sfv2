@@ -156,6 +156,24 @@ class CardRequestChange(private val cli: CliEnvironment) : CliktCommand(name = "
     }
 }
 
+class CardRebuild(private val cli: CliEnvironment) : CliktCommand(name = "rebuild") {
+    private val project by option("--project", help = "Only rebuild cards of this project")
+
+    override fun help(context: Context) = "Recreate cards lost from the database out of branches and pull requests."
+
+    override fun run() {
+        val token = cli.ownerToken()
+        val request = buildJsonObject {
+            put("cmd", "card.rebuild")
+            put("actor", "owner")
+            project?.let { put("project", it) }
+            put("proof", token)
+        }
+        val cards = cli.call(request) as? JsonArray ?: cli.fail("resposta inesperada do daemon")
+        cards.forEach { cli.out(cardLine(it)) }
+    }
+}
+
 class CardShow(private val cli: CliEnvironment) : CliktCommand(name = "show") {
     private val id by argument(help = "Card id")
 
@@ -200,6 +218,6 @@ class EventsCommand(private val cli: CliEnvironment) : CliktCommand(name = "even
 /** Registers the card group and the events command on [root]. */
 fun Sfv2Command.withCardCommands(cli: CliEnvironment): Sfv2Command =
     subcommands(
-        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardShow(cli)),
+        CardGroup().subcommands(CardCreate(cli), CardList(cli), CardMove(cli), CardApprove(cli), CardRequestChange(cli), CardRebuild(cli), CardShow(cli)),
         EventsCommand(cli),
     ) as Sfv2Command

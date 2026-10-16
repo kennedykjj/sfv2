@@ -15,6 +15,8 @@ class FakeForge : Forge {
         var head: String,
         var status: Status = Status.OPEN,
         var conflictNextMerge: Boolean = false,
+        var author: String = "",
+        var fromFork: Boolean = false,
     )
 
     private val entries = mutableListOf<Entry>()
@@ -65,6 +67,29 @@ class FakeForge : Forge {
         pendingFailure = operation
     }
 
+    /** Login the fake authenticates as; PRs opened afterwards are authored by it. */
+    var login: String = "factory-owner"
+
+    fun setAuthor(pr: PullRequestRef, author: String) {
+        find(pr.number).author = author
+    }
+
+    fun setFromFork(pr: PullRequestRef, fromFork: Boolean) {
+        find(pr.number).fromFork = fromFork
+    }
+
+    override fun authenticatedLogin(): String {
+        failIf("authenticatedLogin", "authenticated user")
+        return login
+    }
+
+    override fun listPullRequests(): List<PullRequestSummary> {
+        failIf("listPullRequests", "repository")
+        return entries.map {
+            PullRequestSummary(it.number, it.request.branch, it.request.title, stateOf(it), it.author, it.fromFork)
+        }
+    }
+
     override fun openPullRequest(request: PullRequestRequest): PullRequestRef {
         failIf("openPullRequest", "branch ${request.branch}")
         val existing = entries.firstOrNull { it.status == Status.OPEN && it.request.branch == request.branch }
@@ -74,7 +99,7 @@ class FakeForge : Forge {
             return refOf(existing)
         }
         val number = entries.size + 1
-        val entry = Entry(number = number, request = request, head = "sha-$number")
+        val entry = Entry(number = number, request = request, head = "sha-$number", author = login)
         entries += entry
         requests += request
         return refOf(entry)

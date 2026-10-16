@@ -197,6 +197,23 @@ class MainTest {
     }
 
     @Test
+    fun `card rebuild sends the owner request with the project and prints one line per card`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        fakeDaemon {
+            listOf("""{"ok":true,"result":[{"id":"c1","title":"One","column":"CODING"},{"id":"c2","title":"Two","column":"PR_REVIEW"}]}""")
+        }
+
+        assertThat(run("card", "rebuild", "--project", "sfv2")).isZero()
+
+        assertThat(out.toString().lines().filter { it.isNotBlank() })
+            .containsExactly("c1  CODING  One", "c2  PR_REVIEW  Two")
+        assertThat(requests).hasSize(1)
+        assertThat(requests[0]).contains("\"card.rebuild\"").contains("\"sfv2\"")
+            .containsPattern("\"proof\"\\s*:\\s*\"secret-token\"").containsPattern("\"actor\"\\s*:\\s*\"owner\"")
+    }
+
+    @Test
     fun `AC-5 request-change without a note is a usage error and sends nothing`() {
         Files.createDirectories(socketDir())
         Files.writeString(tokenPath(), "tok\n")
