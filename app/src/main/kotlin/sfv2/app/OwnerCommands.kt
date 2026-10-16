@@ -7,6 +7,10 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -40,8 +44,15 @@ fun ownerMoveRequest(cardId: String, from: Column, to: Column, note: String?, pr
         put("proof", proof)
     }.toString()
 
-/** Talks to the daemon's Unix socket; reads [token] at every send and never keeps it. */
-class SocketOwnerCommands(private val socket: Path, private val token: Path) : OwnerCommands {
+/**
+ * Talks to the daemon's Unix socket; reads [token] at every send and never keeps it.
+ * A daemon that accepts the connection but stays silent for [timeoutMillis] is [NotSentCause.NO_ANSWER].
+ */
+class SocketOwnerCommands(
+    private val socket: Path,
+    private val token: Path,
+    private val timeoutMillis: Long = 5_000,
+) : OwnerCommands {
     override fun move(cardId: String, from: Column, to: Column, note: String?): MoveOutcome {
         val proof = try {
             Files.readString(token).trim().takeIf { it.isNotEmpty() }
@@ -50,6 +61,8 @@ class SocketOwnerCommands(private val socket: Path, private val token: Path) : O
         } ?: return MoveOutcome.NotSent(NotSentCause.NO_OWNER_PROOF)
         return try {
             parse(send(ownerMoveRequest(cardId, from, to, note, proof)))
+        } catch (e: TimeoutException) {
+            MoveOutcome.NotSent(NotSentCause.NO_ANSWER)
         } catch (e: IOException) {
             MoveOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE)
         }
@@ -59,11 +72,23 @@ class SocketOwnerCommands(private val socket: Path, private val token: Path) : O
         val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
         try {
             channel.connect(UnixDomainSocketAddress.of(socket))
-            Channels.newOutputStream(channel).apply {
-                write((command + "\n").toByteArray())
-                flush()
+            // A blocking read has no timeout of its own: closing the channel is what ends a daemon that never answers.
+            val reply = CompletableFuture.supplyAsync {
+                try {
+                    Channels.newOutputStream(channel).apply {
+                        write((command + "\n").toByteArray())
+                        flush()
+                    }
+                    Channels.newInputStream(channel).bufferedReader().readLine()
+                } catch (e: IOException) {
+                    null
+                }
             }
-            return Channels.newInputStream(channel).bufferedReader().readLine()
+            return try {
+                reply.get(timeoutMillis, TimeUnit.MILLISECONDS)
+            } catch (e: ExecutionException) {
+                throw IOException("owner move request failed", e)
+            }
         } finally {
             channel.close()
         }

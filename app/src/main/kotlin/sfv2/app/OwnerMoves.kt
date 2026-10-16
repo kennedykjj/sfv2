@@ -23,7 +23,7 @@ sealed interface MoveOutcome {
     data class NotSent(val cause: NotSentCause) : MoveOutcome
 }
 
-enum class NotSentCause { DAEMON_UNAVAILABLE, NO_OWNER_PROOF }
+enum class NotSentCause { DAEMON_UNAVAILABLE, NO_OWNER_PROOF, NO_ANSWER }
 
 /** The board the controller edits optimistically; the monitor implements it. */
 interface BoardEdits {

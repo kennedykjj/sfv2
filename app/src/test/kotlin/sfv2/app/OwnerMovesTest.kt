@@ -8,7 +8,10 @@ import java.nio.channels.Channels
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -17,7 +20,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.ThrowingSupplier
 import sfv2.core.Column
 
 /**
@@ -282,6 +287,144 @@ class OwnerMovesTest {
     }
 
     @Test
+    fun `AC-1 a daemon that accepts the connection and never answers gives NO_ANSWER within the deadline`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val socket = dir.resolve("daemon.sock")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val release = CountDownLatch(1)
+        val reached = CountDownLatch(1)
+        val daemon = FakeDaemon(socket) {
+            reached.countDown()
+            release.await()
+            """{"ok":true,"result":{}}"""
+        }
+        try {
+            val commands = SocketOwnerCommands(socket, token, timeoutMillis = 200)
+
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier { commands.move("a", Column.STAGED, Column.READY_FOR_PROD, null) },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
+            assertThat(reached.await(3, TimeUnit.SECONDS)).isTrue()
+            assertThat(daemon.requests).hasSize(1)
+        } finally {
+            release.countDown()
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-1 a move with no answer closes the connection to the silent daemon`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = SilentDaemon(dir.resolve("daemon.sock"))
+        try {
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier {
+                    SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 200)
+                        .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+                },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
+            assertThat(daemon.hungUp.await(3, TimeUnit.SECONDS)).isTrue()
+            assertThat(daemon.requests).hasSize(1)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a daemon that answers within the deadline still gives Accepted`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":true,"result":{}}""" }
+        try {
+            val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 2_000)
+                .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+            assertThat(outcome).isEqualTo(MoveOutcome.Accepted)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a daemon refusal within the deadline still carries the daemon reason`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":false,"error":"too late"}""" }
+        try {
+            val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 2_000)
+                .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+            assertThat(outcome).isEqualTo(MoveOutcome.Refused("too late"))
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-3 a move with no answer puts the card back and tells the owner to check the board`() = runBlocking {
+        val fx = ControllerFixtures(BoardFixtures.aCard("a", Column.STAGED))
+        fx.commands.reply = { MoveOutcome.NotSent(NotSentCause.NO_ANSWER) }
+
+        fx.controller.hold("a")
+        fx.controller.chooseTarget(Column.READY_FOR_PROD)
+        fx.controller.submit()
+
+        assertThat(fx.edits.current.cardsIn(Column.STAGED).map { it.id }).containsExactly("a")
+        assertThat(fx.edits.current.cardsIn(Column.READY_FOR_PROD)).isEmpty()
+        assertThat(fx.controller.state.value.notice).isEqualTo(
+            MoveNotice(NoticeKind.NOT_SENT, "Movimento sem resposta do daemon: confira o quadro antes de repetir."),
+        )
+    }
+
+    @Test
+    fun `AC-4 a refused connection is still DAEMON_UNAVAILABLE with a deadline set`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+
+        val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 200)
+            .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+        assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE))
+    }
+
+    @Test
+    fun `AC-4 a missing token is still NO_OWNER_PROOF and sends nothing to a daemon that does not answer`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val release = CountDownLatch(1)
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) {
+            release.await()
+            """{"ok":true,"result":{}}"""
+        }
+        try {
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier {
+                    SocketOwnerCommands(dir.resolve("daemon.sock"), dir.resolve("owner.token"), timeoutMillis = 200)
+                        .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+                },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_OWNER_PROOF))
+            assertThat(daemon.requests).isEmpty()
+        } finally {
+            release.countDown()
+            daemon.close()
+        }
+    }
+
+    @Test
     fun `AC-1 the card view shows the actions only for a loaded card in Spec Review`() {
         assertThat(specReviewActionsVisible(CardDetailState.Loaded(SpecReviewFixtures.aDetail(Column.SPEC_REVIEW)))).isTrue()
 
@@ -484,6 +627,30 @@ class FakeDaemon(socket: Path, private val reply: (String) -> String) {
                 }
             } catch (e: IOException) {
                 // closed by the test
+            }
+        }
+    }
+
+    fun close() = server.close()
+}
+
+/** Accepts one connection, reads the request and never answers; [hungUp] opens when the client closes its side. */
+class SilentDaemon(socket: Path) {
+    val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val hungUp = CountDownLatch(1)
+    private val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX).also { it.bind(UnixDomainSocketAddress.of(socket)) }
+
+    init {
+        Thread.ofPlatform().daemon().start {
+            try {
+                server.accept().use { client ->
+                    val reader = Channels.newInputStream(client).bufferedReader()
+                    reader.readLine()?.let { requests.add(it) }
+                    if (reader.read() == -1) hungUp.countDown()
+                }
+            } catch (e: IOException) {
+                // a reset by the client is also a hang-up
+                hungUp.countDown()
             }
         }
     }
