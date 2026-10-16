@@ -43,7 +43,7 @@ _Tech Lead_
 3. Versão maior que `SCHEMA_VERSION`: lê `user_version` numa conexão antes de qualquer `PRAGMA` de escrita (WAL altera o arquivo), lança `DatabaseSchemaTooNewException` e fecha sem escrever. Arquivo fica byte a byte igual.
 4. Versão menor (futuro): `Schema.migrate` do SQLDelight com arquivos `.sqm`; migração aplicada nunca é editada. Sem migração na v1.
 
-**Dependências (`gradle/libs.versions.toml`, versões fixas):** plugin `app.cash.sqldelight` 2.1.0 e `app.cash.sqldelight:sqlite-driver` 2.1.0 (traz o driver JDBC do SQLite). Aplicados em `store/build.gradle.kts`; `build-logic/` não muda.
+**Dependências (`gradle/libs.versions.toml`, versões fixas):** plugin `app.cash.sqldelight` 2.4.1 e `app.cash.sqldelight:sqlite-driver` 2.4.1 (a 2.1.0 é de 2025 e anterior ao Kotlin 2.4 do projeto) (traz o driver JDBC do SQLite). Aplicados em `store/build.gradle.kts`; `build-logic/` não muda.
 
 **Migração:** expand-only, não destrutiva (banco novo). Sem `## Rollback` além de n/a.
 
@@ -72,6 +72,7 @@ _What the pipeline decided on its own; one line each, with the reason._
 - Esquema v1 inclui `card` e `event` porque o #13 depende deles; colunas mínimas, sem outras tabelas (fora do escopo).
 - Testes entram em `ModuleTest.kt` (suíte existente do módulo); a classe pode ser renomeada pelo QA para `DatabaseTest.kt` só se mantiver o caminho do plano atualizado. Mantido o arquivo existente por regra de não criar suíte nova.
 - Testes usam banco em diretório temporário (`@TempDir`), sem IO fora dele nem relógio real.
+- SQLDelight como biblioteca de acesso ao SQLite do projeto (decisão #17 em docs/context/decisions.md): consultas tipadas e `verifyMigrations` para pegar migração editada; revisado pelo dono interino.
 - Peso `standard`: uma camada, 4 ACs, 3 a 4 arquivos, sem segurança.
 
 ## Open questions
