@@ -31,7 +31,7 @@ fun runCli(
     runCommand: (List<String>) -> String? = ::runProcess,
 ): Int {
     val cli = CliEnvironment(env, out, err, runCommand)
-    val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli).withProjectCommands(cli)
+    val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli).withInitCommand(cli).withProjectCommands(cli)
     return try {
         command.parse(args)
         0
