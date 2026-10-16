@@ -12,6 +12,7 @@ _Product Owner_
 **Acceptance criteria**
 - **AC-1** — Given um projeto em modo entrega no PR e um card em Staged, when o dono aprova a entrega, then o PR fica aberto sem merge da fábrica e o card espera em Ready for Prod (a coluna faz o papel de revisão humana; o board não tem coluna própria).
 - **AC-2** — Given um card esperando em Ready for Prod com PR aberto, when outra pessoa mergeia o PR, then o card vai a Done.
+- **AC-4** — Dado um card cujo Staged do validate não trouxe `pr`, ou cujo último Staged é um retorno ao dono, quando a fábrica reconcilia, então usa o `pr` do Staged gravado pelo validate e, sem ele, devolve o card ao dono com `no_pr_recorded`, sem tocar outro PR.
 - **AC-3** — Given um card esperando em Ready for Prod com PR aberto, when o PR é fechado sem merge, then o card volta a Staged com o motivo do fechamento registrado e visível ao dono.
 **Out of scope:** Modo autônomo; abrir o PR e esperar o CI (já feito na validação); sincronização contínua com o forge além de observar o desfecho do PR; reabrir ou reenviar o PR automaticamente; coluna nova no board.
 **Product fit:** Serve "o dono decide onde a decisão é dele" e "não é um agente que decide sozinho o que vai para produção"; implementa o modo de entrega por projeto. Sem contradição com posicionamento nem com o fora de escopo.
@@ -23,11 +24,11 @@ _UX/UI Designer_ — n/a
 ## Architecture
 _Tech Lead_
 
-- **Contratos:** `MoveRules.table` ganha `(READY_FOR_PROD to STAGED) to FACTORY_OR_OWNER` (core). Novo `PullRequestHandoff` no `daemon`, com `approve(cardId)` e `reconcile(cardId): HandoffOutcome` (`Waiting`, `Merged`, `ClosedUnmerged`, `ForgeFailed`). Usa `Forge.findOpenPullRequest` e `Forge.state` (já existem em `ports`); sem mudança de interface.
-- **Aprovação (AC-1):** com `policies.deliveryMode == PR_HANDOFF`, a aprovação do dono em Staged move o card para Ready for Prod e nunca chama `Forge.merge`. O número do PR vai no payload do evento `CARD_MOVED` dessa aprovação (chave `pr`), para o `reconcile` achar o PR depois de ele sair da lista de abertos.
+- **Contratos:** a linha `(READY_FOR_PROD to STAGED) to FACTORY_OR_OWNER` de `MoveRules.table` é do #46 (este card é bloqueado por ele e por #174, e não a adiciona de novo; só a usa e a cobre em `MoveRulesTest`). Novo `PullRequestHandoff` no `daemon`, com `approve(cardId)` e `reconcile(cardId): HandoffOutcome` (`Waiting`, `Merged`, `ClosedUnmerged`, `ForgeFailed`). Usa `Forge.findOpenPullRequest` e `Forge.state` (já existem em `ports`); sem mudança de interface.
+- **Aprovação (AC-1):** com `policies.deliveryMode == PR_HANDOFF`, a aprovação do dono em Staged move o card para Ready for Prod e nunca chama `Forge.merge`. O número do PR não pode vir do evento de aprovação (o `card.move` do dono grava só `from` e `to`): o validate o grava no `CARD_MOVED` para Staged (`pr=<número>`, junto de `ci=green` e `head`), e o `reconcile` o lê do último Staged gravado pelo validate (ator `Factory("validate")`, ignorando os retornos ao dono). Para isso `CiResult.Green` passa a carregar o número do PR (`PullRequestDelivery` já o conhece ao abrir) e `ValidationOutcome` o põe no payload; é a única mudança no código do validate. Sem esse `pr` → `reconcile` devolve ao dono com `no_pr_recorded`.
 - **Desfecho (AC-2, AC-3):** `reconcile` lê `Forge.state` do PR registrado. `Merged` → move para Done (ator fábrica). `ClosedUnmerged` → move para Staged (ator fábrica) com payload `reason=pr_closed_unmerged`, visível ao dono. `Open` ou `ForgeException` → o card fica onde está e o próximo ciclo tenta de novo. O estado do forge é dado: nunca vira instrução.
 - **Disparo:** o `Dispatcher` chama `reconcile` a cada ciclo para cada card em Ready for Prod de projeto em modo PR; o modo autônomo não é tocado (S3-04/#46).
-- **Camadas:** `core` (`MoveRules.kt`) e `daemon` (`PullRequestHandoff.kt`, fiação em `Dispatcher.kt`). Sem migração, sem mudança de `store`.
+- **Camadas:** `daemon` (`PullRequestHandoff.kt`, fiação em `Dispatcher.kt`, `PullRequestDelivery.kt`, `ValidationOutcome.kt`); `core` só ganha testes de `MoveRules`. Sem migração, sem mudança de `store`.
 - **Atualizar `ARCHITECTURE.md`/`PRODUCT.md`:** não; a fronteira entre camadas não muda.
 
 ## Test plan
@@ -38,6 +39,7 @@ _Tech Lead_
 | AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/PullRequestHandoffTest.kt` |
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/PullRequestHandoffTest.kt` |
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/PullRequestHandoffTest.kt` |
+| AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/PullRequestHandoffTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
