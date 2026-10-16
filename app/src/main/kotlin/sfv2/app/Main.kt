@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
+private const val OWNER_TOKEN_FILE = "owner.token"
 
 fun main() {
     val runtimeDir = System.getenv("XDG_RUNTIME_DIR")?.takeIf { it.isNotBlank() }
@@ -28,6 +29,11 @@ fun main() {
 
     val board = runtimeDir?.let {
         BoardMonitor(SocketBoardSource(Path.of(it, SOCKET_RELATIVE_PATH)), monitor?.state ?: noRuntimeDir, Dispatchers.IO)
+    }
+
+    val owner = board?.let {
+        val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
+        OwnerMoveController(SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE)), it, Dispatchers.IO)
     }
 
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
@@ -44,7 +50,7 @@ fun main() {
         ) {
             window.minimumSize = Dimension(360, 240)
             // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
-            if (view != null) BoardScreen(view, connected = state == ConnectionState.Connected) else ConnectionScreen(state)
+            if (view != null) BoardScreen(view, connected = state == ConnectionState.Connected, controller = owner) else ConnectionScreen(state)
         }
     }
 }

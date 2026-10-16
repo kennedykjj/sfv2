@@ -26,7 +26,7 @@ class BoardMonitor(
     private val source: BoardSource,
     private val connection: StateFlow<ConnectionState>,
     private val io: CoroutineDispatcher,
-) {
+) : BoardEdits {
     private val mutableView = MutableStateFlow<BoardView?>(null)
     val view: StateFlow<BoardView?> = mutableView
 
@@ -35,6 +35,16 @@ class BoardMonitor(
     private var live = false
     private var hasSnapshot = false
     private var waiting: MutableList<BoardEvent>? = null
+
+    override fun board(): Board? = synchronized(lock) { board.takeIf { hasSnapshot } }
+
+    /** Applies an owner edit (optimistic move or its reversal) to the board and publishes it. */
+    override fun edit(transform: (Board) -> Board) {
+        synchronized(lock) {
+            board = transform(board)
+            publish()
+        }
+    }
 
     suspend fun run() {
         while (true) {

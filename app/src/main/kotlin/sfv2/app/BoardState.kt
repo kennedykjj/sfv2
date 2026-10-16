@@ -30,6 +30,18 @@ data class Board(val cards: List<BoardCard>, val lastSeq: Long?) {
 
     fun cardsIn(column: Column): List<BoardCard> = cards.filter { it.column == column }
 
+    /** Shows [cardId] in [to] before the daemon confirms; the daemon's own event that follows is absolute. */
+    fun withOptimisticMove(cardId: String, to: Column): Board = relocate(cardId, to)
+
+    /** Undoes an optimistic move, unless the card is no longer in [optimistic] (a daemon event moved it on). */
+    fun revertMove(cardId: String, from: Column, optimistic: Column): Board =
+        if (cards.any { it.id == cardId && it.column == optimistic }) relocate(cardId, from) else this
+
+    private fun relocate(cardId: String, to: Column): Board {
+        val card = cards.firstOrNull { it.id == cardId } ?: return this
+        return copy(cards = cards.filter { it.id != cardId } + card.copy(column = to))
+    }
+
     private fun moveTo(event: BoardEvent): Board {
         val target = event.payload["to"]?.let { name -> Column.entries.firstOrNull { it.name == name } } ?: return this
         val card = cards.firstOrNull { it.id == event.cardId } ?: return this
