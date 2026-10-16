@@ -1,0 +1,1 @@
+{"issue":13,"slug":"card-e-evento-na-mesma-transacao","pipeline":"refine","started_at":"2026-10-15T00:00:00Z","finished_at":"2026-10-15T00:30:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15649,"duration_s":9}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
