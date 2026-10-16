@@ -17,6 +17,9 @@ _Product Owner_
 - **AC-5** — Dado um aviso a mostrar, quando a notificação é emitida, então ela sai por `org.freedesktop.Notifications` e contém só a frase do estado e os ids envolvidos, nunca texto de card, issue ou spec.
 - **AC-6** — Dado que a extensão AppIndicator do GNOME está desligada, quando o dono roda `sfv2 doctor`, então ele mostra um aviso dizendo que a bandeja não aparecerá e como ligar a extensão; com a extensão ligada, o aviso não aparece.
 - **AC-7** — Dado que a bandeja ou o serviço de notificações do D-Bus não está disponível, quando um card passa a esperar o dono, então o app não falha, usa o canal que restou e registra o motivo em log com o id do card.
+- **AC-9** — Dado um card aprovado pelo dono em Spec Review (o daemon grava `OWNER_APPROVED` com `payload.to`, não `CARD_MOVED`), quando a aprovação chega, então o card sai do conjunto de espera, o contador e o tooltip caem e nenhuma notificação nova nasce por ele.
+- **AC-10** — Dado um card criado direto em Spec Review ou em Staged (importado do board da V0 ou reconstruído do forge, cujo `CARD_CREATED` só traz o título), quando o app inicia ou o evento chega, então o card conta como em espera pela coluna real (snapshot `card.list` ou `card.show`), não por suposição.
+- **AC-11** — Dado um card sem referência externa (id UUID), quando a notificação o cita, então o rótulo é os 8 primeiros caracteres hexadecimais do id; com referência, `#<número>`; nunca o título.
 - **AC-8** — Dado o dono que clica na notificação ou no ícone da bandeja, quando o app está aberto ou fechado na janela, então a janela do app abre no card que espera por ele.
 **Out of scope:** Skins e animação do pop-up (outras issues da fase 6/7); horário de silêncio configurável pelo dono (usa a janela noturna existente); macOS e Windows (fase 8); outros tipos de aviso além de "espera o dono"; suporte a desktops sem StatusNotifierItem além do aviso do doctor; Tray do Compose/AWT.
 **Product fit:** Serve ao princípio de que o dono aparece só onde a decisão é dele e a fábrica trabalha fora do horário dele, sempre com modo silencioso (Brand Commitments). Não contradiz o posicionamento: nada sai da máquina e a notificação não carrega texto externo não confiável.
@@ -40,15 +43,15 @@ _UX/UI Designer_
 ## Architecture
 _Tech Lead_
 
-**Contratos.** Nenhum endpoint nem evento novo: o app lê o stream existente `{"cmd":"events.subscribe","after":<seq>}` do socket do daemon (`$XDG_RUNTIME_DIR/sfv2/daemon.sock`) e usa `CARD_MOVED` (`payload.to`, `card`, `at`). Um card "espera o dono" quando o último `CARD_MOVED` o deixou em `SPEC_REVIEW` ou `STAGED` (as mesmas `waitingColumns` de `AssistantStates`); sai do conjunto em qualquer outro movimento.
+**Contratos.** Nenhum endpoint nem evento novo: o app lê o stream existente `{"cmd":"events.subscribe","after":<seq>}` do socket do daemon (`$XDG_RUNTIME_DIR/sfv2/daemon.sock`) e usa `CARD_MOVED` (`payload.to`, `card`, `at`). Um card "espera o dono" quando está em `SPEC_REVIEW` ou `STAGED` (as mesmas `waitingColumns` de `AssistantStates`). A coluna vem do snapshot `card.list` ao iniciar e depois dos eventos que a mudam: `CARD_MOVED` e `OWNER_APPROVED` (a aprovação do dono em Spec Review grava só `OWNER_APPROVED`), ambos com `payload.to`; `CARD_CREATED` só traz o título, então o app consulta `card.show` para a coluna real. Deduzir só do último `CARD_MOVED` deixaria o card aprovado contando como em espera e não contaria os cards criados direto numa coluna de espera (AC-9, AC-10). Os rótulos de card nas frases são `#<número da issue>` ou os 8 primeiros caracteres hexadecimais do UUID, como no #74 (AC-11).
 
 **Camada `app`** (`app/src/main/kotlin/sfv2/app/`):
 - `OwnerNotices.kt` (puro, sem IO, tempo por parâmetro): `WaitingCards` (reduz eventos `CARD_MOVED` ao conjunto de cards em espera, com coluna e instante); `OwnerNoticePolicy` (recebe o conjunto, `quiet: Boolean` e `now`; devolve `NoticeDecision`: `None`, `Show(cards)` ou `Clear`; lembra os cards já avisados, não repete, e no fim do silêncio emite um só `Show` com o que ainda espera); `NoticeText` (título `Shipfloor`, corpo e tooltip da UX, pt-BR/en, ids limitados a 5 + "e mais N"); `NoticeClick` (card citado ainda em espera → abre nele, senão o quadro).
 - `OwnerNoticeShell.kt`: liga as peças. Interfaces `TrayPort` (`show(waiting: Int)`, `clear()`, cliques) e `NotificationPort` (`notify(title, body, replacesId): Int`, cliques); `quiet` vem de `AssistantStates.derive(...) == NIGHT` com as `AssistantStateRules` padrão (sem tocar no `core`). Falha de uma porta é capturada, vai ao log `key=value` com o id do card e a outra porta segue (AC-7).
-- `EventFeed.kt`: cliente do socket com `events.subscribe`, reconecta e retoma por `after`; texto do evento nunca é logado, só ids.
+- Sem `EventFeed.kt` próprio: o app reaproveita o `BoardSource`/`BoardMonitor` do #64 (snapshot `card.list`, `fetchCard` e `subscribe` com retomada por `after`), em vez de uma segunda implementação do mesmo cliente de socket; texto do evento nunca é logado, só ids. Por isso o #70 fica bloqueado pelo #64 (e pelo #66, para o clique abrir a visão do card em vez de cair só no quadro).
 - `DbusTray.kt`: StatusNotifierItem (`org.kde.StatusNotifierItem` + `com.canonical.dbusmenu`, registrado no `org.kde.StatusNotifierWatcher`) com dois ícones PNG transparentes em `app/src/main/resources/` (22/24/48 px); `DbusNotifier.kt`: `org.freedesktop.Notifications.Notify` com `replaces_id`, ação `default` e sinal `ActionInvoked`. São adaptadores finos sem lógica, verificados à mão (AC-4).
 - `Main.kt`: inicia o feed e o shell; clique chama `window.toFront()` e leva o app ao card pedido (a navegação em si é `NoticeClick`).
-- `app/build.gradle.kts` e `gradle/libs.versions.toml`: `dbus-java` (`dbus-java-core` + `dbus-java-transport-native-unixsocket`) com versão fixa; a camada `app` é dona da mudança, o arquivo do catálogo não tem dono no config.
+- `app/build.gradle.kts` e `gradle/libs.versions.toml`: `dbus-java` (`dbus-java-core` + `dbus-java-transport-native-unixsocket`) com versão fixa: a estável mais recente publicada há mais de duas semanas, escolhida e fixada no catálogo (nunca faixa nem `latest`); a camada `app` é dona da mudança, o arquivo do catálogo não tem dono no config.
 
 **Camada `cli`:** `DoctorCommand.kt` ganha o item `appindicator`: só avisa quando a sessão é GNOME (`XDG_CURRENT_DESKTOP` contém `GNOME`) e `gnome-extensions list --enabled` não lista uma extensão `appindicatorsupport@…`; fora do GNOME ou sem `gnome-extensions` no PATH não mostra nada. O aviso é `WARN`, não falha o comando (exit code intacto). A execução do comando entra por uma função injetada em `CliEnvironment`/`diagnose` (padrão: `ProcessBuilder`), para o teste usar um fake.
 
@@ -67,6 +70,9 @@ _Tech Lead_
 | AC-6 | cli | `cli/src/test/kotlin/sfv2/cli/MainTest.kt` |
 | AC-7 | app | `app/src/test/kotlin/sfv2/app/OwnerNoticesTest.kt` |
 | AC-8 | app | `app/src/test/kotlin/sfv2/app/OwnerNoticesTest.kt` |
+| AC-9 | app | `app/src/test/kotlin/sfv2/app/OwnerNoticesTest.kt` |
+| AC-10 | app | `app/src/test/kotlin/sfv2/app/OwnerNoticesTest.kt` |
+| AC-11 | app | `app/src/test/kotlin/sfv2/app/OwnerNoticesTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
