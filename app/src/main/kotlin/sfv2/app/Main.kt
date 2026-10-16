@@ -143,6 +143,10 @@ fun main() {
         )
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
+    val pulse = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        PulseMonitor(SocketPulseSource(socket), SocketCostSummarySource(socket), Clock.systemUTC(), ZoneId.systemDefault(), Dispatchers.IO)
+    }
 
     val owner = board?.let {
         val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
@@ -150,16 +154,21 @@ fun main() {
     }
 
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
+    val noPulse: StateFlow<PulseView> = MutableStateFlow(PulseView.loading())
 
     application {
         var showSettings by remember { mutableStateOf(false) }
         val state by (monitor?.state ?: noRuntimeDir).collectAsState()
         val view by (board?.view ?: noBoard).collectAsState()
+        val pulseView by (pulse?.view ?: noPulse).collectAsState()
         val connected = state == ConnectionState.Connected
         var showFeed by remember { mutableStateOf(false) }
         var openCardId by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(Unit) { monitor?.run() }
         LaunchedEffect(Unit) { board?.run() }
+        LaunchedEffect(Unit) { pulse?.run() }
+        // Every board event moves the cursor; the strip reads again instead of waiting for its 5 s tick.
+        LaunchedEffect(view?.board?.lastSeq) { pulse?.refresh() }
         LaunchedEffect(feed, connected) { if (feed != null && connected) feed.run() }
         LaunchedEffect(Unit) {
             while (true) {
@@ -199,7 +208,12 @@ fun main() {
                 }
                 // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
                 view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
-                    BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
+                    Column(Modifier.fillMaxSize()) {
+                        PulseStrip(pulseView, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                        Box(Modifier.weight(1f)) {
+                            BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
+                        }
+                    }
                 }
                 else -> ConnectionScreen(state, onOpenSettings = openSettings)
             }
