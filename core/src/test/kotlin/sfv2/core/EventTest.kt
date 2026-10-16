@@ -102,6 +102,21 @@ class EventTest {
     }
 
     @Test
+    fun `AC-4 a run cost event round trips through JSON with its payload`() {
+        val type = EventType.entries.firstOrNull { it.name == "RUN_COST_RECORDED" }
+        assertThat(type).isNotNull()
+        val event = EventFixtures.anEvent(
+            actor = Actor.Factory("cost"),
+            type = requireNotNull(type),
+            payload = mapOf("run_id" to "run-1", "status" to "KNOWN", "cost_usd" to "1.25", "estimate" to "true"),
+        )
+
+        val decoded = EventJson.decode(EventJson.encode(event))
+
+        assertThat(decoded).isEqualTo(event)
+    }
+
+    @Test
     fun `reading an event without a field fails naming the field`() {
         val json = EventJson.encode(EventFixtures.anEvent()).replace("\"id\":\"evt-1\",", "")
 
