@@ -90,6 +90,34 @@ class BoardStateTest {
     }
 
     @Test
+    fun `AC-4 reverting a refused optimistic move puts the card back in its origin column`() {
+        val board = BoardFixtures.empty().applySnapshot(
+            listOf(BoardFixtures.aCard("a", Column.STAGED), BoardFixtures.aCard("b", Column.READY_FOR_PROD)),
+        )
+
+        val moved = board.withOptimisticMove("a", Column.READY_FOR_PROD)
+        val reverted = moved.revertMove("a", Column.STAGED, Column.READY_FOR_PROD)
+
+        assertThat(moved.cardsIn(Column.READY_FOR_PROD).map { it.id }).containsExactly("b", "a")
+        assertThat(moved.cardsIn(Column.STAGED)).isEmpty()
+        assertThat(reverted.cardsIn(Column.STAGED).map { it.id }).containsExactly("a")
+        assertThat(reverted.cardsIn(Column.READY_FOR_PROD).map { it.id }).containsExactly("b")
+    }
+
+    @Test
+    fun `AC-4 reverting leaves the card where a daemon event already took it`() {
+        val board = BoardFixtures.empty()
+            .applySnapshot(listOf(BoardFixtures.aCard("a", Column.STAGED)))
+            .withOptimisticMove("a", Column.READY_FOR_PROD)
+            .applyEvent(BoardFixtures.aMove(1, "a", Column.DONE))
+
+        val reverted = board.revertMove("a", Column.STAGED, Column.READY_FOR_PROD)
+
+        assertThat(reverted).isEqualTo(board)
+        assertThat(reverted.cardsIn(Column.DONE).map { it.id }).containsExactly("a")
+    }
+
+    @Test
     fun `AC-5 only Spec Review and Staged wait for the owner`() {
         assertThat(OWNER_DECISION_COLUMNS).containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
         assertThat(Column.entries.filter { isWaitingForOwner(it) })

@@ -3,6 +3,7 @@ package sfv2.app
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import sfv2.core.NotificationType
+import sfv2.core.Column as BoardColumn
 
 /** Tokens of DESIGN.md (Charcoal) shared by the screens. */
 internal object Tokens {
@@ -17,6 +18,7 @@ internal object Tokens {
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
     val sand = Color(0xFFC7B9A6)
+    val raise = Color(0xFF242830)
     val bad = Color(0xFFE58F80)
 }
 
@@ -73,6 +75,32 @@ internal object Texts {
     const val FAILED = "falhou"
 
     fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
+
+    const val NO_OWNER_MOVE = "Este card não tem movimento seu."
+    const val NOTHING_SENT = "Nada enviado."
+    const val NOTE_LABEL = "Nota para a refinagem"
+    const val SEND_BACK = "Devolver"
+    const val CANCEL = "Cancelar"
+    const val DISMISS = "Entendi"
+
+    fun holding(id: String): String = "Segurando #${id.take(8)}. Setas escolhem o destino, Enter confirma, Esc cancela."
+
+    fun refused(reason: String): String = "Não movido: $reason"
+
+    fun notSent(cause: NotSentCause): String =
+        when (cause) {
+            NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
+            NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
+        }
+
+    /** What the move means to the owner, for the destination chooser and the drop button. */
+    fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
+        when {
+            from == BoardColumn.SPEC_REVIEW && to == BoardColumn.READY_FOR_DEV -> "Aprovar a spec"
+            to == BoardColumn.READY_FOR_REFINEMENT && from == BoardColumn.SPEC_REVIEW -> "Devolver à refinagem"
+            to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
+            else -> "Enviar à refinagem"
+        }
 
     fun cardNotFound(id: String) = "Card #$id não encontrado."
 

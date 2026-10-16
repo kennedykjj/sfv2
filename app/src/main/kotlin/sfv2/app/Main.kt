@@ -43,6 +43,7 @@ import kotlinx.coroutines.withContext
 import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder
 
 private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
+private const val OWNER_TOKEN_FILE = "owner.token"
 private const val REQUEST_BUFFER = 8
 private const val TICK_EVERY_MILLIS = 60_000L
 
@@ -143,6 +144,11 @@ fun main() {
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
 
+    val owner = board?.let {
+        val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
+        OwnerMoveController(SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE)), it, Dispatchers.IO)
+    }
+
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
 
     application {
@@ -193,7 +199,7 @@ fun main() {
                 }
                 // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
                 view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
-                    BoardScreen(view, connected = connected, onOpenSettings = openSettings)
+                    BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
                 }
                 else -> ConnectionScreen(state, onOpenSettings = openSettings)
             }
