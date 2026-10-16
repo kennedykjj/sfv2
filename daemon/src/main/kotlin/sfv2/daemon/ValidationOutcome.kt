@@ -21,6 +21,9 @@ sealed interface ValidationDecision {
 
     data object Staged : ValidationDecision
 
+    /** The agent approved and the gates are green, but the CI gave no verdict ([reason]: `ci_timeout`, `forge_failed`). */
+    data class CiUnresolved(val reason: String) : ValidationDecision
+
     /** Approved by the agent but the gates are red: the card stays in Validation. */
     data object Held : ValidationDecision
 
@@ -36,20 +39,54 @@ class ValidationOutcome(
     private val clock: Clock,
 ) {
 
-    fun apply(cardId: String, report: String, gates: GatesState): ValidationDecision {
+    /**
+     * [ci] runs only for an approval with green gates. [head] is the commit the CI approved and [redLayer] the layer a
+     * red CI returns the card to.
+     */
+    fun apply(
+        cardId: String,
+        report: String,
+        gates: GatesState,
+        ci: () -> CiResult,
+        head: () -> String? = { null },
+        redLayer: () -> String = { layers.first() },
+    ): ValidationDecision {
         val card = store.card(cardId) ?: return ValidationDecision.Malformed
         val verdict = report.lineSequence().first().trim()
         return when {
-            verdict == APPROVED -> approve(cardId, card, gates)
+            verdict == APPROVED -> approve(cardId, card, gates, ci, head, redLayer)
             verdict.startsWith(BLOCKED_PREFIX) -> block(cardId, card, verdict.removePrefix(BLOCKED_PREFIX).trim(), reason(report))
             else -> ValidationDecision.Malformed
         }
     }
 
-    private fun approve(cardId: String, card: Card, gates: GatesState): ValidationDecision {
+    private fun approve(
+        cardId: String,
+        card: Card,
+        gates: GatesState,
+        ci: () -> CiResult,
+        head: () -> String?,
+        redLayer: () -> String,
+    ): ValidationDecision {
         if (gates == GatesState.RED) return ValidationDecision.Held
-        if (!move(cardId, card, Column.STAGED, emptyMap())) return ValidationDecision.Malformed
-        return ValidationDecision.Staged
+        if (card.column != Column.VALIDATION) return ValidationDecision.Malformed
+        return when (val result = ci()) {
+            CiResult.Green -> {
+                val approved = mapOf("ci" to "green") + (head()?.let { mapOf("head" to it) } ?: emptyMap())
+                if (move(cardId, card, Column.STAGED, approved)) ValidationDecision.Staged else ValidationDecision.Malformed
+            }
+            is CiResult.Red -> {
+                val layer = redLayer()
+                val reason = result.summary.ifBlank { "CI failed" }
+                if (move(cardId, card, Column.CODING, mapOf("layer" to layer, "reason" to reason, "ci" to "red"))) {
+                    ValidationDecision.Returned(layer, reason)
+                } else {
+                    ValidationDecision.Malformed
+                }
+            }
+            CiResult.TimedOut -> ValidationDecision.CiUnresolved("ci_timeout")
+            CiResult.ForgeFailed -> ValidationDecision.CiUnresolved("forge_failed")
+        }
     }
 
     private fun block(cardId: String, card: Card, layer: String, reason: String): ValidationDecision {

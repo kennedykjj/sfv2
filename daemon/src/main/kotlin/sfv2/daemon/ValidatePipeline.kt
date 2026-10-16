@@ -41,6 +41,8 @@ class ValidatePipeline(
     private val maxRounds: Int = DEFAULT_VALIDATE_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
+    private val delivery: PullRequestDelivery? = null,
+    private val changedPaths: ChangedPaths = GitChangedPaths(),
 ) {
     private val outcome = ValidationOutcome(store, recorder, project.layers.map { it.name }.toSet(), clock)
 
@@ -63,15 +65,44 @@ class ValidatePipeline(
         for (round in 1..maxRounds) {
             val results = gates.evaluate(cardId, worktree.path)
             val report = review(cardId, worktree.path)
-            val decision = report?.let { outcome.apply(cardId, it, results.state) } ?: ValidationDecision.Malformed
+            val decision = try {
+                report?.let { decide(cardId, worktree, it, results.state) } ?: ValidationDecision.Malformed
+            } catch (e: PushRefusedException) {
+                return block(cardId, "push_refused")
+            }
             log.log("validate_round", mapOf("card" to cardId, "round" to round.toString(), "decision" to decision.javaClass.simpleName))
             when (decision) {
                 ValidationDecision.Staged, is ValidationDecision.Returned -> return
+                is ValidationDecision.CiUnresolved -> return block(cardId, decision.reason)
                 ValidationDecision.Held -> return block(cardId, "gates_failed: " + results.failedNames.joinToString(","))
                 ValidationDecision.Malformed -> Unit
             }
         }
         block(cardId, "review_malformed")
+    }
+
+    private fun decide(cardId: String, worktree: CardWorktree, report: String, gates: GatesState): ValidationDecision =
+        outcome.apply(
+            cardId, report, gates,
+            ci = { deliver(cardId, worktree) },
+            head = { delivery?.headOf(worktree.path) },
+            redLayer = { layerWithMostChanges(worktree.path) },
+        )
+
+    /** Without a delivery wired (tests of the earlier stages) there is no CI step and the approval stands on the gates. */
+    private fun deliver(cardId: String, worktree: CardWorktree): CiResult {
+        val title = store.card(cardId)?.title ?: cardId
+        return delivery?.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path) ?: CiResult.Green
+    }
+
+    private fun layerWithMostChanges(worktree: Path): String {
+        val changed = try {
+            changedPaths.between(worktree, "origin/main")
+        } catch (e: ChangedPathsException) {
+            emptyList()
+        }
+        val layers = project.layers
+        return layers.maxByOrNull { layer -> changed.count { it.startsWith(layer.path) } }?.name ?: layers.first().name
     }
 
     /** Runs one review session and returns the report the agent wrote during it, or null when it wrote none. */

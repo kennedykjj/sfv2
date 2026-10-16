@@ -146,6 +146,8 @@ class RefineRuntime private constructor(
                         configDir = dataDir.resolve("mcp"),
                         clock = clock,
                         model = MODEL,
+                        delivery = ProjectDelivery.create(project, dataDir.resolve("forge")),
+                        changedPaths = changedPaths,
                     )
                 },
                 pool = pool,
