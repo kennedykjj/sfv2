@@ -42,15 +42,27 @@ interface DevelopGates {
 /** The commit that is the worktree's HEAD, or null when it cannot be read. */
 fun interface WorktreeHead {
     fun of(worktree: Path): String?
+
+    /** The commit the daemon made for the QA tests (its message carries [QA_COMMIT_TRAILER]), or null. */
+    fun qaCommit(worktree: Path): String? = null
+
+    companion object {
+        const val QA_COMMIT_TRAILER = "sfv2-stage: qa"
+    }
 }
 
-/** `git rev-parse HEAD` without a shell. */
+/** `git rev-parse HEAD` and `git log --grep` without a shell. */
 class GitWorktreeHead(private val timeoutSeconds: Long = 10) : WorktreeHead {
-    override fun of(worktree: Path): String? {
+    override fun of(worktree: Path): String? = git(worktree, "rev-parse", "HEAD")
+
+    override fun qaCommit(worktree: Path): String? =
+        git(worktree, "log", "-n", "1", "--format=%H", "--fixed-strings", "--grep=${WorktreeHead.QA_COMMIT_TRAILER}")
+
+    private fun git(worktree: Path, vararg args: String): String? {
         val output = Files.createTempFile("worktree-head", ".out")
         try {
             val process = try {
-                ProcessBuilder("git", "-C", worktree.toString(), "rev-parse", "HEAD")
+                ProcessBuilder(listOf("git", "-C", worktree.toString()) + args)
                     .redirectErrorStream(true)
                     .redirectOutput(output.toFile())
                     .start()
@@ -143,7 +155,7 @@ class RealDevelopGates(
         execute(cardId, GateSpec(gateName(layer, "build"), command, worktree.resolve(layer.path), BUILD_TIMEOUT))
 
     private fun acceptanceEdit(cardId: String, layer: ProjectLayer, worktree: Path, plan: TestPlan): GateResult {
-        val qaCommit = qaCommits[cardId] ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
+        val qaCommit = head.qaCommit(worktree) ?: qaCommits[cardId] ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
         val files = plan.filesOf(layer)
         val verdict = try {
             AcceptanceEditGate(executor, runner).check(cardId, worktree, qaCommit, files, keepAssertions, runDir.resolve(cardId))
@@ -266,6 +278,10 @@ class RealDevelopGates(
 
 /** One pass of the develop stage: QA writes red tests, engineers implement per layer, gates move the card. */
 @Suppress("LongParameterList")
+private const val REPAIR_AFTER_GREEN_FAILURES = 2
+private const val QA_REPAIR_ROLE = "QA (reparo dos testes): a implementação já existe e os gates verdes falharam mais de uma vez. " +
+    "Se a causa é um defeito do próprio teste (preparação, fixture, diretório temporário repetido, id duplicado), " +
+    "corrija só o teste, sem enfraquecer nem remover asserção; se a causa é a implementação, não mude nada"
 private const val MAX_FEEDBACK_GATES = 3
 private const val MAX_FEEDBACK_CHARS = 1500
 private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
@@ -307,10 +323,12 @@ class DevelopPipeline(
             }
         }
         val worktree = worktrees.ensure(project, cardId, card.title)
-        var failed: List<GateResult> = emptyList()
-        var redPassed = false
+        var failed: List<GateResult> = reworkReason(cardId)
+        var redPassed = redProvenSinceSpec(cardId)
+        var greenFailures = 0
         for (round in 1..maxRounds) {
-            val outcome = playRound(cardId, worktree.path, redPassed, failed)
+            val outcome = playRound(cardId, worktree.path, redPassed, failed, qaRepair = greenFailures >= REPAIR_AFTER_GREEN_FAILURES)
+            greenFailures = if (outcome.redPassed && outcome.failed.isNotEmpty()) greenFailures + 1 else 0
             redPassed = outcome.redPassed
             failed = outcome.failed
             log.log("develop_round", mapOf("card" to cardId, "round" to round.toString(), "failed" to failed.size.toString()))
@@ -322,6 +340,32 @@ class DevelopPipeline(
         block(cardId, failed)
     }
 
+    /** Why the validation sent the card back to Coding, when this run is the rework it asked for. */
+    private fun reworkReason(cardId: String): List<GateResult> {
+        val events = store.events(cardId)
+        val lastValidation = events.indexOfLast { it.type == EventType.CARD_MOVED && it.payload["to"] == Column.VALIDATION.name }
+        val back = events.withIndex().lastOrNull { (index, event) ->
+            index > lastValidation && event.type == EventType.CARD_MOVED && event.payload["to"] == Column.CODING.name &&
+                event.payload["from"] in setOf(Column.VALIDATION.name, Column.STAGED.name)
+        }?.value ?: return emptyList()
+        val reason = back.payload["reason"]?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return listOf(GateResult("validate", false, reason))
+    }
+
+    /**
+     * True when every red gate of the card already passed since its spec was last produced: the QA tests were proven
+     * red then and the implementation committed afterwards would make a new red gate impossible (a card sent back to
+     * Coding after a blocked run, or after a restart, must not replay the QA).
+     */
+    private fun redProvenSinceSpec(cardId: String): Boolean {
+        val events = store.events(cardId)
+        val lastSpec = events.indexOfLast { it.type == EventType.CARD_MOVED && it.payload["to"] == Column.SPEC_REVIEW.name }
+        val afterSpec = events.drop(lastSpec + 1)
+        val reds = afterSpec.filter { it.type == EventType.GATE_FINISHED && it.payload["gate"]?.endsWith("-red") == true }
+        if (reds.isEmpty()) return false
+        return reds.groupBy { it.payload["gate"] }.values.all { runs -> runs.any { it.payload["verdict"] == "PASS" } }
+    }
+
     /** Where a round ended: whether the tests were proven red, and the gates that failed (empty when all are green). */
     private data class Round(val redPassed: Boolean, val failed: List<GateResult>)
 
@@ -330,7 +374,7 @@ class DevelopPipeline(
      * replaying the QA and the red gate over code that already implements the tests could never be red again.
      * The agents of the next round get the output of the gates that failed in the previous one.
      */
-    private fun playRound(cardId: String, worktree: Path, redPassed: Boolean, previous: List<GateResult>): Round {
+    private fun playRound(cardId: String, worktree: Path, redPassed: Boolean, previous: List<GateResult>, qaRepair: Boolean): Round {
         val model = modelStepUp.modelFor(cardId)
         val feedback = feedbackOf(previous)
         if (!redPassed) {
@@ -338,6 +382,11 @@ class DevelopPipeline(
             commitSession(cardId, worktree, "test", "tests")
             val red = gates.red(cardId, worktree).filter { !it.passed }
             if (red.isNotEmpty()) return Round(false, red)
+        }
+        if (redPassed && qaRepair) {
+            // Engineers cannot touch the QA tests: when the green gates failed twice, the test itself may be the defect.
+            runSession(cardId, worktree, model, QA_REPAIR_ROLE, feedback)
+            commitSession(cardId, worktree, "test", "tests")
         }
         val layers = gates.layers(worktree)
         layers.forEach { layer ->
@@ -353,16 +402,19 @@ class DevelopPipeline(
 
     /** The agents have no shell: what a session wrote becomes a commit of the card's branch here. */
     private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
+        if (type == "feat") RedStubFiles.removeEmptied(worktree)
         val card = store.card(cardId) ?: return
-        val message = ConventionText.commitSubject(
+        val subject = ConventionText.commitSubject(
             project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
         )
+        val message = if (type == "test") subject + "\n\n" + WorktreeHead.QA_COMMIT_TRAILER else subject
         if (!commit.commitAll(worktree, message)) log.log("develop_commit_failed", mapOf("card" to cardId, "scope" to scope))
     }
 
     private fun engineerRole(layer: ProjectLayer): String =
         "engenheiro da camada `${layer.name}` (caminho `${layer.path}`): implemente só dentro dela, até os testes de aceitação " +
-            "passarem, sem alterar os testes da QA"
+            "passarem, sem alterar os testes da QA. Se a spec pede dependência nova ou outra versão de uma, o catálogo " +
+            "`gradle/libs.versions.toml` (versão fixa) também é seu"
 
     private fun runSession(cardId: String, worktree: Path, model: String, role: String, feedback: String?) {
         val token = sessions.open(project.repo, "develop", cardId)
