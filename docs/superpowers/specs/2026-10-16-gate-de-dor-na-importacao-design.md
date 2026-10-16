@@ -15,6 +15,7 @@ _Product Owner_
 - AC-1: Dado a política de DoR ligada no projeto, quando importo (por id, por busca ou pelo board V0) um ticket sem algum campo exigido, então ele entra como card em Inbox bloqueado (CARD_BLOCKED) e o motivo lista os nomes dos campos que faltam, sem texto do ticket.
 - AC-2: Dado a política de DoR ligada, quando importo um ticket que cumpre todos os campos exigidos, então ele entra em Inbox sem bloqueio.
 - AC-3: Dado a política de DoR desligada ou ausente (padrão), quando importo qualquer ticket, então nenhum card é bloqueado por DoR.
+- AC-5: Dado a política de DoR ligada e a importação do board da V0 (`card.import_board`) de um ticket que a tabela coloca em outra coluna que não o Inbox (Ready for Refinement, Spec Review ou Done), quando o card é criado, então a DoR não bloqueia: ele já passou pelo refinamento na V0, e um `CARD_BLOCKED` em Spec Review ou em Done só prenderia o card; a DoR vale só para o card que nasce no Inbox.
 - AC-4: Dado um card bloqueado por DoR, quando o ticket é corrigido e reimportado, então o card continua bloqueado; só o desbloqueio do dono (já existente) o libera.
 
 **Fora de escopo:** sincronização contínua com o tracker; reavaliar a DoR depois da importação; desbloqueio automático; validar a qualidade do conteúdo (só presença dos campos); UI nova para configurar a política.
@@ -30,7 +31,7 @@ _UX/UI Designer_ — n/a
 _Tech Lead_
 
 - **Contratos:** `ProjectPolicies` ganha `dor: Set<DorField>` (vazio = política desligada, o padrão). `enum DorField(key)`: `TITLE("title")`, `BODY("body")`, `ACCEPTANCE_CRITERIA("acceptance_criteria")`, `LABEL("label")`. Config do projeto: chave `dor:` com lista de nomes de campo; valor desconhecido ou formato errado lança `InvalidPolicyException("dor...")`. Função pura `DorPolicy.missing(required, title, body, labels): List<DorField>` no `core` (título em branco, corpo em branco, corpo sem a palavra "critérios de aceitação"/"acceptance criteria" sem diferenciar caixa, nenhuma label), na ordem do enum.
-- **Importação:** `CardImport.create` e o ramo "criar" do `upsert`, da busca e do board V0 chamam `missing` com `project.policies.dor`; se a lista não é vazia, logo após o `CARD_CREATED` grava `CARD_BLOCKED` (ator `Actor.Factory("dor-gate")`, payload `reason = "dor_missing: <chaves separadas por vírgula>"`). Só cria; `reimport` não reavalia nem desbloqueia (o desbloqueio do dono é o já existente em `hasOpenBlock`/`CostBudget`). Log `key=value` com id do card e campos, nunca texto do ticket.
+- **Importação:** `CardImport.create` e o ramo "criar" do `upsert`, da busca e do board V0 chamam `missing` com `project.policies.dor`, mas só quando o card nasce em `INBOX` (o board V0 cria cards em outras colunas, que a DoR não bloqueia, AC-5); se a lista não é vazia, logo após o `CARD_CREATED` grava `CARD_BLOCKED` (ator `Actor.Factory("dor-gate")`, payload `reason = "dor_missing: <chaves separadas por vírgula>"`). Só cria; `reimport` não reavalia nem desbloqueia (o desbloqueio do dono é o já existente em `hasOpenBlock`/`CostBudget`). Log `key=value` com id do card e campos, nunca texto do ticket.
 - **Camadas e arquivos:** `core` (`ProjectPolicies.kt`, novo `DorPolicy.kt`); `daemon` (`CardImport.kt`, `ProjectRegistry.kt`: `POLICY_KEYS` ganha `"dor"`; `Protocol.kt` e `McpServerFactory.kt`: expor `dor` em `policies`/`policiesJson`).
 - **Migração:** nenhuma; projeto sem `dor:` mantém o comportamento atual.
 
@@ -43,6 +44,7 @@ _Tech Lead_
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
 | AC-3 | core | `core/src/test/kotlin/sfv2/core/ProjectPoliciesTest.kt` |
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
+| AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardImportTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
