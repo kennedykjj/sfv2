@@ -292,7 +292,7 @@ class SpecGatesTest {
                 clock,
             )
             val specPath = "docs/superpowers/specs/2026-10-16-skill-de-refine-via-mcp-design.md"
-            val request = SessionRequest("refine", worktree, "model", dir.resolve("mcp.json"))
+            val request = SessionRequest("refine", worktree, "model", dir.resolve("mcp.json"), "prompt")
 
             ScriptedRefineAgent(tools, template).run(FakeRuntime(listOf(SessionScript.Succeed)), request, "c36", specPath)
 

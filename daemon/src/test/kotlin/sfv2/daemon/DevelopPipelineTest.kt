@@ -202,6 +202,22 @@ class DevelopPipelineTest {
     }
 
     @Test
+    fun `AC-1 every session prompt carries the develop skill, the card and its role, QA first and then one engineer per layer`() {
+        card("c1")
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val runtime = succeeding(rounds(1))
+
+        pipeline(runtime, gates).run("c1")
+
+        val prompts = runtime.launched.map { it.prompt }
+        assertThat(prompts).allSatisfy { assertThat(it).startsWith(StageSkills.load("develop").trimEnd()).contains("`c1`") }
+        assertThat(prompts.first()).contains("QA (passo vermelho)")
+        assertThat(prompts.drop(1)).allSatisfy { assertThat(it).contains("engenheiro da camada") }
+        assertThat(prompts.drop(1).map { it.substringAfter("camada `").substringBefore("`") })
+            .containsExactlyInAnyOrderElementsOf(DevelopFixtures.project.layers.map { it.name })
+    }
+
+    @Test
     fun `AC-2 a finished run with every gate green moves the card to Validation`() {
         card("c1")
         val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))

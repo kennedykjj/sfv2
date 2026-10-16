@@ -157,7 +157,7 @@ class RefinePipeline(
         val token = sessions.open(project.repo, "refine", cardId)
         val config = writeConfig(token)
         try {
-            val result = runtime.launch(SessionRequest("refine", worktree, model, config))
+            val result = runtime.launch(SessionRequest("refine", worktree, model, config, StagePrompt.of("refine", cardId)))
             recordCost(cardId, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }

@@ -141,7 +141,7 @@ class ValidatePipeline(
         val token = sessions.open(project.repo, "validate", cardId)
         val config = writeMcpConfig(configDir, mcpPort, token)
         try {
-            val result = runtime.launch(SessionRequest("validate", worktree, model, config))
+            val result = runtime.launch(SessionRequest("validate", worktree, model, config, StagePrompt.of("validate", cardId)))
             costRecorder.record(cardId, UUID.randomUUID().toString(), runtimeName, "validate", model, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }
