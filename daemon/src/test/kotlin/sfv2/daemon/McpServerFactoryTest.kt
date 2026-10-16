@@ -328,6 +328,47 @@ class McpServerFactoryTest {
         assertThat(store.events("sibling").map { it.type.name }).doesNotContain("AGENT_REPORTED")
     }
 
+    private fun registeredTools(): Set<String> {
+        val factory = McpServerFactory(
+            sessions,
+            store,
+            SpecStore(database, dir.resolve("specs")),
+            registry,
+            McpFixtures.FakeFileSource(),
+            recorder = recorder,
+            worktrees = worktrees,
+            clock = clock,
+        )
+        return factory.serverFor(McpSession(alpha.repo, "engineer", "mine")).tools.keys
+    }
+
+    private fun citedTools(skill: String): Set<String> =
+        Regex("`([a-z]+(?:_[a-z]+)*_(?:get|request|report))`").findAll(skill).map { it.groupValues[1] }.toSet()
+
+    private fun ruleText(skill: String, rule: String): String? =
+        Regex("(?s)<!--\\s*rule:$rule\\s*-->\\s*(.+?)(?:\\n\\s*\\n|<!--|\\z)").find(skill)?.groupValues?.get(1)?.trim()
+
+    @Test
+    fun `AC-1 every tool the refine skill cites is registered by the server and an unknown one is caught`() {
+        val registered = registeredTools()
+
+        val cited = citedTools(StageSkills.load("refine"))
+
+        assertThat(cited).contains("card_get", "review_criteria_get", "layers_get", "file_write_request", "completion_report")
+        assertThat(registered).containsAll(cited)
+        assertThat(citedTools("use `card_get` then `ghost_get`") - registered).containsExactly("ghost_get")
+    }
+
+    @Test
+    fun `AC-3 the refine skill carries the three security rules each marked and followed by its text`() {
+        val skill = StageSkills.load("refine")
+
+        assertThat(ruleText(skill, "untrusted-data")).isNotBlank().contains("untrusted")
+        assertThat(ruleText(skill, "no-shell")).isNotBlank().contains("gh", "git", "board.sh")
+        assertThat(ruleText(skill, "write-scope")).isNotBlank().contains("docs/superpowers/specs/", "docs/superpowers/plans/")
+        assertThat(ruleText("<!-- rule:no-shell -->\nsem shell\n", "untrusted-data")).isNull()
+    }
+
     private companion object {
         val TTL: Duration = Duration.ofMinutes(10)
     }
