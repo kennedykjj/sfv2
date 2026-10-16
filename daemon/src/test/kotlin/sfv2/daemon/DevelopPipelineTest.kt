@@ -252,6 +252,44 @@ class DevelopPipelineTest {
     }
 
     @Test
+    fun `AC-4 a card whose red gates already passed since its spec does not replay the QA and the red gate`() {
+        card("c1")
+        val passed = Event(
+            EventId("red-pass"), clock.instant(), Actor.Factory("gate"), EventType.GATE_FINISHED,
+            mapOf("gate" to "daemon-red", "verdict" to "PASS"),
+        )
+        recorder.record("c1", requireNotNull(store.card("c1")), passed)
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val runtime = succeeding(rounds(1))
+
+        pipeline(runtime, gates).run("c1")
+
+        assertThat(gates.calls).doesNotContain("red")
+        assertThat(runtime.launched.map { it.prompt }).noneMatch { it.contains("QA (passo vermelho)") }
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+    }
+
+    @Test
+    fun `AC-4 a red gate that passed before the spec was produced again does not count`() {
+        card("c1")
+        val passed = Event(
+            EventId("red-pass"), clock.instant(), Actor.Factory("gate"), EventType.GATE_FINISHED,
+            mapOf("gate" to "daemon-red", "verdict" to "PASS"),
+        )
+        val specAgain = Event(
+            EventId("spec"), clock.instant(), Actor.Factory("refine"), EventType.CARD_MOVED,
+            mapOf("from" to "REFINEMENT", "to" to "SPEC_REVIEW"),
+        )
+        recorder.record("c1", requireNotNull(store.card("c1")), passed)
+        recorder.record("c1", requireNotNull(store.card("c1")), specAgain)
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+
+        pipeline(succeeding(rounds(1)), gates).run("c1")
+
+        assertThat(gates.calls).contains("red")
+    }
+
+    @Test
     fun `AC-2 a finished run with every gate green moves the card to Validation`() {
         card("c1")
         val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
