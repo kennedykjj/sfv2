@@ -16,6 +16,8 @@ _Product Owner_
 - **AC-4** — Given o daemon sem nenhum card, when a esteira abre, then as 10 colunas aparecem vazias, com um estado vazio legível, sem erro.
 - **AC-5** — Given cards em Spec Review ou Ready for Prod (decisões do dono), when a esteira é exibida, then esses cards se destacam com a regra de acento do DESIGN.md e os demais não.
 - **AC-6** — Given um card em destaque, when ele é movido para fora de uma coluna de decisão, then o destaque some.
+- **AC-9** — Given a aprovação do dono em Spec Review (o daemon grava `OWNER_APPROVED` com `payload.to` e não `CARD_MOVED`), when o evento chega, then o card sai de Spec Review e aparece na coluna de destino sem recarregar e o destaque dele some.
+- **AC-10** — Given um card criado direto numa coluna que não é a Inbox (importado do board da V0 ou reconstruído do forge, cujo `CARD_CREATED` só traz o título), when o evento chega, then o app consulta o card (`card.show`) e o coloca na coluna real em vez de supor Inbox.
 - **AC-7** — Given a conexão com o daemon cai e volta, when a assinatura é retomada, then a esteira reflete o estado atual sem perder nem duplicar eventos ocorridos durante a queda.
 - **AC-8** — Given a conexão caída, when a esteira é exibida, then ela indica que está desconectada em vez de mostrar dados como se fossem ao vivo.
 **Out of scope:** mover cards pelo dono (#65); visão detalhada do card (#66); filtros, busca e múltiplos projetos além do que o snapshot já traz; escrita de qualquer tipo no daemon.
@@ -44,13 +46,13 @@ _Tech Lead_
 
 **Contratos (nenhum novo no daemon; o app só lê):**
 - `{"cmd":"card.list"}` → `{"ok":true,"result":[{"id","title","column"}]}`, com `column` o nome do enum `Column` (`SPEC_REVIEW`).
-- `{"cmd":"events.subscribe"}` ou `{"cmd":"events.subscribe","after":<seq>}` → `{"ok":true,"result":"subscribed"}` e, daí em diante, uma linha por evento `{"event":{"seq","card","type","payload":{...},...}}`. O app usa `CARD_CREATED` (`payload.title`; a coluna inicial é Inbox, como em `CardCommands.create`) e `CARD_MOVED` (`payload.to` = nome do enum `Column`); os demais tipos avançam só o cursor `seq`. Linha `{"error":"subscriber too slow"}` ou conexão fechada = reconectar com `after`.
+- `{"cmd":"events.subscribe"}` ou `{"cmd":"events.subscribe","after":<seq>}` → `{"ok":true,"result":"subscribed"}` e, daí em diante, uma linha por evento `{"event":{"seq","card","type","payload":{...},...}}`. O app usa `CARD_MOVED` e `OWNER_APPROVED` (os dois levam `payload.to` = nome do enum `Column`; a aprovação do dono em Spec Review grava só `OWNER_APPROVED`) e `CARD_CREATED`, que traz só o título: um card importado da V0 ou reconstruído do forge nasce direto em outra coluna, então o app não supõe Inbox, consulta `{"cmd":"card.show","id":...}` (devolve `{id,title,column}`) e usa a coluna real; os demais tipos avançam só o cursor `seq`. Linha `{"error":"subscriber too slow"}` ou conexão fechada = reconectar com `after`.
 - Os `type` dos eventos são os nomes do enum `EventType` (`CARD_MOVED`), não `card.moved` como nos critérios.
 
 **Camada e módulo:** só `app` (depende só de `core`). Arquivos:
 - `app/build.gradle.kts`: plugin `kotlin("plugin.serialization")` e `libs.kotlinx.serialization.json` (já no catálogo, versão fixa) para ler as linhas JSON; sem dependência nova no catálogo.
-- `app/src/main/kotlin/sfv2/app/BoardState.kt`: puro, sem IO. `data class BoardCard(id, title, column: Column)`; `data class Board(cards, lastSeq: Long?)` imutável com `applySnapshot(cards)`, `applyEvent(BoardEvent)` (idempotente: `CARD_MOVED` põe o card em `to`, `CARD_CREATED` faz upsert na Inbox, card desconhecido num move é ignorado, `seq` menor ou igual ao `lastSeq` é descartado), `cardsIn(column)`; `val OWNER_DECISION_COLUMNS = setOf(SPEC_REVIEW, READY_FOR_PROD)` e `fun isWaitingForOwner(column)`.
-- `app/src/main/kotlin/sfv2/app/BoardSource.kt`: port `interface BoardSource { fun snapshot(): List<BoardCard>; fun subscribe(after: Long?, onEvent: (BoardEvent) -> Unit) }` (`subscribe` bloqueia até a conexão cair e lança `IOException`), `BoardEvent(seq, cardId, type, payload)`, e `SocketBoardSource` (socket Unix `$XDG_RUNTIME_DIR/sfv2/daemon.sock`, uma conexão por chamada, como o `SocketDaemonProbe`).
+- `app/src/main/kotlin/sfv2/app/BoardState.kt`: puro, sem IO. `data class BoardCard(id, title, column: Column)`; `data class Board(cards, lastSeq: Long?)` imutável com `applySnapshot(cards)`, `applyEvent(BoardEvent)` (idempotente: `CARD_MOVED` e `OWNER_APPROVED` põem o card em `to`, `CARD_CREATED` faz upsert na coluna que a consulta `card.show` informar (`BoardSource.fetchCard(id)`, nunca Inbox por suposição), card desconhecido num move é ignorado, `seq` menor ou igual ao `lastSeq` é descartado), `cardsIn(column)`; `val OWNER_DECISION_COLUMNS = setOf(SPEC_REVIEW, READY_FOR_PROD)` e `fun isWaitingForOwner(column)`.
+- `app/src/main/kotlin/sfv2/app/BoardSource.kt`: port `interface BoardSource { fun snapshot(): List<BoardCard>; fun fetchCard(id: String): BoardCard?; fun subscribe(after: Long?, onEvent: (BoardEvent) -> Unit) }` (`subscribe` bloqueia até a conexão cair e lança `IOException`), `BoardEvent(seq, cardId, type, payload)`, e `SocketBoardSource` (socket Unix `$XDG_RUNTIME_DIR/sfv2/daemon.sock`, uma conexão por chamada, como o `SocketDaemonProbe`).
 - `app/src/main/kotlin/sfv2/app/BoardMonitor.kt`: sem UI. Recebe `BoardSource`, o `StateFlow<ConnectionState>` do `ConnectionMonitor` e um dispatcher/scheduler injetado. Quando `Connected`: assina primeiro (sem `after`, ou com o `lastSeq` já visto), depois lê o `snapshot` e o aplica antes dos eventos (último evento por card vence, então a corrida entre os dois é inofensiva); ao cair a assinatura, marca `live=false`, espera o próximo `Connected` e reassina com `after=lastSeq`, sem recarregar nem duplicar. Expõe `StateFlow<BoardView(board: Board, live: Boolean)>`; antes do primeiro snapshot não há `BoardView`.
 - `app/src/main/kotlin/sfv2/app/BoardScreen.kt`: Compose, renderiza `BoardView` conforme `## UX` (tokens do `DESIGN.md`; destaque `sand` só em `isWaitingForOwner`).
 - `app/src/main/kotlin/sfv2/app/Main.kt`: `Connected` com `BoardView` mostra a esteira; sem `BoardView` ainda mostra o `ConnectionScreen`; `Disconnected` com `BoardView` mantém a esteira (esmaecida, faixa de desconectado).
@@ -76,6 +78,8 @@ Testes em processo, sem janela: `BoardState` puro e `BoardMonitor` com `BoardSou
 | AC-6 | app | `app/src/test/kotlin/sfv2/app/BoardStateTest.kt` |
 | AC-7 | app | `app/src/test/kotlin/sfv2/app/BoardMonitorTest.kt` |
 | AC-8 | app | `app/src/test/kotlin/sfv2/app/BoardMonitorTest.kt` |
+| AC-9 | app | `app/src/test/kotlin/sfv2/app/BoardMonitorTest.kt` |
+| AC-10 | app | `app/src/test/kotlin/sfv2/app/BoardMonitorTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
