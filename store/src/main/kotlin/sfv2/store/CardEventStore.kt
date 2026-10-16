@@ -12,13 +12,16 @@ import sfv2.core.TextHash
 /** A card together with its stored id. */
 data class StoredCard(val id: String, val card: Card)
 
+/** An event with its database-assigned sequence number and card id. */
+data class StoredEvent(val seq: Long, val cardId: String, val event: Event)
+
 /** Writes a card and its event in one transaction. The event log has no update or delete operation. */
 class CardEventStore(private val database: Database) {
     private val queries = database.queries.schemaQueries
 
     /** Upserts the card and appends the event atomically: a failure in either write rolls back both. */
-    fun recordChange(cardId: String, card: Card, event: Event) {
-        database.queries.transaction {
+    fun recordChange(cardId: String, card: Card, event: Event): Long =
+        database.queries.transactionWithResult {
             // Insert-then-update keeps the card's rowid, so cards() order stays stable across changes.
             queries.insertCardIfAbsent(id = cardId, title = card.title, column_name = card.column.name)
             queries.updateCard(title = card.title, column_name = card.column.name, id = cardId)
@@ -43,8 +46,13 @@ class CardEventStore(private val database: Database) {
                 type = event.type.name,
                 payloadJson = EventJson.encode(event),
             )
+            queries.eventSeqById(event.id.value).executeAsOne()
         }
-    }
+
+    /** Events with seq greater than [seq], in seq order. */
+    fun eventsAfter(seq: Long): List<StoredEvent> =
+        queries.eventsAfter(seq).executeAsList()
+            .map { StoredEvent(it.seq, it.card_id, EventJson.decode(it.payload_json)) }
 
     fun events(cardId: String): List<Event> =
         queries.eventPayloadsByCard(cardId).executeAsList().map { EventJson.decode(it) }
