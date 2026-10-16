@@ -14,6 +14,7 @@ class CardEventStore(private val database: Database) {
     fun recordChange(cardId: String, card: Card, event: Event) {
         database.queries.transaction {
             queries.upsertCard(id = cardId, title = card.title, column_name = card.column.name)
+            queries.updateCard(id = cardId, title = card.title, column_name = card.column.name)
             queries.insertEvent(
                 id = event.id.value,
                 cardId = cardId,

@@ -1,0 +1,20 @@
+CREATE TABLE event_new (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    card_id TEXT NOT NULL REFERENCES card(id),
+    at TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    type TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
+INSERT INTO event_new (id, card_id, at, actor, type, payload_json)
+SELECT id, card_id, at, actor, type, payload_json FROM event ORDER BY rowid;
+
+DROP INDEX event_card_id;
+
+DROP TABLE event;
+
+ALTER TABLE event_new RENAME TO event;
+
+CREATE INDEX event_card_id ON event(card_id);

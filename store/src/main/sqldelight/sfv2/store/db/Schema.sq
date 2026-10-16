@@ -5,8 +5,9 @@ CREATE TABLE card (
 );
 
 CREATE TABLE event (
-    id TEXT NOT NULL PRIMARY KEY,
-    card_id TEXT NOT NULL,
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    card_id TEXT NOT NULL REFERENCES card(id),
     at TEXT NOT NULL,
     actor TEXT NOT NULL,
     type TEXT NOT NULL,
@@ -28,15 +29,18 @@ selectSpec:
 SELECT path, hash FROM spec WHERE card_id = ?;
 
 upsertCard:
-INSERT OR REPLACE INTO card (id, title, column_name)
+INSERT OR IGNORE INTO card (id, title, column_name)
 VALUES (:id, :title, :column_name);
+
+updateCard:
+UPDATE card SET title = :title, column_name = :column_name WHERE id = :id;
 
 insertEvent:
 INSERT INTO event (id, card_id, at, actor, type, payload_json)
 VALUES (:id, :cardId, :at, :actor, :type, :payloadJson);
 
 eventPayloadsByCard:
-SELECT payload_json FROM event WHERE card_id = :cardId ORDER BY rowid;
+SELECT payload_json FROM event WHERE card_id = :cardId ORDER BY seq;
 
 cardById:
 SELECT title, column_name FROM card WHERE id = :id;
