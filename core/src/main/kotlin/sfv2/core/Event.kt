@@ -26,6 +26,7 @@ enum class EventType {
     AGENT_WRITE_REQUESTED,
     PR_MERGED,
     MAIN_CI_RERUN,
+    CARD_REIMPORTED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */
