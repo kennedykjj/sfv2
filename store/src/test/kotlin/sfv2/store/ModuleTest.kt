@@ -471,6 +471,7 @@ class ModuleTest {
             }
             c.createStatement().use { it.execute("PRAGMA user_version = 3") }
         }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
 
         Database.open(file).use { db ->
             val store = CardEventStore(db)
