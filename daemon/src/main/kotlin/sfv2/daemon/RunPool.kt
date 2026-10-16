@@ -49,11 +49,16 @@ class RunPool(
     @Synchronized
     fun sweep(): List<RunLock> {
         val dead = locks.values.filter { !probe.isAlive(it.pid, it.startedAt) }
-        dead.forEach { lock ->
+        return dead.filter { lock ->
+            try {
+                recordRelease(lock)
+            } catch (e: RuntimeException) {
+                log.log("lock_release_failed", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
+                return@filter false
+            }
             locks.remove(lock.cardId)
-            recordRelease(lock)
+            true
         }
-        return dead
     }
 
     @Synchronized
