@@ -1,0 +1,13 @@
+{
+  "issue": 111,
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "solo": true,
+  "rounds": 0,
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "notes": ["snapshot store/src/main/sqldelight/databases/3.db not generated: gradle runs only through gates; verifyMigrations passed without it"]
+}
