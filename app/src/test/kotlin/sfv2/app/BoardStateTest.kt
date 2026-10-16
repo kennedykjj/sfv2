@@ -191,6 +191,97 @@ class BoardStateTest {
     }
 
     @Test
+    fun `AC-1 flow bar has one segment per column with statistics in flow order with the seconds`() {
+        val times = mapOf(
+            Column.STAGED to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 200L),
+            Column.CODING to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 600L),
+            Column.REFINEMENT to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 300L),
+            Column.VALIDATION to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 100L),
+            Column.SPEC_REVIEW to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 800L),
+        )
+
+        val split = TimeSplit.of(times)
+
+        assertThat(split?.segments).containsExactly(
+            TimeSegment(Column.REFINEMENT, 300L),
+            TimeSegment(Column.SPEC_REVIEW, 800L),
+            TimeSegment(Column.CODING, 600L),
+            TimeSegment(Column.VALIDATION, 100L),
+            TimeSegment(Column.STAGED, 200L),
+        )
+    }
+
+    @Test
+    fun `AC-1 flow bar gives no segment to a column without statistics`() {
+        val times = mapOf(
+            Column.REFINEMENT to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 300L),
+            Column.STAGED to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 200L),
+        )
+
+        val split = TimeSplit.of(times)
+
+        assertThat(split?.segments?.map { it.column }).containsExactly(Column.REFINEMENT, Column.STAGED)
+    }
+
+    @Test
+    fun `AC-2 wait percent is the wait segments over all segments`() {
+        val times = mapOf(
+            Column.REFINEMENT to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 600L),
+            Column.SPEC_REVIEW to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 300L),
+            Column.CODING to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 600L),
+            Column.VALIDATION to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 300L),
+            Column.STAGED to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 200L),
+        )
+
+        assertThat(TimeSplit.of(times)?.waitPercent).isEqualTo(25)
+    }
+
+    @Test
+    fun `AC-2 wait percent rounds to the nearest integer and a half goes up`() {
+        fun percent(work: Long, wait: Long): Int? = TimeSplit.of(
+            mapOf(
+                Column.CODING to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, work),
+                Column.STAGED to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, wait),
+            ),
+        )?.waitPercent
+
+        assertThat(percent(work = 7L, wait = 1L)).isEqualTo(13)
+        assertThat(percent(work = 2L, wait = 1L)).isEqualTo(33)
+        assertThat(percent(work = 1L, wait = 2L)).isEqualTo(67)
+        assertThat(percent(work = 0L, wait = 5L)).isEqualTo(100)
+        assertThat(percent(work = 5L, wait = 0L)).isEqualTo(0)
+    }
+
+    @Test
+    fun `AC-3 flow bar is absent when no column has statistics`() {
+        assertThat(TimeSplit.of(emptyMap())).isNull()
+    }
+
+    @Test
+    fun `AC-3 flow bar is absent when the total seconds is zero instead of showing 0 percent`() {
+        val times = mapOf(
+            Column.CODING to BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 0L),
+            Column.STAGED to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 0L),
+        )
+
+        assertThat(TimeSplit.of(times)).isNull()
+    }
+
+    @Test
+    fun `AC-3 flow bar ignores statistics of columns outside the flow stages`() {
+        val times = mapOf(Column.INBOX to BoardFixtures.aColumnTime(ColumnTimeKind.MEAN_WAIT, 900L))
+
+        assertThat(TimeSplit.of(times)).isNull()
+    }
+
+    @Test
+    fun `AC-6 flow bar model carries only column names and numbers, never card text`() {
+        assertThat(TimeSegment::class.java.declaredFields.map { it.name }).containsExactlyInAnyOrder("column", "seconds")
+        assertThat(TimeSplit::class.java.declaredFields.map { it.name }.filterNot { it == "Companion" })
+            .containsExactlyInAnyOrder("segments", "waitPercent")
+    }
+
+    @Test
     fun `AC-6 a work column subtitle says median and the minutes`() {
         val label = ColumnTimeLabel.of(BoardFixtures.aColumnTime(ColumnTimeKind.MEDIAN, 360L))
 
