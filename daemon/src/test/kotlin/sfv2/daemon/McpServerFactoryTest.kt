@@ -18,8 +18,10 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
+import sfv2.core.EventType
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.SpecStore
@@ -36,6 +38,9 @@ class McpServerFactoryTest {
     private lateinit var registry: ProjectRegistry
     private lateinit var sessions: McpSessions
     private lateinit var endpoint: McpEndpoint
+    private lateinit var events: EventStream
+    private lateinit var recorder: EventRecorder
+    private lateinit var worktrees: WorktreeManager
     private val http = HttpClient.newHttpClient()
     private val clock = MutableClock(Instant.parse("2026-10-16T10:00:00Z"))
 
@@ -49,7 +54,19 @@ class McpServerFactoryTest {
         alpha = register(registry, config, "alpha")
         beta = register(registry, config, "beta")
         sessions = McpSessions(clock, TTL)
-        endpoint = McpServerFactory(sessions, store, specs, registry, McpFixtures.FakeFileSource()).start()
+        events = EventStream(store)
+        recorder = EventRecorder(store, events)
+        worktrees = WorktreeManager(dir.resolve("wt"), WorktreeFixtures.FakeWorktreeGit())
+        endpoint = McpServerFactory(
+            sessions,
+            store,
+            specs,
+            registry,
+            McpFixtures.FakeFileSource(),
+            recorder = recorder,
+            worktrees = worktrees,
+            clock = clock,
+        ).start()
         aCard("mine", alpha, "Add login")
         aCard("theirs", beta, "Secret work")
     }
@@ -59,6 +76,7 @@ class McpServerFactoryTest {
         // HttpClient.close() waits for its selector thread and connections, so their fds are released before the next test class.
         http.close()
         endpoint.close()
+        events.close()
         database.close()
     }
 
@@ -130,7 +148,7 @@ class McpServerFactoryTest {
 
     @Test
     fun `a valid token lists the five tools and reads a card of its project marked untrusted`() {
-        val token = sessions.open(alpha.repo)
+        val token = sessions.open(alpha.repo, "engineer", "mine")
         val sessionId = initialize(token)
 
         val list = post("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""", token, sessionId = sessionId)
@@ -142,7 +160,7 @@ class McpServerFactoryTest {
 
     @Test
     fun `a card of another project is refused through the server as a tool error without its content`() {
-        val token = sessions.open(alpha.repo)
+        val token = sessions.open(alpha.repo, "engineer", "mine")
         val sessionId = initialize(token)
 
         val body = callCard(token, sessionId, "theirs").body()
@@ -165,7 +183,7 @@ class McpServerFactoryTest {
 
     @Test
     fun `a request with a foreign origin is refused even with a valid token`() {
-        val token = sessions.open(alpha.repo)
+        val token = sessions.open(alpha.repo, "engineer", "mine")
 
         val response = post("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""", token, origin = "http://evil.example")
 
@@ -174,8 +192,8 @@ class McpServerFactoryTest {
 
     @Test
     fun `AC-1 a session id opened with the token of one project is refused for another token and stays intact`() {
-        val tokenA = sessions.open(alpha.repo)
-        val tokenB = sessions.open(beta.repo)
+        val tokenA = sessions.open(alpha.repo, "engineer", "mine")
+        val tokenB = sessions.open(beta.repo, "engineer", "theirs")
         val sessionA = initialize(tokenA)
 
         val foreign = listTools(tokenB, sessionA)
@@ -194,7 +212,7 @@ class McpServerFactoryTest {
 
     @Test
     fun `AC-2 a token is valid one tick before its ttl and refused at the ttl with its sessions`() {
-        val token = sessions.open(alpha.repo)
+        val token = sessions.open(alpha.repo, "engineer", "mine")
         val sessionId = initialize(token)
 
         clock.now = clock.now.plus(TTL).minusMillis(1)
@@ -209,8 +227,8 @@ class McpServerFactoryTest {
 
     @Test
     fun `AC-2 closing a token refuses it and its sessions without touching another project's token`() {
-        val tokenA = sessions.open(alpha.repo)
-        val tokenB = sessions.open(beta.repo)
+        val tokenA = sessions.open(alpha.repo, "engineer", "mine")
+        val tokenB = sessions.open(beta.repo, "engineer", "theirs")
         val sessionA = initialize(tokenA)
         val sessionB = initialize(tokenB)
 
@@ -238,10 +256,13 @@ class McpServerFactoryTest {
             SpecStore(database, dir.resolve("specs")),
             registry,
             ThrowingFiles(),
-            log,
+            recorder = recorder,
+            worktrees = worktrees,
+            clock = clock,
+            log = log,
         ).start()
         try {
-            val token = sessions.open(alpha.repo)
+            val token = sessions.open(alpha.repo, "engineer", "mine")
             val sessionId = initialize(token, failing.port)
 
             val body = post(
@@ -260,6 +281,51 @@ class McpServerFactoryTest {
         } finally {
             failing.close()
         }
+    }
+
+    private fun callTool(token: String, sessionId: String, name: String, arguments: String): HttpResponse<String> = post(
+        """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"$name","arguments":$arguments}}""",
+        token,
+        sessionId = sessionId,
+    )
+
+    @Test
+    fun `AC-1 a completion report through the server records an agent event with the session role`() {
+        val token = sessions.open(alpha.repo, "engineer", "mine")
+        val sessionId = initialize(token)
+
+        assertThat(listTools(token, sessionId).body()).contains("completion_report", "file_write_request")
+        val body = callTool(token, sessionId, "completion_report", """{"cardId":"mine","summary":"all green"}""").body()
+
+        assertThat(body).contains("eventId").doesNotContain("\"isError\":true")
+        val reported = store.events("mine").single { it.type.name == "AGENT_REPORTED" }
+        assertThat(reported.actor).isEqualTo(Actor.Agent("engineer"))
+        assertThat(reported.payload).containsEntry("summary", "all green")
+        assertThat(reported.at).isEqualTo(clock.instant())
+    }
+
+    @Test
+    fun `AC-2 a completion report leaves the card in its column`() {
+        val token = sessions.open(alpha.repo, "engineer", "mine")
+        val sessionId = initialize(token)
+
+        callTool(token, sessionId, "completion_report", """{"cardId":"mine","summary":"finished, please move me"}""")
+
+        assertThat(store.card("mine")?.column).isEqualTo(Column.CODING)
+        assertThat(store.events("mine").map { it.type }).doesNotContain(EventType.CARD_MOVED)
+        assertThat(store.events("mine").map { it.type.name }).contains("AGENT_REPORTED")
+    }
+
+    @Test
+    fun `AC-9 through the server a report for another card is a tool error and records nothing`() {
+        aCard("sibling", alpha, "Sibling work")
+        val token = sessions.open(alpha.repo, "engineer", "mine")
+        val sessionId = initialize(token)
+
+        val body = callTool(token, sessionId, "completion_report", """{"cardId":"sibling","summary":"done"}""").body()
+
+        assertThat(body).contains("\"isError\":true").contains("sibling")
+        assertThat(store.events("sibling").map { it.type.name }).doesNotContain("AGENT_REPORTED")
     }
 
     private companion object {

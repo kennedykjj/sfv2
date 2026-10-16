@@ -1,5 +1,7 @@
 package sfv2.daemon
 
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.text.Normalizer
 
@@ -33,6 +35,10 @@ class WorktreeManager(
         }
         return CardWorktree(cardId, dir, branch)
     }
+
+    /** The card's worktree directory when it already exists; never creates anything. */
+    fun existing(project: Project, cardId: String): Path? =
+        directoryFor(project, cardId).takeIf { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) }
 
     /** Removes the worktree and local branch; keeps both when the worktree has uncommitted changes. */
     @Synchronized

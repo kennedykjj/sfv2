@@ -19,6 +19,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
@@ -52,6 +53,9 @@ class McpServerFactory(
     private val specs: SpecStore,
     private val registry: ProjectRegistry,
     private val files: ProjectFileSource,
+    private val recorder: EventRecorder,
+    private val worktrees: WorktreeManager,
+    private val clock: Clock,
     private val log: DaemonLog = StderrDaemonLog,
 ) {
 
@@ -121,8 +125,38 @@ class McpServerFactory(
                 }
             }
         }
+        val requests = McpRequestTools(session, store, recorder, worktrees, registry, clock, log)
+        server.addTool(
+            "completion_report",
+            "Reports that the agent finished its work on the card; the card does not move.",
+            stringSchema("cardId", "summary"),
+        ) { request ->
+            toolResult("completion_report") {
+                val view = requests.completionReport(request.cardId(), request.text("summary"))
+                buildJsonObject { put("eventId", view.eventId) }
+            }
+        }
+        server.addTool(
+            "file_write_request",
+            "Writes a file inside the card's worktree.",
+            stringSchema("cardId", "path", "content"),
+        ) { request ->
+            toolResult("file_write_request") {
+                val view = requests.fileWriteRequest(request.cardId(), request.text("path"), request.text("content"))
+                buildJsonObject { put("path", view.path); put("bytes", view.bytes) }
+            }
+        }
         return server
     }
+
+    private fun CallToolRequest.text(name: String): String =
+        (params.arguments?.get(name) as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ?: throw McpToolException("argument $name is required")
+
+    private fun stringSchema(vararg names: String) = ToolSchema(
+        properties = buildJsonObject { names.forEach { putJsonObject(it) { put("type", "string") } } },
+        required = names.toList(),
+    )
 
     private fun toolResult(tool: String, block: () -> JsonObject): CallToolResult =
         try {

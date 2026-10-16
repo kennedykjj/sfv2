@@ -13,8 +13,8 @@ data class UntrustedText(val source: String, val text: String) {
     val trust: String = "untrusted"
 }
 
-/** An MCP session is bound to one project, identified by [Project.repo]. */
-data class McpSession(val repo: String)
+/** An MCP session is bound to one project ([Project.repo]), one agent role and one card. */
+data class McpSession(val repo: String, val role: String, val cardId: String)
 
 /** Opens sessions and hands out one random bearer token per session. */
 class McpSessions(private val clock: Clock = Clock.systemUTC(), private val ttl: Duration = DEFAULT_TTL) {
@@ -28,11 +28,11 @@ class McpSessions(private val clock: Clock = Clock.systemUTC(), private val ttl:
         require(!ttl.isZero && !ttl.isNegative) { "ttl must be positive" }
     }
 
-    fun open(repo: String): String {
+    fun open(repo: String, role: String, cardId: String): String {
         val bytes = ByteArray(TOKEN_BYTES)
         random.nextBytes(bytes)
         val token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-        sessions[digest(token)] = Entry(McpSession(repo), clock.instant().plus(ttl))
+        sessions[digest(token)] = Entry(McpSession(repo, role, cardId),clock.instant().plus(ttl))
         return token
     }
 

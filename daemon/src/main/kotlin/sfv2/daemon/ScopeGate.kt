@@ -15,19 +15,24 @@ object ScopeGate {
     private val SHARED = listOf("gradle/libs.versions.toml", "docs/superpowers").map(::segments)
 
     fun check(project: Project, changed: List<String>, stageLayers: Set<String>): ScopeVerdict {
-        val forbiddenPrefixes = PROTECTED + project.forbidden.map(::segments)
         val allowedPrefixes = SHARED + project.layers.filter { it.name in stageLayers }.map { segments(it.path) }
         val forbidden = mutableListOf<String>()
         val outside = mutableListOf<String>()
         for (path in changed.distinct()) {
             val parts = segments(path)
             when {
-                isUnsafe(path, parts) || forbiddenPrefixes.any { startsWith(parts, it) } -> forbidden += path
+                isProtected(project, path) -> forbidden += path
                 allowedPrefixes.none { startsWith(parts, it) } -> outside += path
             }
         }
         if (forbidden.isEmpty() && outside.isEmpty()) return ScopeVerdict.Pass
         return ScopeVerdict.Violations(forbidden.sorted(), outside.sorted())
+    }
+
+    /** True when the path is unsafe or sits under a protected prefix or one of the project's `forbidden` ones. */
+    fun isProtected(project: Project, path: String): Boolean {
+        val parts = segments(path)
+        return isUnsafe(path, parts) || (PROTECTED + project.forbidden.map(::segments)).any { startsWith(parts, it) }
     }
 
     private fun segments(path: String): List<String> = path.split("/").filter { it.isNotEmpty() && it != "." }
