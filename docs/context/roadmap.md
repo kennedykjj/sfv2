@@ -97,7 +97,7 @@ Cada fase deixa a fábrica usável e só termina quando o teste de saída passa.
 
 | Issue | Item | Título | Camada | Bloqueada por | Estado |
 |---|---|---|---|---|---|
-| #52 | S4-01 | Interface Tracker e fake | `ports` | #51 | aberta |
+| #52 | S4-01 | Interface Tracker e fake | `ports` | #43 | aberta |
 | #53 | S4-02 | Tracker GitHub Issues via gh | `adapters` | #52 | aberta |
 | #54 | S4-03 | Comando importar | `daemon` | #53 | aberta |
 | #55 | S4-04 | Marcos opcionais e aviso de texto alterado | `daemon` | #54, #19 | aberta |
@@ -110,7 +110,7 @@ Cada fase deixa a fábrica usável e só termina quando o teste de saída passa.
 
 | Issue | Item | Título | Camada | Bloqueada por | Estado |
 |---|---|---|---|---|---|
-| #58 | S5-01 | Serviço systemd do usuário | `daemon` | #57 | aberta |
+| #58 | S5-01 | Serviço systemd do usuário | `daemon` | #15 | aberta |
 | #59 | S5-02 | sfv2 doctor | `cli` | #58 | aberta |
 | #60 | S5-03 | Importar os cards da V0 | `cli` | #54 | aberta |
 | #61 | S5-04 | Relatório de lead time e custo por card | `daemon` | #33 | aberta |
@@ -139,11 +139,11 @@ Cada fase deixa a fábrica usável e só termina quando o teste de saída passa.
 
 | Issue | Item | Título | Camada | Bloqueada por | Estado |
 |---|---|---|---|---|---|
-| #73 | S7-01 | Estados do assistente derivados de eventos | `core` | #63 | aberta |
+| #73 | S7-01 | Estados do assistente derivados de eventos | `core` | #17 | aberta |
 | #74 | S7-02 | Texto com personalidade | `daemon` | #73 | aberta |
 | #75 | S7-03 | Skin terminal no canto | `app` | #74 | aberta |
 | #76 | S7-04 | Skin pop-up animado | `app` | #74 | aberta |
-| #77 | S7-05 | Decisão sobre o cartum | à mão | #75, #76 | aberta |
+| #77 | S7-05 | Decisão sobre o cartum | à mão | #75, #76 | adiada (decisão 20) |
 
 ## Fase 8 · Portes e onboarding (rascunho)
 
@@ -152,9 +152,9 @@ Cada fase deixa a fábrica usável e só termina quando o teste de saída passa.
 | Issue | Item | Título | Camada | Bloqueada por | Estado |
 |---|---|---|---|---|---|
 | #78 | S8-01 | Transporte TCP local com token | `daemon` | #62 | aberta |
-| #79 | S8-02 | Serviço no macOS e no Windows | `daemon` | #78 | aberta |
-| #80 | S8-03 | CI e pacotes para macOS e Windows | à mão | #79 | aberta |
-| #81 | S8-04 | Atualizador automático | `app` | #80 | aberta |
+| #79 | S8-02 | Serviço no macOS e no Windows | `daemon` | #78 | adiada (decisão 20/21) |
+| #80 | S8-03 | CI e pacotes para macOS e Windows | à mão | #79 | adiada (decisão 20/21) |
+| #81 | S8-04 | Atualizador automático | `app` | #80 | adiada (decisão 20/21) |
 | #82 | S8-05 | sfv2 init com prontidão do projeto | `cli` | #62 | aberta |
 | #83 | S8-06 | Rascunho assistido dos documentos do projeto | `daemon` | #82 | aberta |
 | #84 | S8-07 | CLI nativa com GraalVM | `cli` | #80 | aberta |
@@ -165,9 +165,9 @@ Cada fase deixa a fábrica usável e só termina quando o teste de saída passa.
 
 | Issue | Item | Título | Camada | Bloqueada por | Estado |
 |---|---|---|---|---|---|
-| #85 | S9-01 | Tracker Jira | `adapters` | #62 | aberta |
+| #85 | S9-01 | Tracker Jira | `adapters` | #52 | aberta |
 | #86 | S9-02 | Gate de DoR na importação | `daemon` | #85 | aberta |
-| #87 | S9-03 | Runtime via Bedrock, Vertex e proxy | `adapters` | #62 | aberta |
+| #87 | S9-03 | Runtime via Bedrock, Vertex e proxy | `adapters` | #21 | aberta |
 | #88 | S9-04 | Outbox com confirmação por padrão | `daemon` | #85 | aberta |
-| #89 | S9-05 | Exportar a trilha de auditoria | `cli` | #62 | aberta |
+| #89 | S9-05 | Exportar a trilha de auditoria | `cli` | #17 | aberta |
 | #90 | S9-06 | Convenções corporativas | `daemon` | #85 | aberta |
