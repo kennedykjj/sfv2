@@ -5,6 +5,7 @@ import java.util.UUID
 import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
+import sfv2.core.DorPolicy
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
@@ -164,7 +165,26 @@ class CardImport private constructor(
         recorder.record(id, card, event)
         store.assignProject(id, project.repo)
         log.log("card_imported", mapOf("card" to id, "externalId" to item.id))
+        if (column == Column.INBOX) blockIfIncomplete(id, card, item, project)
         return CardView(id, card.title, card.column)
+    }
+
+    /** DoR gate: a new Inbox card whose ticket lacks a required field is blocked right after creation. */
+    private fun blockIfIncomplete(id: String, card: Card, item: TrackerItem, project: Project) {
+        val missing = DorPolicy.missing(
+            project.policies.dor, item.title.value, item.body.value, item.labels.map { it.value },
+        )
+        if (missing.isEmpty()) return
+        val keys = missing.joinToString(",") { it.key }
+        val event = Event(
+            id = EventId(UUID.randomUUID().toString()),
+            at = clock.instant(),
+            actor = Actor.Factory("dor-gate"),
+            type = EventType.CARD_BLOCKED,
+            payload = mapOf("reason" to "dor_missing: $keys"),
+        )
+        recorder.record(id, card, event)
+        log.log("card_blocked_by_dor", mapOf("card" to id, "externalId" to item.id, "missing" to keys))
     }
 
     private fun reimport(item: TrackerItem, current: StoredCard): CardView {
