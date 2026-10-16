@@ -91,6 +91,46 @@ class ProjectRegistryTest {
     }
 
     @Test
+    fun `layer build test and ran are read from factory yml as tokens and text`() {
+        val repo = aRepo("commands")
+        val yaml = """
+            project:
+              name: commands
+            layers:
+              - name: daemon
+                path: daemon/
+                build: ../gradlew :daemon:build --console=plain
+                test: ../gradlew :daemon:test --tests {selector}
+                ran: 'PASSED'
+              - name: core
+                path: core/
+        """.trimIndent()
+        val source = FakeSource().also { it.put(repo, yaml) }
+
+        val registered = ProjectRegistry(source).register(repo)
+
+        val daemon = registered.layers.first { it.name == "daemon" }
+        assertThat(daemon.build).containsExactly("../gradlew", ":daemon:build", "--console=plain")
+        assertThat(daemon.test).containsExactly("../gradlew", ":daemon:test", "--tests", "{selector}")
+        assertThat(daemon.ran).isEqualTo("PASSED")
+        val core = registered.layers.first { it.name == "core" }
+        assertThat(core.build).isNull()
+        assertThat(core.test).isNull()
+        assertThat(core.ran).isNull()
+    }
+
+    @Test
+    fun `a layer test command that is not text is refused naming the field`() {
+        val repo = aRepo("bad-test")
+        val yaml = "project:\n  name: bad-test\nlayers:\n  - name: core\n    path: core/\n    test: [a, b]\n"
+        val source = FakeSource().also { it.put(repo, yaml) }
+
+        val refused = assertThrows(InvalidProjectConfigException::class.java) { ProjectRegistry(source).register(repo) }
+
+        assertThat(refused.field).isEqualTo("layers[0].test")
+    }
+
+    @Test
     fun `unknown keys are ignored but an invalid known field still names itself`() {
         val ok = aRepo("extra-keys")
         val bad = aRepo("extra-keys-bad")

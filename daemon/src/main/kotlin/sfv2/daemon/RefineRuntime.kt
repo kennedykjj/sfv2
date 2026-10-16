@@ -18,16 +18,19 @@ class RefineRuntime private constructor(
     val dispatcher: Dispatcher,
     private val endpoint: McpEndpoint,
     val dispatcherAllowed: Boolean,
+    private val stepUp: ModelStepUp,
 ) : AutoCloseable {
 
     override fun close() {
         dispatcher.close()
+        stepUp.close()
         endpoint.close()
     }
 
     companion object {
         private const val POOL_CAPACITY = 2
         private const val MODEL = "claude-sonnet-5-5"
+        private val MODEL_LADDER = listOf(MODEL, "claude-opus-5-5")
         private const val PRICES_FILE = "prices.yml"
         private val TICK: Duration = Duration.ofSeconds(30)
         private val SESSION_TIMEOUT: Duration = Duration.ofMinutes(30)
@@ -65,7 +68,10 @@ class RefineRuntime private constructor(
             val pool = RunPool(POOL_CAPACITY, store, clock, SystemProcessProbe, recorder = recorder)
             val changedPaths = GitChangedPaths()
             val control = ConfiguredDispatchControl(registry, source, env, store, recorder, clock, log)
-            val launcher = RefineStageLauncher(
+            val stepUp = ModelStepUp(MODEL_LADDER, store)
+            commands.events.addListener(stepUp::onEvent)
+            val gateRunner = ProcessGateRunner(log)
+            val refineLauncher = RefineStageLauncher(
                 pipelineFor = { cardId ->
                     val project = projectOf(cardId, store, registry)
                     RefinePipeline(
@@ -87,7 +93,40 @@ class RefineRuntime private constructor(
                 log = log,
                 onRunFinished = control::onRunFinished,
             )
-            val gateExecutor = GateExecutor(store, recorder, clock, ProcessGateRunner(log), log)
+            val developLauncher = DevelopStageLauncher(
+                pipelineFor = { cardId ->
+                    val project = projectOf(cardId, store, registry)
+                    val gates = RealDevelopGates(
+                        project = project,
+                        store = store,
+                        recorder = recorder,
+                        executor = GateExecutor(store, recorder, clock, gateRunner, log),
+                        runner = gateRunner,
+                        changedPaths = changedPaths,
+                        runDir = dataDir.resolve("gates"),
+                        clock = clock,
+                    )
+                    DevelopPipeline(
+                        project = project,
+                        store = store,
+                        recorder = recorder,
+                        worktrees = worktrees,
+                        sessions = sessions,
+                        mcpPort = endpoint.port,
+                        runtime = runtime,
+                        costRecorder = costRecorder,
+                        gates = gates,
+                        modelStepUp = stepUp,
+                        configDir = dataDir.resolve("mcp"),
+                        clock = clock,
+                        log = log,
+                    )
+                },
+                pool = pool,
+                log = log,
+                onRunFinished = control::onRunFinished,
+            )
+            val gateExecutor = GateExecutor(store, recorder, clock, gateRunner, log)
             val validateLauncher = ValidateStageLauncher(
                 pipelineFor = { cardId ->
                     val project = projectOf(cardId, store, registry)
@@ -116,7 +155,13 @@ class RefineRuntime private constructor(
             val dispatcher = Dispatcher(
                 store = store,
                 pool = pool,
-                launcher = StageRouter(mapOf(DispatchStage.REFINE to launcher, DispatchStage.VALIDATE to validateLauncher)),
+                launcher = StageRouter(
+                    mapOf(
+                        DispatchStage.REFINE to refineLauncher,
+                        DispatchStage.DEVELOP to developLauncher,
+                        DispatchStage.VALIDATE to validateLauncher,
+                    ),
+                ),
                 pause = FilePauseSwitch(dataDir.resolve("PAUSE")),
                 schedule = control,
                 limits = DispatchLimits(emptyMap()),
@@ -124,9 +169,9 @@ class RefineRuntime private constructor(
                 tick = TICK,
                 log = log,
                 launchGuard = control,
-                stages = setOf(DispatchStage.REFINE, DispatchStage.VALIDATE),
+                stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP, DispatchStage.VALIDATE),
             )
-            return RefineRuntime(dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded)
+            return RefineRuntime(dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp)
         }
 
         private fun loadPrices(file: Path): Prices {
