@@ -1,0 +1,1 @@
+{"issue": 87, "slug": "runtime-via-bedrock-vertex-e-proxy", "pipeline": "validate", "started_at": "2026-10-16T17:00:00Z", "finished_at": "2026-10-16T17:20:00Z", "outcome": "ok", "agents": [], "rounds": {"gates": 0, "review": 0}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
