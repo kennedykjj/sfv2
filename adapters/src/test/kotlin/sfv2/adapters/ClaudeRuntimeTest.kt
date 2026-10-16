@@ -245,8 +245,11 @@ class ClaudeRuntimeTest {
     // --- runtime provider (#87) ---
 
     private fun launchWith(provider: RuntimeProvider): Map<String, String> {
-        val (wt, rec, transcripts) = dirs()
-        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(tmp, rec)
+        val base = Files.createTempDirectory(tmp, "launch")
+        val wt = Files.createDirectory(base.resolve("wt"))
+        val rec = Files.createDirectory(base.resolve("rec"))
+        val transcripts = base.resolve("transcripts")
+        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(base, rec)
         ClaudeRuntimeFixtures.runtime(binary, transcripts, provider)
             .launch(ClaudeRuntimeFixtures.aRequest(worktree = wt))
         return ClaudeRuntimeFixtures.recordedEnv(rec)
