@@ -7,11 +7,14 @@ import java.io.OutputStream
 import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.channels.Channels
-import java.nio.channels.ClosedChannelException
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -23,28 +26,20 @@ class DaemonAlreadyRunningException(message: String) : RuntimeException(message)
 class SocketServer private constructor(
     private val path: Path,
     private val server: ServerSocketChannel,
+    private val lock: FileLock,
+    private val log: DaemonLog,
+    private val pause: (Long) -> Unit,
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
     private val clients = ConcurrentHashMap.newKeySet<SocketChannel>()
 
     private fun startAccepting() {
-        Thread.ofPlatform().daemon().name("sfv2-daemon-accept").start { acceptLoop() }
-    }
-
-    private fun acceptLoop() {
-        while (!closed.get()) {
-            val client = try {
-                server.accept()
-            } catch (e: ClosedChannelException) {
-                return
-            } catch (e: IOException) {
-                if (closed.get()) return
-                continue
-            }
+        val loop = AcceptLoop({ server.accept() }, log, pause) { client ->
             clients.add(client)
             Thread.ofVirtual().start { serve(client) }
         }
+        Thread.ofPlatform().daemon().name("sfv2-daemon-accept").start { loop.run() }
     }
 
     private fun serve(client: SocketChannel) {
@@ -67,8 +62,10 @@ class SocketServer private constructor(
             }
         } catch (e: IOException) {
             // A failing client only ends its own connection.
+            log.log("client_error", mapOf("error" to e.javaClass.simpleName))
         } catch (e: RuntimeException) {
             // Same: never let one client affect the accept loop.
+            log.log("client_error", mapOf("error" to e.javaClass.simpleName))
         } finally {
             clients.remove(client)
         }
@@ -92,6 +89,8 @@ class SocketServer private constructor(
         runCatching { server.close() }
         clients.forEach { runCatching { it.close() } }
         runCatching { Files.deleteIfExists(path) }
+        runCatching { lock.release() }
+        runCatching { lock.channel().close() }
     }
 
     private sealed interface LineRead {
@@ -128,19 +127,67 @@ class SocketServer private constructor(
         private const val DIR_PERMISSIONS = "rwx------"
         private const val FILE_PERMISSIONS = "rw-------"
 
+        private const val LOCK_FILE_NAME = "daemon.lock"
+
         /** Binds the socket at [path] and starts serving. */
-        fun start(path: Path): SocketServer {
+        fun start(
+            path: Path,
+            log: DaemonLog = StderrDaemonLog,
+            pause: (Long) -> Unit = Thread::sleep,
+        ): SocketServer {
             prepareDirectory(path)
-            clearOrphan(path)
-            val channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+            val lock = acquireLock(path)
+            val channel = try {
+                clearOrphan(path)
+                ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+            } catch (e: IOException) {
+                releaseLock(lock)
+                throw DaemonStartException("cannot open socket at $path: ${e.javaClass.simpleName}")
+            } catch (e: RuntimeException) {
+                releaseLock(lock)
+                throw e
+            }
             try {
                 channel.bind(UnixDomainSocketAddress.of(path))
                 Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(FILE_PERMISSIONS))
             } catch (e: IOException) {
                 runCatching { channel.close() }
+                releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause).also { it.startAccepting() }
+        }
+
+        private fun releaseLock(lock: FileLock) {
+            runCatching { lock.release() }
+            runCatching { lock.channel().close() }
+        }
+
+        /** Takes the exclusive start lock; it is kept until the server closes. */
+        private fun acquireLock(path: Path): FileLock {
+            val lockPath = path.resolveSibling(LOCK_FILE_NAME)
+            val channel = try {
+                FileChannel.open(
+                    lockPath,
+                    setOf(StandardOpenOption.CREATE, StandardOpenOption.WRITE),
+                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(FILE_PERMISSIONS)),
+                )
+            } catch (e: IOException) {
+                throw DaemonStartException("cannot open lock file $lockPath: ${e.javaClass.simpleName}")
+            }
+            val lock = try {
+                channel.tryLock()
+            } catch (e: OverlappingFileLockException) {
+                null
+            } catch (e: IOException) {
+                runCatching { channel.close() }
+                throw DaemonStartException("cannot lock $lockPath: ${e.javaClass.simpleName}")
+            }
+            if (lock == null) {
+                runCatching { channel.close() }
+                throw DaemonAlreadyRunningException("a daemon is already running on $path")
+            }
+            return lock
         }
 
         private fun prepareDirectory(path: Path) {
