@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 import sfv2.store.CardEventStore
 import sfv2.store.Database
+import sfv2.store.ProjectPathStore
 
 /** Outcome of starting the daemon; only [main] turns a failure into a process exit. */
 sealed interface DaemonLaunch {
@@ -27,7 +28,8 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
         val store = CardEventStore(database)
         val commands = CardCommands(store, clock, ownerProof)
         val source = GitProjectConfigSource()
-        val registry = ProjectRegistry(source)
+        val registry = ProjectRegistry(source, ProjectPathStore(database), StderrDaemonLog, clock)
+        registry.restore()
         val projects = ProjectCommands(registry, ownerProof)
         val dataDir = resolveDatabasePath(env, socketPath).parent
         val settingsStore = SettingsStore(dataDir.resolve("settings.json"), clock)
@@ -66,6 +68,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 closure = CardClosure.forProjects(
                     store, commands.recorder, registry,
                     { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
+                    { project, pr -> ProjectDelivery.pullRequestUrl(project, pr) },
                     ownerProof, clock, StderrDaemonLog,
                 ),
                 milestones = refine.milestones,

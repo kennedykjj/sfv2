@@ -17,7 +17,7 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
     override fun close() = driver.close()
 
     companion object {
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 7
 
         private val OWNER_ONLY = PosixFilePermissions.fromString("rw-------")
 
