@@ -1,0 +1,1 @@
+{"issue":39,"slug":"pipeline-de-refine","pipeline":"validate","started_at":"2026-10-16T05:54:00Z","finished_at":"2026-10-16T06:00:00Z","outcome":"ok","agents":[],"rounds":{"gates":0,"review":0},"gates_failed":[],"flaky":[],"gates_reused":["build","green daemon sfv2.daemon.RefinePipelineTest","green daemon sfv2.daemon.DispatcherTest"],"manual_edit":false,"amendments":[]}
