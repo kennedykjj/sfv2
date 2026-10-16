@@ -38,7 +38,7 @@ class SpecScopeRefineGates(
     private val recorder: EventRecorder,
     private val changedPaths: ChangedPaths,
     private val clock: Clock,
-    private val baseRevision: String = "main",
+    private val baseRevision: String = "origin/main",
     private val specs: SpecStore? = null,
 ) : RefineGates {
 

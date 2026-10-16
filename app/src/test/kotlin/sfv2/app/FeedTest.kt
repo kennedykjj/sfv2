@@ -357,6 +357,126 @@ class FeedTest {
         assertThat(CostSummaryView.loading().days).isEmpty()
         assertThat(CostSummaryView.of(FeedFixtures.aSummary(total = "0", status = CostStatus.NONE)).stages).isEmpty()
     }
+
+    @Test
+    fun `AC-1 the row shows the actor kind in Portuguese and its detail`() {
+        transport.log += FeedFixtures.anEvent(1, "2026-10-16T12:00:00Z", actor = "owner")
+        transport.log += FeedFixtures.anEvent(2, "2026-10-16T12:01:00Z", actor = "agent:dev")
+        transport.log += FeedFixtures.anEvent(3, "2026-10-16T12:02:00Z", actor = "factory:cost")
+        transport.log += FeedFixtures.anEvent(4, "2026-10-16T12:03:00Z", actor = "adapter:github")
+
+        val rows = client().state.value.rows
+
+        assertThat(rows.map { it.actorKind }).containsExactly("dono", "agente", "fábrica", "adaptador")
+        assertThat(rows.map { it.actorDetail }).containsExactly(null, "dev", "cost", "github")
+    }
+
+    @Test
+    fun `AC-1 an actor of unknown kind shows its original text without error`() {
+        transport.log += FeedFixtures.anEvent(1, "2026-10-16T12:00:00Z", actor = "robot:x")
+        transport.log += FeedFixtures.anEvent(2, "2026-10-16T12:01:00Z", actor = "stranger")
+
+        val rows = client().state.value.rows
+
+        assertThat(rows.map { it.actorKind }).containsExactly("robot:x", "stranger")
+        assertThat(rows.map { it.actorDetail }).containsOnlyNulls()
+    }
+
+    @Test
+    fun `AC-2 a cost event shows its own cost labeled as estimate with the tag of its status`() {
+        transport.log += FeedFixtures.aCostEvent(1, "2026-10-16T12:00:00Z", "KNOWN", "0.42")
+        transport.log += FeedFixtures.aCostEvent(2, "2026-10-16T12:01:00Z", "PARTIAL", "0.42")
+        transport.log += FeedFixtures.aCostEvent(3, "2026-10-16T12:02:00Z", "UNKNOWN", null)
+        transport.log += FeedFixtures.anEvent(4, "2026-10-16T12:03:00Z", type = "RUN_STARTED")
+
+        val rows = client().state.value.rows
+
+        assertThat(rows.map { it.cost }).containsExactly("US$ 0,42 est.", "≥ US$ 0,42 est.", "US$ ?", null)
+        assertThat(rows.map { it.costTag }).containsExactly(null, CostTag.Partial, CostTag.Unknown, null)
+    }
+
+    @Test
+    fun `AC-3 a cost event with a missing or unreadable cost shows US$ ? and never zero`() {
+        transport.log += FeedFixtures.aCostEvent(1, "2026-10-16T12:00:00Z", "KNOWN", null)
+        transport.log += FeedFixtures.aCostEvent(2, "2026-10-16T12:01:00Z", "KNOWN", "not-a-number")
+
+        val rows = client().state.value.rows
+
+        assertThat(rows.map { it.cost }).containsExactly("US$ ?", "US$ ?")
+    }
+
+    @Test
+    fun `AC-4 the feed offers Todos and one chip per stage of the day with its count`() {
+        transport.log += FeedFixtures.aStageEvent(1, "2026-10-16T12:00:00Z", "develop")
+        transport.log += FeedFixtures.aStageEvent(2, "2026-10-16T12:01:00Z", "develop")
+        transport.log += FeedFixtures.aStageEvent(3, "2026-10-16T12:02:00Z", "refine")
+        transport.log += FeedFixtures.anEvent(4, "2026-10-16T12:03:00Z")
+        transport.log += FeedFixtures.aStageEvent(5, "2026-10-15T12:00:00Z", "validate") // yesterday, not in the day
+
+        val state = client().state.value
+
+        assertThat(state.stage).isNull()
+        assertThat(state.stages.first()).isEqualTo(StageChip(null, 4))
+        assertThat(state.stages.drop(1)).containsExactlyInAnyOrder(StageChip("develop", 2), StageChip("refine", 1))
+        assertThat(state.rows.map { it.stage }).containsExactly("develop", "develop", "refine", null)
+    }
+
+    @Test
+    fun `AC-5 a chosen stage lists only its events in order and a new event of it enters without reloading`() {
+        transport.log += FeedFixtures.aStageEvent(1, "2026-10-16T12:00:00Z", "develop")
+        transport.log += FeedFixtures.aStageEvent(2, "2026-10-16T12:01:00Z", "refine")
+        transport.log += FeedFixtures.aStageEvent(3, "2026-10-16T12:02:00Z", "develop")
+        val client = client()
+
+        client.selectStage("develop")
+
+        assertThat(client.state.value.stage).isEqualTo("develop")
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L, 3L)
+
+        transport.emit(FeedFixtures.aStageEvent(4, "2026-10-16T12:03:00Z", "develop"))
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L, 3L, 4L)
+
+        transport.emit(FeedFixtures.aStageEvent(5, "2026-10-16T12:04:00Z", "refine"))
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L, 3L, 4L)
+        assertThat(client.state.value.stages).contains(StageChip(null, 5), StageChip("develop", 3), StageChip("refine", 2))
+        assertThat(transport.recentCalls).isEqualTo(1)
+
+        client.selectStage(null)
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L, 2L, 3L, 4L, 5L)
+    }
+
+    @Test
+    fun `AC-6 changing day keeps the chosen stage when the new day has it and goes back to Todos when it does not`() {
+        transport.log += FeedFixtures.aStageEvent(1, "2026-10-15T12:00:00Z", "develop")
+        transport.log += FeedFixtures.aStageEvent(2, "2026-10-16T12:00:00Z", "develop")
+        transport.log += FeedFixtures.aStageEvent(3, "2026-10-16T12:01:00Z", "refine")
+        val client = client()
+
+        client.selectStage("develop")
+        client.selectDay(today.minusDays(1))
+        assertThat(client.state.value.stage).isEqualTo("develop")
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L)
+
+        client.selectDay(today)
+        client.selectStage("refine")
+        client.selectDay(today.minusDays(1))
+        assertThat(client.state.value.stage).isNull()
+        assertThat(client.state.value.rows.map { it.seq }).containsExactly(1L)
+        assertThat(client.state.value.stages.first()).isEqualTo(StageChip(null, 1))
+    }
+
+    @Test
+    fun `AC-7 the day total stays the daemon's number and the app does not add up the row costs`() {
+        transport.log += FeedFixtures.aCostEvent(1, "2026-10-16T12:00:00Z", "KNOWN", "0.42")
+        source.next = FeedFixtures.aSummary(total = "42.00")
+        val client = client()
+
+        transport.emit(FeedFixtures.aCostEvent(2, "2026-10-16T12:01:00Z", "KNOWN", "0.58"))
+
+        assertThat(client.state.value.rows.map { it.cost }).containsExactly("US$ 0,42 est.", "US$ 0,58 est.")
+        assertThat(client.state.value.cost.total.value).isEqualTo("US$ 42,00 est.")
+        assertThat(source.requests).hasSize(2)
+    }
 }
 
 object FeedFixtures {
@@ -366,7 +486,24 @@ object FeedFixtures {
         type: String = "CARD_CREATED",
         actor: String = "owner",
         card: String = "68",
-    ) = FeedEvent(seq, card, "e$seq", Instant.parse(at), actor, type)
+        payload: Map<String, String> = emptyMap(),
+    ) = FeedEvent(seq, card, "e$seq", Instant.parse(at), actor, type, payload)
+
+    fun aStageEvent(seq: Long, at: String, stage: String, card: String = "68") =
+        anEvent(seq, at, type = "RUN_STARTED", actor = "agent:dev", card = card, payload = mapOf("stage" to stage))
+
+    fun aCostEvent(seq: Long, at: String, status: String, costUsd: String?, stage: String = "develop") =
+        anEvent(
+            seq,
+            at,
+            type = "RUN_COST_RECORDED",
+            actor = "factory:cost",
+            payload = buildMap {
+                put("stage", stage)
+                put("status", status)
+                costUsd?.let { put("cost_usd", it) }
+            },
+        )
 
     fun aCardCost(card: String, usd: String?, status: CostStatus = CostStatus.KNOWN) =
         CardCost(card, usd?.let(::BigDecimal), status)

@@ -147,14 +147,14 @@ data class CostSummaryView(
             return if (summary.totalUsd == null || summary.status == CostStatus.UNKNOWN) amount else "$amount ${Texts.ESTIMATE_SUFFIX}"
         }
 
-        private fun amountText(usd: BigDecimal?, status: CostStatus): String =
+        internal fun amountText(usd: BigDecimal?, status: CostStatus): String =
             when {
                 usd == null || status == CostStatus.UNKNOWN -> "US$ ?"
                 status == CostStatus.PARTIAL -> "≥ ${money(usd)}"
                 else -> money(usd)
             }
 
-        private fun tagOf(status: CostStatus): CostTag? =
+        internal fun tagOf(status: CostStatus): CostTag? =
             when (status) {
                 CostStatus.PARTIAL -> CostTag.Partial
                 CostStatus.UNKNOWN -> CostTag.Unknown
@@ -187,7 +187,15 @@ data class FeedRow(
     val actor: String,
     val card: String,
     val outcome: FeedOutcome = FeedOutcome.None,
+    val actorKind: String = actor,
+    val actorDetail: String? = null,
+    val cost: String? = null,
+    val costTag: CostTag? = null,
+    val stage: String? = null,
 )
+
+/** `stage == null` is the "Todos" chip. */
+data class StageChip(val stage: String?, val count: Int)
 
 data class FeedState(
     val day: LocalDate,
@@ -197,6 +205,8 @@ data class FeedState(
     val earlierHistoryUnavailable: Boolean,
     val cost: CostSummaryView,
     val failed: Boolean = false,
+    val stages: List<StageChip> = listOf(StageChip(null, 0)),
+    val stage: String? = null,
 )
 
 /**
@@ -221,6 +231,7 @@ class EventFeedClient(
     private var loaded = false
     private var subscription: AutoCloseable? = null
     private var day: LocalDate = mutable.value.day
+    private var selectedStage: String? = null
 
     private val listener = object : FeedListener {
         override fun onEvent(event: FeedEvent) = receive(event)
@@ -264,6 +275,14 @@ class EventFeedClient(
             publish()
         }
         refreshCost()
+    }
+
+    /** Filters the loaded window by [stage] (`null` = Todos); no new read from the daemon. */
+    fun selectStage(stage: String?) {
+        synchronized(lock) {
+            selectedStage = stage
+            publish()
+        }
     }
 
     fun close() {
@@ -324,12 +343,18 @@ class EventFeedClient(
     private fun publish(loading: Boolean? = null, connection: FeedConnection? = null, failed: Boolean? = null) {
         val dayStart = day.atStartOfDay(zone).toInstant()
         val dayEnd = day.plusDays(1).atStartOfDay(zone).toInstant()
-        val rows = window.filter { it.at >= dayStart && it.at < dayEnd }.map(::rowOf)
+        val dayRows = window.filter { it.at >= dayStart && it.at < dayEnd }.map(::rowOf)
+        val counts = dayRows.mapNotNull { it.stage }.groupingBy { it }.eachCount()
+        val chosen = selectedStage?.takeIf { it in counts }
+        selectedStage = chosen
+        val rows = if (chosen == null) dayRows else dayRows.filter { it.stage == chosen }
         val oldest = window.firstOrNull()
         val current = mutable.value
         mutable.value = current.copy(
             day = day,
             rows = rows,
+            stages = listOf(StageChip(null, dayRows.size)) + counts.map { (stage, count) -> StageChip(stage, count) },
+            stage = chosen,
             loading = loading ?: current.loading,
             connection = connection ?: current.connection,
             failed = failed ?: current.failed,
@@ -337,14 +362,36 @@ class EventFeedClient(
         )
     }
 
-    private fun rowOf(event: FeedEvent) = FeedRow(
-        seq = event.seq,
-        time = TIME.format(event.at.atZone(zone)),
-        type = event.type,
-        actor = event.actor,
-        card = "#${event.card}",
-        outcome = outcomeOf(event.type),
-    )
+    private fun rowOf(event: FeedEvent): FeedRow {
+        val kind = event.actor.substringBefore(':')
+        val detail = event.actor.substringAfter(':', "").ifEmpty { null }
+        val kindText = ACTOR_KINDS[kind]
+        val recorded = event.type == COST_RECORDED
+        val status = if (recorded) costStatusOf(event.payload["status"]) else CostStatus.NONE
+        val amount = if (recorded) event.payload["cost_usd"]?.toBigDecimalOrNull() else null
+        val readable = recorded && amount != null && status != CostStatus.NONE
+        val costText = when {
+            !recorded -> null
+            !readable || status == CostStatus.UNKNOWN -> CostSummaryView.amountText(null, CostStatus.UNKNOWN)
+            else -> "${CostSummaryView.amountText(amount, status)} ${Texts.ESTIMATE_SUFFIX}"
+        }
+        return FeedRow(
+            seq = event.seq,
+            time = TIME.format(event.at.atZone(zone)),
+            type = event.type,
+            actor = event.actor,
+            card = "#${event.card}",
+            outcome = outcomeOf(event.type),
+            actorKind = kindText ?: event.actor,
+            actorDetail = if (kindText != null) detail else null,
+            cost = costText,
+            costTag = if (recorded) CostSummaryView.tagOf(if (readable) status else CostStatus.UNKNOWN) else null,
+            stage = event.payload["stage"],
+        )
+    }
+
+    private fun costStatusOf(raw: String?): CostStatus =
+        CostStatus.entries.firstOrNull { it.name == raw } ?: CostStatus.NONE
 
     private fun outcomeOf(type: String): FeedOutcome =
         when {
@@ -357,6 +404,12 @@ class EventFeedClient(
         const val WINDOW = 2000
         const val COST_RECORDED = "RUN_COST_RECORDED"
         val TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+        val ACTOR_KINDS = mapOf(
+            "owner" to Texts.ACTOR_OWNER,
+            "agent" to Texts.ACTOR_AGENT,
+            "factory" to Texts.ACTOR_FACTORY,
+            "adapter" to Texts.ACTOR_ADAPTER,
+        )
         val FAILURE_WORDS = listOf("FAILED", "ERROR", "REJECTED")
         val SUCCESS_WORDS = listOf("COMPLETED", "FINISHED", "PASSED", "APPROVED", "MERGED")
     }

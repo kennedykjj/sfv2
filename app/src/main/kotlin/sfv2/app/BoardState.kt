@@ -65,6 +65,77 @@ val OWNER_DECISION_COLUMNS: Set<Column> = OWNER_WAIT_COLUMNS
 
 fun isWaitingForOwner(column: Column): Boolean = column in OWNER_DECISION_COLUMNS
 
+enum class PanelTab { SUMMARY, SPEC, EVENTS, RUNS }
+
+/**
+ * The side panel of the board: which card is open, the chosen tab and the width.
+ * The tab and the width outlive the card, so they survive a swap or a close and reopen in the same session.
+ */
+data class SidePanelState(
+    val cardId: String? = null,
+    val tab: PanelTab = PanelTab.SUMMARY,
+    val width: Int = DEFAULT_WIDTH,
+    val focusReturnCardId: String? = null,
+) {
+    /** Opens [cardId], or swaps the card of an open panel; the tab is kept while the panel stays open. */
+    fun open(cardId: String): SidePanelState =
+        copy(cardId = cardId, tab = if (this.cardId == null) PanelTab.SUMMARY else tab, focusReturnCardId = null)
+
+    fun close(): SidePanelState = copy(cardId = null, focusReturnCardId = null)
+
+    fun selectTab(tab: PanelTab): SidePanelState = copy(tab = tab)
+
+    fun resize(width: Int): SidePanelState = copy(width = width.coerceIn(MIN_WIDTH, MAX_WIDTH))
+
+    /** Esc closes the panel and hands the focus back to its card, unless the palette or a text field owns the key. */
+    fun escape(paletteOpen: Boolean, textFieldFocused: Boolean): SidePanelState =
+        if (cardId == null || paletteOpen || textFieldFocused) this else copy(cardId = null, focusReturnCardId = cardId)
+
+    companion object {
+        const val MIN_WIDTH = 360
+        const val MAX_WIDTH = 680
+        const val DEFAULT_WIDTH = 480
+    }
+}
+
+enum class PanelPlacement { SIDE_BY_SIDE, OVERLAY }
+
+private const val PANEL_SIDE_BY_SIDE_MIN_WINDOW = 880
+
+fun panelPlacement(windowWidth: Int): PanelPlacement =
+    if (windowWidth < PANEL_SIDE_BY_SIDE_MIN_WINDOW) PanelPlacement.OVERLAY else PanelPlacement.SIDE_BY_SIDE
+
+enum class PathStep { TRAVELED, CURRENT, NEXT }
+
+data class PathMark(val column: Column, val name: String, val step: PathStep)
+
+/** The ten columns in board order, each marked as traveled, current or next relative to [column]. */
+fun cardPath(column: Column): List<PathMark> =
+    Column.entries.map { mark ->
+        val step = when {
+            mark == column -> PathStep.CURRENT
+            mark.ordinal < column.ordinal -> PathStep.TRAVELED
+            else -> PathStep.NEXT
+        }
+        PathMark(mark, mark.displayName, step)
+    }
+
+fun cardPathDescription(column: Column): String = "etapa ${column.ordinal + 1} de ${Column.entries.size}: ${column.displayName}"
+
+sealed interface PanelFooter {
+    data object None : PanelFooter
+
+    data class Decision(val approveTo: Column) : PanelFooter
+}
+
+/** Only the owner columns show a decision, and it names where the approval sends the card. */
+fun panelFooter(column: Column): PanelFooter =
+    when (column) {
+        Column.SPEC_REVIEW -> PanelFooter.Decision(Column.READY_FOR_DEV)
+        Column.STAGED -> PanelFooter.Decision(Column.READY_FOR_PROD)
+        else -> PanelFooter.None
+    }
+
 /** The column subtitle: the statistic and its duration, e.g. "mediana 6 min" or "espera média 1 h 05 min". */
 object ColumnTimeLabel {
     private const val SECONDS_PER_MINUTE = 60L

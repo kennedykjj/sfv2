@@ -52,6 +52,23 @@ object Texts {
 
     fun goToColumn(column: BoardColumn, count: Int): String = "Ir para ${column.displayName}, ${cardCount(count)}"
 
+    const val TAB_SUMMARY = "Resumo"
+    const val TAB_SPEC = "Spec"
+    const val TAB_EVENTS = "Eventos"
+    const val TAB_RUNS = "Runs"
+    const val CLOSE_PANEL = "Fechar painel"
+    const val RESIZE_PANEL = "Redimensionar painel"
+    const val PANEL_DISCONNECTED = "Desconectado do daemon. O quadro ao lado segue utilizável; o painel volta quando o daemon voltar."
+    const val PANEL_NOT_FOUND_EXIT = "O daemon não conhece este card. Feche o painel com Esc ou com o botão Fechar."
+    const val FOOTER_DECISION = "Decisão"
+    const val FOOTER_STAGED_HINT = "Mova o cartão no quadro (tecla M ou arraste) para decidir."
+
+    fun panelTitle(id: String): String = "Card #$id"
+
+    fun approveTo(column: BoardColumn): String = "Aprovar leva a ${column.displayName}"
+
+    fun openCardHint(): String = "aberto no painel"
+
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
     const val RUNS = "Runs"
@@ -95,6 +112,12 @@ object Texts {
     const val LIMIT_OF = "de"
     const val LOADING = "Lendo o feed…"
     const val EMPTY_DAY = "Nenhum evento neste dia."
+    const val EMPTY_STAGE = "Nenhum evento neste estágio."
+    const val ALL_STAGES = "Todos"
+    const val ACTOR_OWNER = "dono"
+    const val ACTOR_AGENT = "agente"
+    const val ACTOR_FACTORY = "fábrica"
+    const val ACTOR_ADAPTER = "adaptador"
     const val FEED_ERROR = "Não consegui ler o feed. Tentando de novo."
     const val PARTIAL_EXPLANATION = "Sem preço ou transcrição completa; o valor real pode ser maior."
     const val EARLIER_HISTORY_UNAVAILABLE = "Histórico anterior indisponível"
