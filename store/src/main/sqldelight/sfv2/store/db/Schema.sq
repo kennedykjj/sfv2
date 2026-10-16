@@ -33,6 +33,17 @@ CREATE TABLE card_reference (
     PRIMARY KEY (card_id, provider, external_id)
 );
 
+CREATE TABLE card_project (
+    card_id TEXT NOT NULL PRIMARY KEY REFERENCES card(id),
+    repo TEXT NOT NULL
+);
+
+upsertProject:
+INSERT OR REPLACE INTO card_project (card_id, repo) VALUES (:cardId, :repo);
+
+projectByCard:
+SELECT repo FROM card_project WHERE card_id = :cardId;
+
 deleteReferences:
 DELETE FROM card_reference WHERE card_id = :cardId;
 

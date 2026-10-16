@@ -49,6 +49,15 @@ class CardEventStore(private val database: Database) {
             queries.eventSeqById(event.id.value).executeAsOne()
         }
 
+    /** Links the card to the repo of its project; a later call replaces the link. */
+    fun assignProject(cardId: String, repo: String) {
+        queries.upsertProject(cardId = cardId, repo = repo)
+    }
+
+    /** The repo the card is linked to, or null when it has none (or the card does not exist). */
+    fun projectOf(cardId: String): String? =
+        queries.projectByCard(cardId).executeAsOneOrNull()
+
     /** Events with seq greater than [seq], in seq order. */
     fun eventsAfter(seq: Long): List<StoredEvent> =
         queries.eventsAfter(seq).executeAsList()
