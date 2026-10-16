@@ -1,0 +1,1 @@
+{"outcome": "staged", "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": ["green adapters sfv2.adapters.GhTrackerTest"], "amendments": [], "pr": 187}
