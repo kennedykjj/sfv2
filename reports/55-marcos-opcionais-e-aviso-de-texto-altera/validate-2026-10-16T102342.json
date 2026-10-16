@@ -1,0 +1,1 @@
+{"issue": 55, "slug": "marcos-opcionais-e-aviso-de-texto-altera", "pipeline": "validate", "started_at": "2026-10-16T13:30:00Z", "finished_at": "2026-10-16T13:45:00Z", "outcome": "ok", "agents": [], "rounds": {"gates": 1, "review": 1, "ci": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false, "amendments": []}
