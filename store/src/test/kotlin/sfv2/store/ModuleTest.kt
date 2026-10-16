@@ -55,8 +55,8 @@ class ModuleTest {
         Database.open(file).close()
 
         assertThat(Files.exists(file)).isTrue()
-        assertThat(Database.SCHEMA_VERSION).isEqualTo(5)
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(Database.SCHEMA_VERSION).isEqualTo(6)
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
         val tables = jdbc(file) { c ->
             c.createStatement().use { s ->
@@ -85,7 +85,7 @@ class ModuleTest {
         assertThat(scalar(file, "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)"))
             .isEqualTo(schemaBefore)
         assertThat(scalar(file, "SELECT note FROM probe")).isEqualTo("kept")
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
     }
 
@@ -330,7 +330,7 @@ class ModuleTest {
                 assertThat(db.queries.schemaQueries.selectSpec("c1").executeAsOne().hash).isEqualTo("abc123")
             }
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -351,7 +351,7 @@ class ModuleTest {
         val v1 = legacyDatabase("m1.db", 1, withSpec = false).also { Database.open(it).close() }
         val v2 = legacyDatabase("m2.db", 2, withSpec = true).also { Database.open(it).close() }
 
-        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("6")
         listOf(v1, v2).forEach { migrated ->
             listOf("card", "event", "spec").forEach { table ->
                 assertThat(columns(migrated, table)).isEqualTo(columns(fresh, table))
@@ -482,7 +482,7 @@ class ModuleTest {
             assertThat(store.card("c1")?.references).isEmpty()
             assertThat(store.events("c1")).containsExactlyElementsOf(legacyEvents)
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -523,7 +523,7 @@ class ModuleTest {
             store.assignProject("c1", "/repos/alpha")
             assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
         val fresh = dir.resolve("fresh-v5.db").also { Database.open(it).close() }
         assertThat(columns(file, "card_project")).isEqualTo(columns(fresh, "card_project")).isNotEmpty()
     }
@@ -661,6 +661,153 @@ class ModuleTest {
         )
         assertThat(store.eventsAfter(s2)).containsExactly(StoredEvent(s3, "c1", e3))
         assertThat(store.eventsAfter(s3)).isEmpty()
+    }
+
+    private fun rawEvent(file: Path, id: String, cardId: String, at: String, type: EventType, payloadJson: String) {
+        jdbc(file) { c ->
+            c.prepareStatement(
+                "INSERT INTO event (id, card_id, at, actor, type, payload_json) VALUES (?, ?, ?, 'owner', ?, ?)",
+            ).use { p ->
+                p.setString(1, id)
+                p.setString(2, cardId)
+                p.setString(3, at)
+                p.setString(4, type.name)
+                p.setString(5, payloadJson)
+                p.executeUpdate()
+            }
+        }
+    }
+
+    private fun queryPlan(file: Path, sql: String): String =
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.executeQuery("EXPLAIN QUERY PLAN $sql").use { rs ->
+                    generateSequence { if (rs.next()) rs.getString("detail") else null }.joinToString(" | ")
+                }
+            }
+        }
+
+    @Test
+    fun `AC-1 costEventsBetween returns only cost events of the day in seq order without decoding others`() = withStore { store, file ->
+        val card = Card.create("Cost", Column.INBOX)
+        val from = Instant.parse("2026-10-16T00:00:00Z")
+        val to = Instant.parse("2026-10-17T00:00:00Z")
+        fun cost(id: String, at: String) = anEvent(id, EventType.RUN_COST_RECORDED, at)
+        val lateInDay = cost("in-late", "2026-10-16T12:00:00.5Z")
+        val atStart = cost("in-start", "2026-10-16T00:00:00Z")
+        val fractionAtStart = cost("in-start-frac", "2026-10-16T00:00:00.5Z")
+        val lastMilli = cost("in-end", "2026-10-16T23:59:59.999Z")
+        val written = listOf(
+            cost("out-before", "2026-10-15T23:59:59.5Z"),
+            lateInDay,
+            anEvent("moved", EventType.CARD_MOVED, "2026-10-16T13:00:00Z"),
+            atStart,
+            cost("out-at-end", "2026-10-17T00:00:00Z"),
+            fractionAtStart,
+            cost("out-after-frac", "2026-10-17T00:00:00.5Z"),
+            lastMilli,
+        )
+        written.forEach { store.recordChange("c1", card, it) }
+        rawEvent(file, "corrupt", "c1", "2026-10-16T14:00:00Z", EventType.CARD_MOVED, "this is not json")
+
+        val found = store.costEventsBetween(from, to)
+
+        assertThat(found.map { it.event }).containsExactly(lateInDay, atStart, fractionAtStart, lastMilli)
+        assertThat(found.map { it.seq }).isSorted()
+        assertThat(found.map { it.cardId }.toSet()).containsExactly("c1")
+        assertThat(store.costEventsBetween(to, to)).isEmpty()
+    }
+
+    @Test
+    fun `AC-1 the cost-of-the-day query is served by the type and date index`() = withStore { store, file ->
+        store.recordChange("c1", Card.create("Cost", Column.INBOX), anEvent("e1", EventType.RUN_COST_RECORDED))
+
+        val plan = queryPlan(
+            file,
+            "SELECT * FROM event WHERE type = 'RUN_COST_RECORDED' AND at >= '2026-10-16T00:00:00' " +
+                "AND at < '2026-10-17T00:00:00' ORDER BY seq",
+        )
+
+        assertThat(plan).contains("event_type_at")
+    }
+
+    @Test
+    fun `AC-2 lastSeq gives the highest seq of the card for the type and actor, or null`() = withStore { store, file ->
+        val card = Card.create("Blockable", Column.INBOX)
+        store.recordChange("c1", card, anEvent("b1", EventType.CARD_BLOCKED))
+        val ownerMove = store.recordChange("c1", card, anEvent("m-owner", EventType.CARD_MOVED))
+        val blockedLast = store.recordChange("c1", card, anEvent("b2", EventType.CARD_BLOCKED))
+        val agentMove = store.recordChange(
+            "c1",
+            card,
+            Event(EventId("m-agent"), Instant.parse("2026-10-15T10:00:00Z"), Actor.Agent("engineer"), EventType.CARD_MOVED, mapOf("k" to "v")),
+        )
+        store.recordChange("c2", card, anEvent("other-card", EventType.CARD_BLOCKED))
+        rawEvent(file, "corrupt", "c1", "2026-10-15T10:00:00Z", EventType.CARD_BLOCKED, "this is not json")
+        val corruptSeq = longs(file, "SELECT max(seq) FROM event WHERE id = 'corrupt'").single()
+
+        assertThat(store.lastSeq("c1", EventType.CARD_BLOCKED)).isEqualTo(corruptSeq)
+        assertThat(store.lastSeq("c1", EventType.CARD_MOVED, Actor.Owner)).isEqualTo(ownerMove)
+        assertThat(store.lastSeq("c1", EventType.CARD_MOVED, Actor.Agent("engineer"))).isEqualTo(agentMove)
+        assertThat(store.lastSeq("c1", EventType.CARD_MOVED)).isEqualTo(agentMove)
+        assertThat(blockedLast).isLessThan(agentMove)
+        assertThat(store.lastSeq("c1", EventType.RUN_COST_RECORDED)).isNull()
+        assertThat(store.lastSeq("c1", EventType.CARD_MOVED, Actor.Factory("scheduler"))).isNull()
+        assertThat(store.lastSeq("ghost", EventType.CARD_BLOCKED)).isNull()
+    }
+
+    @Test
+    fun `AC-2 the last-event query is served by the card, type and actor index`() = withStore { store, file ->
+        store.recordChange("c1", Card.create("Blockable", Column.INBOX), anEvent("e1", EventType.CARD_BLOCKED))
+
+        val withActor = queryPlan(
+            file,
+            "SELECT MAX(seq) FROM event WHERE card_id = 'c1' AND type = 'CARD_MOVED' AND actor = 'owner'",
+        )
+        val withoutActor = queryPlan(file, "SELECT MAX(seq) FROM event WHERE card_id = 'c1' AND type = 'CARD_BLOCKED'")
+
+        assertThat(withActor).contains("event_card_type_actor")
+        assertThat(withoutActor).contains("event_card_type_actor")
+    }
+
+    @Test
+    fun `AC-3 version 5 database with data gains the cost indexes without losing data`() {
+        val file = dir.resolve("v5.db")
+        val card = Card.create("Write docs", Column.INBOX)
+        val cost = anEvent("cost-1", EventType.RUN_COST_RECORDED, "2026-10-16T09:00:00Z")
+        val blocked = anEvent("blocked-1", EventType.CARD_BLOCKED, "2026-10-16T10:00:00Z")
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            store.recordChange("c1", card, anEvent("e1"))
+            store.recordChange("c1", card, cost)
+            store.recordChange("c1", card, blocked)
+            store.assignProject("c1", "/repos/alpha")
+        }
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.execute("DROP INDEX IF EXISTS event_type_at")
+                s.execute("DROP INDEX IF EXISTS event_card_type_actor")
+                s.execute("PRAGMA user_version = 5")
+            }
+        }
+        val seqsBefore = longs(file, "SELECT seq FROM event ORDER BY seq")
+        val indexSql = "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name)"
+        assertThat(scalar(file, indexSql)).doesNotContain("event_type_at").doesNotContain("event_card_type_actor")
+
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            assertThat(store.card("c1")).isEqualTo(card)
+            assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
+            assertThat(store.events("c1").map { it.id.value }).containsExactly("e1", "cost-1", "blocked-1")
+            assertThat(store.costEventsBetween(Instant.parse("2026-10-16T00:00:00Z"), Instant.parse("2026-10-17T00:00:00Z")).map { it.event })
+                .containsExactly(cost)
+            assertThat(store.lastSeq("c1", EventType.CARD_BLOCKED)).isEqualTo(seqsBefore.last())
+        }
+
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).isEqualTo(seqsBefore)
+        val fresh = dir.resolve("fresh-v6.db").also { Database.open(it).close() }
+        assertThat(scalar(file, indexSql)).isEqualTo(scalar(fresh, indexSql)).contains("event_type_at", "event_card_type_actor")
     }
 
     @Test

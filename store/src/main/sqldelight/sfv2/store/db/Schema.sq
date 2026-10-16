@@ -16,6 +16,10 @@ CREATE TABLE event (
 
 CREATE INDEX event_card_id ON event(card_id);
 
+CREATE INDEX event_type_at ON event(type, at);
+
+CREATE INDEX event_card_type_actor ON event(card_id, type, seq, actor);
+
 CREATE TABLE spec (
     card_id TEXT NOT NULL PRIMARY KEY,
     path TEXT NOT NULL,
@@ -79,6 +83,17 @@ SELECT seq FROM event WHERE id = :id;
 
 eventsAfter:
 SELECT seq, card_id, payload_json FROM event WHERE seq > :seq ORDER BY seq;
+
+costEventsBetween:
+SELECT seq, card_id, payload_json FROM event
+WHERE type = 'RUN_COST_RECORDED' AND at >= :fromAt AND at < :toAt
+ORDER BY seq;
+
+lastSeqByType:
+SELECT MAX(seq) FROM event WHERE card_id = :cardId AND type = :type;
+
+lastSeqByTypeAndActor:
+SELECT MAX(seq) FROM event WHERE card_id = :cardId AND type = :type AND actor = :actor;
 
 allCards:
 SELECT id, title, column_name FROM card ORDER BY rowid;

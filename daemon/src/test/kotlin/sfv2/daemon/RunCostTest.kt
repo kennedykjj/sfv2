@@ -3,6 +3,7 @@ package sfv2.daemon
 import java.math.BigDecimal
 import java.nio.file.Files
 import java.nio.file.Path
+import java.sql.DriverManager
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -12,6 +13,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import sfv2.core.Actor
+import sfv2.core.Card
+import sfv2.core.Column
+import sfv2.core.Event
+import sfv2.core.EventId
+import sfv2.core.EventType
 import sfv2.ports.SessionResult
 import sfv2.store.CardEventStore
 import sfv2.store.Database
@@ -241,6 +247,159 @@ class RunCostTest {
         val codexPayload = recordCost("codex", "model-b", exited(transcript(codexClaim)))
 
         assertThat(BigDecimal(requireNotNull(codexPayload["cost_usd"]))).isEqualByComparingTo(BigDecimal("2"))
+    }
+
+    private val budgetLog = RunPoolFixtures.RecordingLog()
+
+    private fun budget(limits: CostLimits): CostBudget =
+        CostBudget(store, EventRecorder(store, stream), limits, clock, ZoneOffset.UTC, budgetLog)
+
+    private fun costEvent(cardId: String, runId: String, usd: String, at: Instant = now) {
+        val event = Event(
+            EventId("cost-$runId"),
+            at,
+            Actor.Factory("cost"),
+            EventType.RUN_COST_RECORDED,
+            mapOf("run_id" to runId, "status" to "KNOWN", "cost_usd" to usd, "estimate" to "true"),
+        )
+        store.recordChange(cardId, Card.create("Seeded", Column.values().first()), event)
+    }
+
+    private fun move(cardId: String, actor: Actor, id: String) {
+        val event = Event(EventId(id), now, actor, EventType.CARD_MOVED, mapOf("to" to Column.READY_FOR_DEV.name))
+        store.recordChange(cardId, Card.create("Seeded", Column.READY_FOR_DEV), event)
+    }
+
+    private fun blockedEvents(cardId: String) =
+        store.eventsAfter(0).filter { it.cardId == cardId && it.event.type.name == "CARD_BLOCKED" }
+
+    @Test
+    fun `AC-1 a card whose summed cost reaches the card limit is blocked with reason, amounts and cost actor`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("5"), perDayUsd = null))
+        costEvent("c1", "run-1", "3.00")
+        costEvent("c1", "run-2", "2.10")
+
+        budget.onRunFinished("c1")
+        budget.onRunFinished("c1")
+
+        val blocked = blockedEvents("c1")
+        assertThat(blocked).hasSize(1)
+        val event = blocked.single().event
+        assertThat(event.actor).isEqualTo(Actor.Factory("cost"))
+        assertThat(event.payload).containsEntry("reason", "card_cost_limit").containsEntry("estimate", "true")
+        assertThat(BigDecimal(requireNotNull(event.payload["spent_usd"]))).isEqualByComparingTo("5.10")
+        assertThat(BigDecimal(requireNotNull(event.payload["limit_usd"]))).isEqualByComparingTo("5")
+        assertThat(budget.isBlocked("c1")).isTrue()
+    }
+
+    @Test
+    fun `AC-5 costs under both limits write no event and block nothing`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("5"), perDayUsd = BigDecimal("10")))
+        costEvent("c1", "run-1", "1.00")
+        val baseline = store.eventsAfter(0).maxOf { it.seq }
+
+        budget.onRunFinished("c1")
+
+        assertThat(store.eventsAfter(baseline)).isEmpty()
+        assertThat(budget.isBlocked("c1")).isFalse()
+        assertThat(budget.dayLimitReached()).isFalse()
+    }
+
+    @Test
+    fun `AC-8 a run with an unpriced model blocks the card as unpriced_model when a card limit is set`() {
+        val file = transcript(RunCostFixtures.claudeLine("msg-1", "model-x", 10, 10, 0, 0, 0))
+        recorder.record("c1", "run-1", "claude", "develop", "model-x", exited(file))
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1000"), perDayUsd = null))
+
+        budget.onRunFinished("c1")
+
+        assertThat(blockedEvents("c1").single().event.payload).containsEntry("reason", "unpriced_model")
+        assertThat(budget.isBlocked("c1")).isTrue()
+    }
+
+    @Test
+    fun `AC-8 an unpriced run reaches the day limit, and a missing transcript counts zero and is logged with the run id`() {
+        recorder.record("c1", "run-1", "claude", "develop", "model-x", exited(transcript(RunCostFixtures.claudeLine("m", "model-x", 10, 10, 0, 0, 0))))
+        val dayBudget = budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("1000")))
+        assertThat(dayBudget.dayLimitReached()).isTrue()
+
+        RunPoolFixtures.seed(store, "c2")
+        recorder.record("c2", "run-2", "claude", "develop", "model-a", exited(dir.resolve("nope.jsonl")))
+        val cardBudget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        cardBudget.onRunFinished("c2")
+
+        assertThat(blockedEvents("c2")).isEmpty()
+        assertThat(budgetLog.lines.flatMap { it.second.values + it.first }.any { it.contains("run-2") }).isTrue()
+    }
+
+    @Test
+    fun `AC-8 without limits an unpriced run changes nothing`() {
+        recorder.record("c1", "run-1", "claude", "develop", "model-x", exited(transcript(RunCostFixtures.claudeLine("m", "model-x", 10, 10, 0, 0, 0))))
+        val budget = budget(CostLimits.NONE)
+
+        budget.onRunFinished("c1")
+
+        assertThat(blockedEvents("c1")).isEmpty()
+        assertThat(budget.isBlocked("c1")).isFalse()
+        assertThat(budget.dayLimitReached()).isFalse()
+    }
+
+    @Test
+    fun `AC-9 only an owner move after the block unblocks the card`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        move("c1", Actor.Owner, "owner-before")
+        costEvent("c1", "run-1", "2.00")
+        budget.onRunFinished("c1")
+        assertThat(budget.isBlocked("c1")).isTrue()
+
+        move("c1", Actor.Factory("scheduler"), "factory-move")
+        move("c1", Actor.Agent("engineer"), "agent-move")
+        assertThat(budget.isBlocked("c1")).isTrue()
+
+        move("c1", Actor.Owner, "owner-after")
+        assertThat(budget.isBlocked("c1")).isFalse()
+    }
+
+    @Test
+    fun `AC-4 the day limit counts only costs inside today in the budget zone, fractions and boundaries included`() {
+        costEvent("c1", "run-yesterday", "100", Instant.parse("2026-10-15T23:59:59.9Z"))
+        costEvent("c1", "run-start", "3.00", Instant.parse("2026-10-16T00:00:00Z"))
+        costEvent("c1", "run-frac", "2.50", Instant.parse("2026-10-16T11:59:59.5Z"))
+        costEvent("c1", "run-tomorrow", "100", Instant.parse("2026-10-17T00:00:00Z"))
+        costEvent("c1", "run-tomorrow-frac", "100", Instant.parse("2026-10-17T00:00:00.5Z"))
+
+        assertThat(budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("5.4"))).dayLimitReached()).isTrue()
+        assertThat(budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("6"))).dayLimitReached()).isFalse()
+    }
+
+    @Test
+    fun `AC-4 the database the budget reads from carries the indexes behind the day and block queries`() {
+        val indexes = DriverManager.getConnection("jdbc:sqlite:${dir.resolve("cost.db")}").use { c ->
+            c.createStatement().use { s ->
+                s.executeQuery("SELECT name FROM sqlite_master WHERE type = 'index'").use { rs ->
+                    generateSequence { if (rs.next()) rs.getString(1) else null }.toList()
+                }
+            }
+        }
+
+        assertThat(indexes).contains("event_type_at", "event_card_type_actor")
+    }
+
+    @Test
+    fun `AC-4 a card blocked many times stays blocked until an owner move after the latest block`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        costEvent("c1", "run-1", "2.00")
+        budget.onRunFinished("c1")
+        move("c1", Actor.Owner, "owner-1")
+        assertThat(budget.isBlocked("c1")).isFalse()
+
+        costEvent("c1", "run-2", "2.00")
+        budget.onRunFinished("c1")
+        assertThat(budget.isBlocked("c1")).isTrue()
+        assertThat(budget.isBlocked("ghost")).isFalse()
+
+        move("c1", Actor.Owner, "owner-2")
+        assertThat(budget.isBlocked("c1")).isFalse()
     }
 
     @Test
