@@ -1,10 +1,13 @@
 package sfv2.app
 
-/** Screens the palette can switch to. */
-enum class PaletteView(val label: String) {
-    BOARD("Quadro"),
-    FEED("Feed"),
-    SETTINGS("Configurações"),
+/** Screens the palette can switch to; [alias] is the name the screen shows elsewhere (its tab), also searchable. */
+enum class PaletteView(val label: String, private val alias: String) {
+    BOARD("Quadro", Texts.BOARD),
+    FEED("Feed", Texts.FEED_TITLE),
+    SETTINGS("Configurações", "Configurações"),
+    ;
+
+    fun matches(text: String): Boolean = label.contains(text, ignoreCase = true) || alias.contains(text, ignoreCase = true)
 }
 
 enum class Direction { UP, DOWN, FIRST, LAST }
@@ -54,7 +57,7 @@ fun paletteEntries(cards: List<BoardCard>, views: List<PaletteView>, query: Stri
 }
 
 private fun matches(entry: PaletteEntry, text: String): Boolean = when (entry) {
-    is PaletteEntry.View -> entry.view.label.contains(text, ignoreCase = true)
+    is PaletteEntry.View -> entry.view.matches(text)
     is PaletteEntry.Card -> entry.card.id.startsWith(text, ignoreCase = true) ||
         entry.card.title.contains(text, ignoreCase = true) ||
         entry.card.column.displayName.contains(text, ignoreCase = true)
