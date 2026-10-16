@@ -49,7 +49,7 @@ class CardCommands(
         is Request.AuditExport -> auditExport(request)
         is Request.EventsRecent -> recent(request.limit)
         is Request.ColumnTimes -> columnTimes.handle(request)
-        Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
+        Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary, Request.FactoryPulse -> Response.Error("not a card command")
     }
 
     private fun recent(limit: Int): Response {

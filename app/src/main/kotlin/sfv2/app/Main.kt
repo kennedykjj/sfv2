@@ -18,6 +18,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
@@ -46,6 +53,12 @@ private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
 private const val OWNER_TOKEN_FILE = "owner.token"
 private const val REQUEST_BUFFER = 8
 private const val TICK_EVERY_MILLIS = 60_000L
+private const val SENT_REFRESH_MILLIS = 2_000L
+
+/** Keys the window handles itself while the palette is open; everything else reaches the text field. */
+private val PALETTE_KEYS = setOf(
+    Key.Escape, Key.DirectionDown, Key.DirectionUp, Key.MoveHome, Key.MoveEnd, Key.Enter, Key.NumPadEnter,
+)
 
 /** What a click on the tray or on a notification asks of the window. */
 private sealed interface WindowRequest {
@@ -98,14 +111,31 @@ private fun openNoticePorts(requests: MutableSharedFlow<WindowRequest>): NoticeP
     return NoticePorts(tray, notifier)
 }
 
+/** [commands] and [closure] are null without a daemon; the card view then shows no owner action. */
 @Composable
-private fun OpenCard(cardId: String, source: CardDetailSource?, onBack: () -> Unit) {
+private fun OpenCard(
+    cardId: String,
+    source: CardDetailSource?,
+    commands: OwnerCommands?,
+    closure: ClosureCommands?,
+    onBack: () -> Unit,
+) {
     val model = remember(cardId) {
         CardDetailModel(cardId, source ?: CardDetailSource { throw IOException("no runtime dir") })
     }
+    val controller = remember(cardId, closure) { closure?.let { ClosureController(it, Dispatchers.IO) } }
     val state by model.state.collectAsState()
+    val specReview = remember(cardId, commands) { commands?.let { SpecReviewController(it, Dispatchers.IO) } }
     LaunchedEffect(model) { withContext(Dispatchers.IO) { model.refresh() } }
-    CardDetailScreen(cardId, state, onBack)
+    // The column only changes when the daemon event reaches the detail: after an accepted command, keep reading it.
+    val sent = specReview?.state?.collectAsState()?.value?.sent == true
+    LaunchedEffect(model, sent) {
+        while (sent) {
+            delay(SENT_REFRESH_MILLIS)
+            withContext(Dispatchers.IO) { model.refresh() }
+        }
+    }
+    CardDetailScreen(cardId, state, onBack, specReview = specReview, closure = controller)
 }
 
 private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
@@ -144,23 +174,81 @@ fun main() {
         )
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
-
-    val owner = board?.let {
-        val socket = Path.of(requireNotNull(runtimeDir) { "runtime dir" }, SOCKET_RELATIVE_PATH)
-        OwnerMoveController(SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE)), it, Dispatchers.IO)
+    val closureCommands = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        SocketClosureCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE))
+    }
+    val pulse = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        PulseMonitor(SocketPulseSource(socket), SocketCostSummarySource(socket), Clock.systemUTC(), ZoneId.systemDefault(), Dispatchers.IO)
     }
 
+    val ownerCommands = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        SocketOwnerCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE))
+    }
+    val owner = board?.let { monitor -> ownerCommands?.let { OwnerMoveController(it, monitor, Dispatchers.IO) } }
+
     val noBoard: StateFlow<BoardView?> = MutableStateFlow(null)
+    val noPulse: StateFlow<PulseView> = MutableStateFlow(PulseView.loading())
 
     application {
         var showSettings by remember { mutableStateOf(false) }
         val state by (monitor?.state ?: noRuntimeDir).collectAsState()
         val view by (board?.view ?: noBoard).collectAsState()
+        val pulseView by (pulse?.view ?: noPulse).collectAsState()
         val connected = state == ConnectionState.Connected
         var showFeed by remember { mutableStateOf(false) }
         var openCardId by remember { mutableStateOf<String?>(null) }
+        var palette by remember { mutableStateOf(PaletteState()) }
+        val paletteList = remember(view, palette.query) {
+            paletteEntries(view?.board?.cards.orEmpty(), PaletteView.entries, palette.query)
+        }
+
+        fun choose(entry: PaletteEntry?) {
+            when (entry) {
+                is PaletteEntry.Card -> openCardId = entry.card.id
+                is PaletteEntry.View -> {
+                    openCardId = null
+                    showSettings = entry.view == PaletteView.SETTINGS && settingsClient != null
+                    showFeed = entry.view == PaletteView.FEED
+                }
+                null -> Unit
+            }
+        }
+
+        fun onPaletteKey(event: KeyEvent): Boolean {
+            val shortcut = (event.isCtrlPressed || event.isMetaPressed) && event.key == Key.K
+            return when {
+                shortcut -> {
+                    if (event.type == KeyEventType.KeyDown) palette = palette.toggle()
+                    true
+                }
+                !palette.open || event.key !in PALETTE_KEYS -> false
+                event.type != KeyEventType.KeyDown -> true
+                else -> {
+                    when (event.key) {
+                        Key.Escape -> palette = palette.close()
+                        Key.DirectionDown -> palette = palette.move(Direction.DOWN, paletteList.size)
+                        Key.DirectionUp -> palette = palette.move(Direction.UP, paletteList.size)
+                        Key.MoveHome -> palette = palette.move(Direction.FIRST, paletteList.size)
+                        Key.MoveEnd -> palette = palette.move(Direction.LAST, paletteList.size)
+                        else -> {
+                            val choice = palette.select(paletteList)
+                            palette = choice.state
+                            choose(choice.entry)
+                        }
+                    }
+                    true
+                }
+            }
+        }
+
         LaunchedEffect(Unit) { monitor?.run() }
         LaunchedEffect(Unit) { board?.run() }
+        LaunchedEffect(Unit) { pulse?.run() }
+        // Every board event moves the cursor; the strip reads again instead of waiting for its 5 s tick.
+        LaunchedEffect(view?.board?.lastSeq) { pulse?.refresh() }
         LaunchedEffect(feed, connected) { if (feed != null && connected) feed.run() }
         LaunchedEffect(Unit) {
             while (true) {
@@ -172,6 +260,7 @@ fun main() {
             onCloseRequest = ::exitApplication,
             title = "sfv2",
             state = rememberWindowState(size = DpSize(960.dp, 640.dp), position = WindowPosition.PlatformDefault),
+            onPreviewKeyEvent = ::onPaletteKey,
         ) {
             window.minimumSize = Dimension(360, 240)
             LaunchedEffect(Unit) {
@@ -188,21 +277,42 @@ fun main() {
             }
             val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
-            when {
-                openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource) { openCardId = null }
-                showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
-                feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
-                    val feedState by feed.client.state.collectAsState()
-                    val scope = rememberCoroutineScope()
-                    FeedScreen(feedState, LocalDate.now(feed.clock.withZone(feed.zone))) { day ->
-                        scope.launch(Dispatchers.IO) { feed.client.selectDay(day) }
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    openCardId != null ->
+                        OpenCard(requireNotNull(openCardId), cardSource, ownerCommands, closureCommands) { openCardId = null }
+                    showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
+                    feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
+                        val feedState by feed.client.state.collectAsState()
+                        val scope = rememberCoroutineScope()
+                        FeedScreen(feedState, LocalDate.now(feed.clock.withZone(feed.zone))) { day ->
+                            scope.launch(Dispatchers.IO) { feed.client.selectDay(day) }
+                        }
                     }
+                    // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
+                    view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
+                        Column(Modifier.fillMaxSize()) {
+                            PulseStrip(pulseView, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                            Box(Modifier.weight(1f)) {
+                                BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
+                            }
+                        }
+                    }
+                    else -> ConnectionScreen(state, onOpenSettings = openSettings)
                 }
-                // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
-                view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
-                    BoardScreen(view, connected = connected, controller = owner, onOpenSettings = openSettings)
+                if (palette.open) {
+                    PaletteScreen(
+                        state = palette,
+                        entries = paletteList,
+                        onQuery = { palette = palette.withQuery(it) },
+                        onChoose = { index ->
+                            val choice = palette.copy(active = index).select(paletteList)
+                            palette = choice.state
+                            choose(choice.entry)
+                        },
+                        onClose = { palette = palette.close() },
+                    )
                 }
-                else -> ConnectionScreen(state, onOpenSettings = openSettings)
             }
         }
     }

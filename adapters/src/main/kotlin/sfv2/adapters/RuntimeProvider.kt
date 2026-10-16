@@ -11,6 +11,9 @@ sealed interface RuntimeProvider {
     /** Variables the claude subprocess needs for this provider; throws [InvalidRuntimeProviderException] when invalid. */
     fun environment(): Map<String, String> = emptyMap()
 
+    /** Provider variables this provider lets through from the daemon environment instead of clearing them. */
+    fun inheritedVariables(): Set<String> = emptySet()
+
     data object Anthropic : RuntimeProvider
 
     data class Bedrock(val region: String, val profile: String? = null) : RuntimeProvider {
@@ -23,6 +26,8 @@ sealed interface RuntimeProvider {
                 profile?.let { put("AWS_PROFILE", it) }
             }
         }
+
+        override fun inheritedVariables(): Set<String> = if (profile == null) setOf("AWS_PROFILE") else emptySet()
     }
 
     data class Vertex(val region: String, val projectId: String) : RuntimeProvider {

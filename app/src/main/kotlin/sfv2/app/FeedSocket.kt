@@ -52,7 +52,7 @@ private fun parseObject(line: String?): JsonObject {
 }
 
 /** One request, one reply line; `ok:false` becomes an [IOException] with the daemon's error. */
-private fun call(socket: Path, request: JsonObject): JsonObject {
+internal fun call(socket: Path, request: JsonObject): JsonObject {
     val channel = connect(socket, request)
     channel.use {
         val reply = parseObject(Channels.newInputStream(it).bufferedReader().readLine())
@@ -63,7 +63,7 @@ private fun call(socket: Path, request: JsonObject): JsonObject {
     }
 }
 
-private fun text(obj: JsonObject, key: String): String? = (obj[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
+internal fun text(obj: JsonObject, key: String): String? = (obj[key] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull
 
 private fun decimal(element: JsonElement?): BigDecimal? =
     (element as? JsonPrimitive)?.takeUnless { it is JsonNull }?.contentOrNull?.toBigDecimalOrNull()

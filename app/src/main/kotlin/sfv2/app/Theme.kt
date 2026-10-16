@@ -5,33 +5,35 @@ import androidx.compose.ui.text.font.FontFamily
 import sfv2.core.NotificationType
 import sfv2.core.Column as BoardColumn
 
-/** Tokens of DESIGN.md (Charcoal) shared by the screens. */
-internal object Tokens {
+/** Color tokens of DESIGN.md (charcoal theme). */
+object Tokens {
     val ground = Color(0xFF0A0A0A)
     val panel = Color(0xFF14171B)
+    val raise = Color(0xFF242830)
     val edge = Color(0xFF2A2F39)
     val edgeHi = Color(0xFF3D444F)
     val text = Color(0xFFF2F1EE)
     val soft = Color(0xFFD6D8DA)
     val muted = Color(0xFFA3ABB6)
     val faint = Color(0xFF8F98A3)
+    val sand = Color(0xFFC7B9A6)
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
-    val sand = Color(0xFFC7B9A6)
-    val raise = Color(0xFF242830)
     val bad = Color(0xFFE58F80)
 }
 
-internal val sans = FontFamily.SansSerif
-internal val mono = FontFamily.Monospace
+val sans = FontFamily.SansSerif
+val mono = FontFamily.Monospace
 
-/** Every user-facing string of the app, in one place for the future i18n. */
-internal object Texts {
+/** Every user-facing text of the app, in pt-BR. */
+object Texts {
     const val TITLE = "sfv2"
     const val CONNECTING = "Conectando ao daemon…"
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
+
     const val BOARD = "Esteira"
+    const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
     const val MEDIAN = "mediana"
     const val MEAN_WAIT = "espera média"
@@ -39,6 +41,8 @@ internal object Texts {
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
     const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun goToColumn(column: BoardColumn, count: Int): String = "Ir para ${column.displayName}, ${cardCount(count)}"
 
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
@@ -53,12 +57,22 @@ internal object Texts {
     const val EVENTS_TRUNCATED = "Mostrando só os 500 eventos mais recentes."
     const val COST_UNKNOWN_REASON = "falta preço de um modelo"
 
+    const val GATES = "Gates"
+    const val NO_GATES = "Nenhum gate rodou ainda"
+    const val CRITERIA = "Critérios"
+    const val NO_DURATION = "—"
+    const val GATE_OK = "ok"
+    const val GATE_BAD = "bad"
+    const val GATE_NOT_RUN = "não rodou"
+    const val GATE_MANUAL = "manual"
+
     const val FEED_TITLE = "Feed do dia"
     const val TODAY = "Hoje"
     const val PREVIOUS_DAY = "Dia anterior"
     const val NEXT_DAY = "Próximo dia"
     const val CURRENT_DAY = "Este é o dia atual"
     const val RECONNECTING = "Reconectando…"
+
     const val COST_TITLE = "Custo do dia"
     const val COST_BY_CARD = "Por card"
     const val COST_TOTAL = "Total do dia"
@@ -76,8 +90,6 @@ internal object Texts {
     const val EARLIER_HISTORY_UNAVAILABLE = "Histórico anterior indisponível"
     const val FAILED = "falhou"
 
-    fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
-
     const val NO_OWNER_MOVE = "Este card não tem movimento seu."
     const val NOTHING_SENT = "Nada enviado."
     const val NOTE_LABEL = "Nota para a refinagem"
@@ -85,28 +97,40 @@ internal object Texts {
     const val CANCEL = "Cancelar"
     const val DISMISS = "Entendi"
 
-    fun holding(id: String): String = "Segurando #${id.take(8)}. Setas escolhem o destino, Enter confirma, Esc cancela."
+    const val SPEC_DECISION = "Decisão sobre a spec"
+    const val APPROVE = "Aprovar"
+    const val REQUEST_CHANGE = "Pedir mudança"
+    const val SEND_NOTE = "Enviar"
+    const val SENDING = "Enviando…"
+    const val APPROVAL_SENT = "Aprovação enviada"
+    const val CHANGE_SENT = "Pedido de mudança enviado"
+    const val DISMISS_NOTICE = "Dispensar"
+    const val NOTICE_REFUSED = "Recusado"
+    const val NOTICE_NOT_SENT = "Não enviado"
+    const val NOTE_REQUIRED = "A nota é obrigatória para pedir mudança."
 
-    fun refused(reason: String): String = "Não movido: $reason"
+    const val CLOSURE_OPEN = "Fechamento no tracker"
+    const val CLOSURE_TITLE = "Fechamento"
+    const val CLOSURE_LOADING = "Pedindo o rascunho ao daemon…"
+    const val CLOSURE_STATUS = "Status"
+    const val CLOSURE_SUMMARY = "Resumo"
+    const val CLOSURE_PR = "Pull request"
+    const val CLOSURE_NOTICE = "Isto é o que será postado no tracker; o título do card não é enviado."
+    const val CLOSURE_CONFIRM = "Confirmar fechamento"
+    const val CLOSURE_CONFIRMING = "Confirmando…"
+    const val CLOSURE_CLOSED = "Fechado no tracker"
 
-    fun notSent(cause: NotSentCause): String =
+    fun closureRefused(reason: String): String = "O daemon não montou o rascunho de fechamento: $reason"
+
+    fun closureFailed(reason: String): String =
+        "A escrita no tracker falhou e o card segue em Done. Tente de novo. Resposta do daemon: $reason"
+
+    fun closureNotSent(cause: NotSentCause): String =
         when (cause) {
-            NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
-            NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
+            NotSentCause.DAEMON_UNAVAILABLE -> "Nada foi enviado: o daemon está indisponível. Confira com sfv2 doctor e tente de novo."
+            NotSentCause.NO_OWNER_PROOF -> "Nada foi enviado: o arquivo do token do dono não foi encontrado. Rode sfv2 service install e tente de novo."
+            NotSentCause.NO_ANSWER -> "O daemon não respondeu a tempo: confira o card antes de tentar de novo."
         }
-
-    /** What the move means to the owner, for the destination chooser and the drop button. */
-    fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
-        when {
-            from == BoardColumn.SPEC_REVIEW && to == BoardColumn.READY_FOR_DEV -> "Aprovar a spec"
-            to == BoardColumn.READY_FOR_REFINEMENT && from == BoardColumn.SPEC_REVIEW -> "Devolver à refinagem"
-            to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
-            else -> "Enviar à refinagem"
-        }
-
-    fun cardNotFound(id: String) = "Card #$id não encontrado."
-
-    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
 
     const val OPEN_SETTINGS = "Configurações"
     const val SETTINGS_TITLE = "Configurações"
@@ -121,6 +145,7 @@ internal object Texts {
     const val SAVE = "Salvar"
     const val ON = "Ligado"
     const val OFF = "Desligado"
+
     const val GROUP_POOL = "Pool de sessões"
     const val GROUP_HOURS = "Horário de trabalho"
     const val GROUP_COST = "Limites de custo"
@@ -144,6 +169,34 @@ internal object Texts {
 
     val DAY_NAMES = listOf("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
 
+    private const val SHORT_ID = 8
+
+    fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
+
+    fun holding(id: String): String = "Segurando #${id.take(SHORT_ID)}. Setas escolhem o destino, Enter confirma, Esc cancela."
+
+    fun refused(reason: String): String = "Não movido: $reason"
+
+    fun notSent(cause: NotSentCause): String =
+        when (cause) {
+            NotSentCause.DAEMON_UNAVAILABLE -> "Movimento não enviado: o daemon está indisponível."
+            NotSentCause.NO_OWNER_PROOF -> "Movimento não enviado: prova do dono não encontrada."
+            NotSentCause.NO_ANSWER -> "Movimento sem resposta do daemon: confira o quadro antes de repetir."
+        }
+
+    /** What the move means to the owner, for the destination chooser and the drop button. */
+    fun moveMeaning(from: BoardColumn, to: BoardColumn): String =
+        when {
+            from == BoardColumn.SPEC_REVIEW && to == BoardColumn.READY_FOR_DEV -> "Aprovar a spec"
+            to == BoardColumn.READY_FOR_REFINEMENT && from == BoardColumn.SPEC_REVIEW -> "Devolver à refinagem"
+            to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
+            else -> "Enviar à refinagem"
+        }
+
+    fun cardNotFound(id: String): String = "Card #$id não encontrado."
+
+    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
+
     fun notificationLabel(type: NotificationType): String =
         when (type) {
             NotificationType.DECISION_WAITING -> "Decisão espera por você"
@@ -155,7 +208,7 @@ internal object Texts {
 
     fun fixFields(count: Int): String = if (count == 1) "Corrija 1 campo para salvar" else "Corrija $count campos para salvar"
 
-    fun fieldLabel(field: String): String =
+    private fun fieldLabel(field: String): String =
         when {
             field == "poolSize" -> GROUP_POOL
             field.startsWith("workHours") -> GROUP_HOURS
@@ -164,29 +217,29 @@ internal object Texts {
             else -> field
         }
 
-    fun issueReason(field: String, reason: String): String =
-        when {
+    /** The daemon's refusal of one settings field, in the owner's words. */
+    fun issueReason(field: String, reason: String): String {
+        val message = when {
             field == "poolSize" -> "use de 1 a 64."
             field == "workHours" -> "o fim deve ser depois do início."
             field == "workHours.days" -> "escolha ao menos um dia."
             field == "workHours.zone" -> "fuso desconhecido."
-            "required" in reason -> "informe um limite."
-            else -> "deve ser maior que zero."
+            field.startsWith("cost.") && reason.contains("required") -> "informe um limite."
+            field.startsWith("cost.") -> "deve ser maior que zero."
+            else -> reason
         }
+        return "${fieldLabel(field)}: $message"
+    }
 
-    /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
-    data class Explanation(val reason: String, val step: String, val command: String?)
+    /** Why the daemon is unreachable, what to do, and the command that does it, when there is one. */
+    data class Explanation(val reason: String, val step: String, val command: String? = null)
 
     fun explain(reason: DisconnectReason): Explanation =
         when (reason) {
-            DisconnectReason.SERVICE_NOT_INSTALLED ->
-                Explanation("O serviço sfv2 não está instalado.", "Instale com", "sfv2 service install")
-            DisconnectReason.START_FAILED ->
-                Explanation("O serviço sfv2 não iniciou.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.START_TIMED_OUT ->
-                Explanation("O daemon não respondeu a tempo.", "Veja o estado com", "sfv2 doctor")
-            DisconnectReason.NOT_RESPONDING ->
-                Explanation("O daemon parou de responder.", "A janela volta sozinha quando ele voltar.", null)
+            DisconnectReason.SERVICE_NOT_INSTALLED -> Explanation("O serviço sfv2 não está instalado.", "Instale com", "sfv2 service install")
+            DisconnectReason.START_FAILED -> Explanation("O serviço sfv2 não iniciou.", "Veja o estado com", "sfv2 doctor")
+            DisconnectReason.START_TIMED_OUT -> Explanation("O daemon não respondeu a tempo.", "Veja o estado com", "sfv2 doctor")
+            DisconnectReason.NOT_RESPONDING -> Explanation("O daemon parou de responder.", "A janela volta sozinha quando ele voltar.")
             DisconnectReason.NO_RUNTIME_DIR ->
                 Explanation("Não encontrei o diretório de runtime do usuário (XDG_RUNTIME_DIR).", "Veja o estado com", "sfv2 doctor")
         }

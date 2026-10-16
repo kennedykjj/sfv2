@@ -2,8 +2,12 @@ package sfv2.app
 
 import java.io.IOException
 import java.math.BigDecimal
+import java.time.Instant
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import sfv2.core.Column
 
 /**
  * Shape the implementation must follow (deterministic: no sockets, no sleeps, no clock):
@@ -16,9 +20,21 @@ import org.junit.jupiter.api.Test
  * - `sealed interface CardDetailState`: `Loading`, `Loaded(detail: CardDetail)`, `NotFound`, `Disconnected`.
  * - `CardDetail(id, title, column, spec: SpecView(status, text), events: List<TimelineEvent(id, at, actor, type, payload)>,
  *   eventsTruncated: Boolean, runs: List<RunRow(runId, stage, runtime, status: CostStatus, costUsd: BigDecimal?, reason: String?)>,
- *   total: CostTotal(status: CostStatus, costUsd: BigDecimal?))`; `eventsTruncated` reads `detail.truncated` of the reply.
+ *   total: CostTotal(status: CostStatus, costUsd: BigDecimal?), gates: List<GateRow>, criteria: List<CriterionRow>)`;
+ *   `eventsTruncated` reads `detail.truncated` of the reply.
+ * - `GateRow(name: String, verdict: String, reason: String?, durationMs: Long?, at: Instant)` reads one `detail.gates` item
+ *   (`name`, `verdict`, `reason`, `duration_ms`, `at`); an absent `duration_ms` is null, never zero.
+ * - `CriterionRow(ac: String, layer: String, testFile: String, gate: String)` reads one `detail.criteria` item
+ *   (`ac`, `layer`, `test_file`, `gate`).
+ * - A reply without `gates` or `criteria` (older daemon) loads with both lists empty.
  * - `enum class CostStatus { KNOWN, PARTIAL, UNKNOWN }` and the pure `formatCost(costUsd: BigDecimal?): String`
  *   (`US$ 0,42 est.`; `US$ ?` when the cost is unknown).
+ *
+ * Closure screen (#71), the controller part (`ClosureModel.kt`): `ClosureCommands.draft/confirm` answer with the sealed
+ * `DraftOutcome` / `ConfirmOutcome`; `ClosureController(commands, io)` exposes `state: StateFlow<ClosureState>`
+ * (`Loading`, `Draft(status, summary, prLink, draftHash, notSent)`, `Refused(reason)`, `Confirming(draftHash)`, `Closed`,
+ * `Failed(reason, draftHash)`); `open(cardId, events)` seeds from the card timeline (chronological, last `CLOSURE_*` wins)
+ * and `confirm()` sends from `Draft` or `Failed` and is a no-op in any other state.
  */
 class CardDetailModelTest {
 
@@ -49,8 +65,16 @@ class CardDetailModelTest {
         total: String = """{"status":"KNOWN","cost_usd":"0"}""",
         spec: String = """{"status":"valid","text":"Do the thing"}""",
         truncated: Boolean = false,
-    ) = """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"CODING"},"spec":$spec,""" +
-        """"events":[${events.joinToString(",")}],"truncated":$truncated,"runs":[${runs.joinToString(",")}],"total":$total}}"""
+        column: String = "CODING",
+        gates: String? = null,
+        criteria: String? = null,
+    ): String {
+        val gatesField = if (gates == null) "" else ""","gates":$gates"""
+        val criteriaField = if (criteria == null) "" else ""","criteria":$criteria"""
+        return """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"$column"},"spec":$spec,""" +
+            """"events":[${events.joinToString(",")}],"truncated":$truncated,"runs":[${runs.joinToString(",")}],"total":$total""" +
+            """$gatesField$criteriaField}}"""
+    }
 
     @Test
     fun `AC-7 a daemon that cannot be reached shows disconnected with no data and recovers on reconnect`() {
@@ -159,4 +183,306 @@ class CardDetailModelTest {
         assertThat(formatCost(allUnknown.costUsd)).isEqualTo("US$ ?")
         assertThat(formatCost(BigDecimal("1.356"))).isEqualTo("US$ 1,36 est.")
     }
+
+    @Test
+    fun `AC-5 a reply from an older daemon without gates and criteria loads with both lists empty`() {
+        val model = CardDetailModel("c1", FakeSource { reply() })
+
+        model.refresh()
+
+        val detail = loaded(model)
+        assertThat(detail.title).isEqualTo("Detail card")
+        assertThat(detail.gates).isEmpty()
+        assertThat(detail.criteria).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 a reply with gates and criteria exposes each one with the same values`() {
+        val gates = """[
+            {"name":"lint","verdict":"PASS","duration_ms":850,"at":"2026-10-16T10:00:01Z"},
+            {"name":"test-daemon","verdict":"FAIL","reason":"tests_failed","duration_ms":12000,"at":"2026-10-16T10:00:02Z"},
+            {"name":"scope","verdict":"PASS","at":"2026-10-16T10:00:03Z"}
+        ]"""
+        val criteria = """[
+            {"ac":"AC-1","layer":"daemon","test_file":"daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt","gate":"FAIL"},
+            {"ac":"AC-2","layer":"core","test_file":"core/src/test/kotlin/sfv2/core/BetaTest.kt","gate":"none"},
+            {"ac":"AC-3","layer":"manual","test_file":"n/a","gate":"manual"}
+        ]"""
+        val model = CardDetailModel("c1", FakeSource { reply(gates = gates, criteria = criteria) })
+
+        model.refresh()
+
+        val detail = loaded(model)
+        assertThat(detail.gates.map { it.name }).containsExactly("lint", "test-daemon", "scope")
+        assertThat(detail.gates.map { it.verdict }).containsExactly("PASS", "FAIL", "PASS")
+        assertThat(detail.gates.map { it.durationMs }).containsExactly(850L, 12000L, null)
+        assertThat(detail.gates.map { it.reason }).containsExactly(null, "tests_failed", null)
+        assertThat(detail.gates.map { it.at }.first()).isEqualTo(Instant.parse("2026-10-16T10:00:01Z"))
+        assertThat(detail.criteria.map { it.ac }).containsExactly("AC-1", "AC-2", "AC-3")
+        assertThat(detail.criteria.map { it.layer }).containsExactly("daemon", "core", "manual")
+        assertThat(detail.criteria.map { it.testFile }).containsExactly(
+            "daemon/src/test/kotlin/sfv2/daemon/AlphaTest.kt",
+            "core/src/test/kotlin/sfv2/core/BetaTest.kt",
+            "n/a",
+        )
+        assertThat(detail.criteria.map { it.gate }).containsExactly("FAIL", "none", "manual")
+    }
+
+    @Test
+    fun `AC-6 once the approval event reaches the view the new column shows, the actions go away and the timeline has the owner approval`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val commands = FakeOwnerCommands()
+            val controller = SpecReviewController(commands, Dispatchers.Unconfined)
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            controller.approve("c1")
+
+            // Accepted, but the daemon event has not arrived: the column is still the one the daemon last reported.
+            assertThat(commands.calls).containsExactly(SentMove("c1", Column.SPEC_REVIEW, Column.READY_FOR_DEV, null))
+            assertThat(controller.state.value.sent).isTrue()
+            assertThat(loaded(model).column).isEqualTo("SPEC_REVIEW")
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            val approval = event(1, "owner", "OWNER_APPROVED", """{"from":"SPEC_REVIEW","to":"READY_FOR_DEV"}""")
+            source.reply = { reply(events = listOf(created, approval), column = "READY_FOR_DEV") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_DEV")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.type).isEqualTo("OWNER_APPROVED")
+            assertThat(signed.actor).isEqualTo("owner")
+        }
+
+    @Test
+    fun `AC-6 a change request event sends the card back to refinement, hides the actions and shows the signed request with its note`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val controller = SpecReviewController(FakeOwnerCommands(), Dispatchers.Unconfined)
+
+            controller.requestChange("c1", "cover offline")
+            assertThat(controller.state.value.sent).isTrue()
+
+            val change = event(
+                1,
+                "owner",
+                "OWNER_CHANGE_REQUESTED",
+                """{"from":"SPEC_REVIEW","to":"READY_FOR_REFINEMENT","note":"cover offline"}""",
+            )
+            source.reply = { reply(events = listOf(created, change), column = "READY_FOR_REFINEMENT") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_REFINEMENT")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.actor).isEqualTo("owner")
+            assertThat(signed.payload["note"]).isEqualTo("cover offline")
+        }
+
+    @Test
+    fun `AC-1 opening the closure screen asks the daemon for the draft and shows it without confirming`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+
+        fx.controller.open("c1", ClosureFixtures.timeline())
+
+        assertThat(fx.commands.drafts).containsExactly("c1")
+        assertThat(fx.commands.confirms).isEmpty()
+        assertThat(fx.controller.state.value).isEqualTo(ClosureFixtures.aDraftState("h1"))
+    }
+
+    @Test
+    fun `AC-1 a truncated timeline without a closure event still asks for the draft`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+
+        fx.controller.open("c1", ClosureFixtures.timeline())
+
+        assertThat(fx.commands.drafts).containsExactly("c1")
+        assertThat(fx.controller.state.value).isInstanceOf(ClosureState.Draft::class.java)
+    }
+
+    @Test
+    fun `AC-2 a refused draft shows the daemon reason and confirming sends nothing`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.commands.draftReply = { DraftOutcome.Refused("no_pr_recorded") }
+
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        fx.controller.confirm()
+
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Refused("no_pr_recorded"))
+        assertThat(fx.commands.confirms).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 confirming sends the displayed draft hash and shows closed when the daemon accepts`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        var stateWhileInFlight: ClosureState? = null
+        fx.commands.confirmReply = {
+            stateWhileInFlight = fx.controller.state.value
+            ConfirmOutcome.Closed
+        }
+
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"))
+        assertThat(stateWhileInFlight).isEqualTo(ClosureState.Confirming("h1"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+
+    @Test
+    fun `AC-4 a tracker write error shows the error, keeps the draft hash and retry resends the same confirm`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        fx.commands.confirmReply = { ConfirmOutcome.Failed("tracker unavailable") }
+
+        fx.controller.confirm()
+
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Failed("tracker unavailable", "h1"))
+
+        fx.commands.confirmReply = { ConfirmOutcome.Closed }
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"), SentConfirm("c1", "h1"))
+        assertThat(fx.commands.drafts).containsExactly("c1")
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+
+    @Test
+    fun `AC-4 a changed draft fetches a new one and waits for a new confirmation`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        fx.commands.confirmReply = { ConfirmOutcome.DraftChanged }
+        fx.commands.draftReply = { ClosureFixtures.aDrafted("h2") }
+
+        fx.controller.confirm()
+
+        assertThat(fx.commands.drafts).containsExactly("c1", "c1")
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureFixtures.aDraftState("h2"))
+
+        fx.commands.confirmReply = { ConfirmOutcome.Closed }
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"), SentConfirm("c1", "h2"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+
+    @Test
+    fun `AC-5 a confirm that did not reach the daemon keeps the draft visible and allows another try`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        fx.commands.confirmReply = { ConfirmOutcome.NotSent(NotSentCause.NO_OWNER_PROOF) }
+
+        fx.controller.confirm()
+
+        assertThat(fx.controller.state.value)
+            .isEqualTo(ClosureFixtures.aDraftState("h1").copy(notSent = NotSentCause.NO_OWNER_PROOF))
+
+        fx.commands.confirmReply = { ConfirmOutcome.Closed }
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"), SentConfirm("c1", "h1"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+
+    @Test
+    fun `AC-6 a timeline ending in CLOSURE_WRITTEN shows closed and asks for nothing`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        val events = ClosureFixtures.timeline(
+            ClosureFixtures.anEvent(1, "CLOSURE_CONFIRMED", mapOf("draft_hash" to "h1")),
+            ClosureFixtures.anEvent(2, "CLOSURE_FAILED", mapOf("reason" to "tracker unavailable")),
+            ClosureFixtures.anEvent(3, "CLOSURE_WRITTEN", mapOf("result" to "closed")),
+        )
+
+        fx.controller.open("c1", events)
+        fx.controller.confirm()
+
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+        assertThat(fx.commands.drafts).isEmpty()
+        assertThat(fx.commands.confirms).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 a timeline whose last closure event is CLOSURE_FAILED shows the error and retries the confirmed hash`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        val events = ClosureFixtures.timeline(
+            ClosureFixtures.anEvent(1, "CLOSURE_CONFIRMED", mapOf("draft_hash" to "h1")),
+            ClosureFixtures.anEvent(2, "CLOSURE_FAILED", mapOf("reason" to "tracker unavailable")),
+        )
+
+        fx.controller.open("c1", events)
+
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Failed("tracker unavailable", "h1"))
+        assertThat(fx.commands.drafts).isEmpty()
+
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+
+    @Test
+    fun `AC-7 a second confirm while one is in flight is not sent`() = runBlocking {
+        val fx = ClosureFixtures.controller()
+        fx.controller.open("c1", ClosureFixtures.timeline())
+        fx.commands.confirmReply = {
+            runBlocking { fx.controller.confirm() }
+            ConfirmOutcome.Closed
+        }
+
+        fx.controller.confirm()
+
+        assertThat(fx.commands.confirms).containsExactly(SentConfirm("c1", "h1"))
+        assertThat(fx.controller.state.value).isEqualTo(ClosureState.Closed)
+    }
+}
+
+data class SentConfirm(val cardId: String, val draftHash: String)
+
+class FakeClosureCommands : ClosureCommands {
+    val drafts = mutableListOf<String>()
+    val confirms = mutableListOf<SentConfirm>()
+    var draftReply: () -> DraftOutcome = { ClosureFixtures.aDrafted("h1") }
+    var confirmReply: () -> ConfirmOutcome = { ConfirmOutcome.Closed }
+
+    override fun draft(cardId: String): DraftOutcome {
+        drafts += cardId
+        return draftReply()
+    }
+
+    override fun confirm(cardId: String, draftHash: String): ConfirmOutcome {
+        confirms += SentConfirm(cardId, draftHash)
+        return confirmReply()
+    }
+}
+
+class ClosureControllerFixture {
+    val commands = FakeClosureCommands()
+    val controller = ClosureController(commands, Dispatchers.Unconfined)
+}
+
+object ClosureFixtures {
+    fun controller() = ClosureControllerFixture()
+
+    fun aDrafted(hash: String) = DraftOutcome.Drafted("Entregue", "Resumo do card", "https://github.com/o/r/pull/7", hash)
+
+    fun aDraftState(hash: String) = ClosureState.Draft("Entregue", "Resumo do card", "https://github.com/o/r/pull/7", hash)
+
+    fun anEvent(n: Int, type: String, payload: Map<String, String> = emptyMap()) =
+        TimelineEvent("e$n", Instant.parse("2026-10-16T10:00:%02dZ".format(n)), "factory", type, payload)
+
+    /** Chronological timeline: a delivery to Done first, then whatever closure events the test passes. */
+    fun timeline(vararg closure: TimelineEvent): List<TimelineEvent> =
+        listOf(anEvent(0, "CARD_MOVED", mapOf("to" to "DONE"))) + closure
 }

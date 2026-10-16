@@ -11,6 +11,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
+import sfv2.core.AssistantState
 import sfv2.core.Column
 import sfv2.core.ColumnTime
 import sfv2.core.FactorySettings
@@ -123,6 +124,9 @@ sealed interface Request {
     /** Read-only: the newest [limit] events (1..[MAX_RECENT_EVENTS]) in seq order. */
     data class EventsRecent(val limit: Int) : Request
 
+    /** Read-only: the assistant state and phrase, the pool capacity and the cards with an active run. Takes no parameter. */
+    data object FactoryPulse : Request
+
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
 
@@ -152,6 +156,14 @@ sealed interface Response {
 
     /** The time of the columns that have a statistic; the others are absent, never zero. */
     data class ColumnTimesResult(val times: Map<Column, ColumnTime>) : Response
+
+    /** The pulse of the factory; [active] holds card labels (`#<number>` or 8 hex characters), never titles. */
+    data class PulseResult(
+        val state: AssistantState,
+        val phrase: String,
+        val poolCapacity: Int,
+        val active: List<String>,
+    ) : Response
 
     data class CostSummaryResult(
         val totalUsd: BigDecimal,
@@ -280,6 +292,7 @@ fun parseRequest(line: String): Request {
         }
         "events.subscribe" -> parseSubscribe(obj)
         "events.recent" -> parseRecent(obj)
+        "factory.pulse" -> Request.FactoryPulse
         "cost.summary" -> {
             val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
             val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
@@ -516,6 +529,18 @@ fun render(response: Response): String = when (response) {
                         },
                     ),
                 )
+            },
+        )
+    }.toString()
+    is Response.PulseResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("state", response.state.name)
+                put("phrase", response.phrase)
+                put("poolCapacity", response.poolCapacity)
+                put("active", JsonArray(response.active.map { JsonPrimitive(it) }))
             },
         )
     }.toString()

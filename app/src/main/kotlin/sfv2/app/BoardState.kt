@@ -4,11 +4,12 @@ import sfv2.core.Column
 import sfv2.core.ColumnTime
 import sfv2.core.ColumnTimeKind
 import sfv2.core.EventType
+import sfv2.core.OWNER_WAIT_COLUMNS
 
 data class BoardCard(val id: String, val title: String, val column: Column)
 
 /** Columns whose cards wait for a decision of the owner: the owner-only moves in `MoveRules` start here (PRODUCT.md). */
-val OWNER_DECISION_COLUMNS: Set<Column> = setOf(Column.SPEC_REVIEW, Column.STAGED)
+val OWNER_DECISION_COLUMNS: Set<Column> = OWNER_WAIT_COLUMNS
 
 fun isWaitingForOwner(column: Column): Boolean = column in OWNER_DECISION_COLUMNS
 

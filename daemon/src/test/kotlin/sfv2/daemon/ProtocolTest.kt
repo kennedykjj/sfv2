@@ -103,6 +103,17 @@ class ProtocolTest {
     }
 
     @Test
+    fun `AC-2 factory pulse is recognized without any field and takes no parameter that matters`() {
+        val request = parseRequest("""{"cmd":"factory.pulse"}""")
+
+        assertThat(request).isNotInstanceOf(Request.Rejected::class.java)
+        assertThat(request.javaClass.simpleName).isEqualTo("FactoryPulse")
+        assertThat(parseRequest("""{"cmd":"factory.pulse","path":"/etc/passwd","id":"x"}""")).isEqualTo(request)
+        assertThat(parseRequest("""["factory.pulse"]""")).isEqualTo(Request.Rejected("message must be a JSON object"))
+        assertThat(parseRequest("""{"pulse":true}""")).isEqualTo(Request.Rejected("missing cmd"))
+    }
+
+    @Test
     fun `pong renders as a single json line`() {
         assertThat(render(Response.Pong)).isEqualTo("""{"ok":true,"result":"pong"}""")
     }
