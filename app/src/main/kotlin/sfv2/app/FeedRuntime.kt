@@ -11,7 +11,7 @@ import kotlin.coroutines.coroutineContext
 
 /** Drives an [EventFeedClient] against the daemon's socket: opens it, then retries while the feed is reconnecting. */
 class FeedRuntime(socket: Path, val clock: Clock, val zone: ZoneId) {
-    val client = EventFeedClient(SocketFeedTransport(socket), SocketCostSummarySource(socket), clock, zone)
+    val client = EventFeedClient(SocketFeedTransport(socket), SocketCostSummarySource(socket, zone), clock, zone)
 
     /** Runs until the coroutine is cancelled; the socket calls block, so they run off the caller. */
     suspend fun run() {

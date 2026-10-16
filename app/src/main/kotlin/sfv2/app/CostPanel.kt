@@ -48,11 +48,17 @@ fun CostPanel(cost: CostSummaryView, compact: Boolean) {
         if (cost.explainsPartial) {
             BasicText(Texts.PARTIAL_EXPLANATION, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
         }
-        if (cost.cards.isNotEmpty()) {
-            BasicText(Texts.COST_BY_CARD, style = TextStyle(fontFamily = sans, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Tokens.soft))
-            cost.cards.forEach { AmountLine(it, big = false) }
-        }
+        Section(Texts.COST_BY_CARD, cost.cards)
+        Section(Texts.COST_BY_STAGE, cost.stages)
+        Section(Texts.COST_BY_DAY, cost.days)
     }
+}
+
+@Composable
+private fun Section(title: String, lines: List<CostLine>) {
+    if (lines.isEmpty()) return
+    BasicText(title, style = TextStyle(fontFamily = sans, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Tokens.soft))
+    lines.forEach { AmountLine(it, big = false) }
 }
 
 @Composable

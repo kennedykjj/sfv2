@@ -1,12 +1,14 @@
 package sfv2.app
 
 import java.math.BigDecimal
+import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 /**
  * Shape the implementation must follow (deterministic, no UI, no sleeps, no real clock):
@@ -26,6 +28,10 @@ import org.junit.jupiter.api.Test
  * - `CostSummaryView.of(summary)` only formats the daemon's numbers: `US$ 1.234,56`, total with the suffix `est.`,
  *   PARTIAL with `≥` and tag Partial, UNKNOWN as `US$ ?` with tag Unknown, cards sorted from the largest to the smallest,
  *   limit text and `LimitState` taken from the daemon's `limits`/`dayReached`/`cardsReached` (never recomputed).
+ * - `CostSummaryView.stages` ("Por estágio") is one `CostLine` per `stages` entry of the daemon, labeled with the stage
+ *   name, sorted from the largest to the smallest like the cards (UNKNOWN last), formatted like a card line, with no limit.
+ *   `CostSummaryView.days` ("Por dia") is one `CostLine` per `days` entry, labeled `dd/MM`, in the daemon's chronological
+ *   order, and is empty unless the period covers more than one day. A daemon without `stages`/`days` yields empty lists.
  */
 class FeedTest {
     private val zone = ZoneOffset.ofHours(-3)
@@ -275,6 +281,81 @@ class FeedTest {
 
         client.selectDay(today.minusDays(1))
         assertThat(source.requests.last()).isEqualTo(dayStart.minusSeconds(86_400) to dayStart)
+    }
+
+    /** The view the app builds from a `cost.summary` reply, read through the real socket source. */
+    private fun viewOf(dir: Path, result: String): CostSummaryView {
+        val socket = dir.resolve("d.sock")
+        val daemon = FakeDaemon(socket) { """{"ok":true,"result":$result}""" }
+        try {
+            return CostSummaryView.of(SocketCostSummarySource(socket).summary(dayStart, nextDayStart))
+        } finally {
+            daemon.close()
+        }
+    }
+
+    private val noLimits = """"limits":{"perCardUsd":null,"perDayUsd":null},"dayReached":false,"cardsReached":[]"""
+
+    @Test
+    fun `AC-5 the panel lists cost per stage and per day as the daemon computed, with tags`(@TempDir dir: Path) {
+        val view = viewOf(
+            dir,
+            """{"totalUsd":"7.00","status":"PARTIAL","cards":[],$noLimits,
+            "stages":[{"stage":"develop","costUsd":"1.50","status":"KNOWN"},{"stage":"refine","costUsd":"5.50","status":"PARTIAL"},{"stage":"validate","costUsd":"0","status":"UNKNOWN"}],
+            "days":[{"day":"2026-10-15","costUsd":"1.00","status":"KNOWN"},{"day":"2026-10-16","costUsd":"6.00","status":"KNOWN"}]}""".replace("\n", ""),
+        )
+
+        assertThat(view.stages.map { it.label }).containsExactly("refine", "develop", "validate")
+        assertThat(view.stages.map { it.value }).containsExactly("≥ US$ 5,50", "US$ 1,50", "US$ ?")
+        assertThat(view.stages.map { it.tag }).containsExactly(CostTag.Partial, null, CostTag.Unknown)
+        assertThat(view.stages.map { it.limitState }).containsOnly(LimitState.NoLimit)
+        assertThat(view.stages.map { it.limit }).containsOnlyNulls()
+        assertThat(view.days.map { it.label }).containsExactly("15/10", "16/10")
+        assertThat(view.days.map { it.value }).containsExactly("US$ 1,00", "US$ 6,00")
+        assertThat(view.days.map { it.tag }).containsOnlyNulls()
+        assertThat(view.explainsPartial).isTrue()
+    }
+
+    @Test
+    fun `AC-5 a partial stage alone makes the panel explain the estimate, and a single day hides Por dia`(@TempDir dir: Path) {
+        val view = viewOf(
+            dir,
+            """{"totalUsd":"3.00","status":"KNOWN","cards":[],$noLimits,
+            "stages":[{"stage":"refine","costUsd":"3.00","status":"PARTIAL"}],
+            "days":[{"day":"2026-10-16","costUsd":"3.00","status":"KNOWN"}]}""".replace("\n", ""),
+        )
+
+        assertThat(view.stages.map { it.label }).containsExactly("refine")
+        assertThat(view.explainsPartial).isTrue()
+        assertThat(view.days).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 a daemon without stages and days leaves the panel as it was, with no error`(@TempDir dir: Path) {
+        val view = viewOf(
+            dir,
+            """{"totalUsd":"3.20","status":"KNOWN","cards":[{"card":"68","costUsd":"1.10","status":"KNOWN"},{"card":"70","costUsd":"2.10","status":"KNOWN"}],
+            "limits":{"perCardUsd":"5.00","perDayUsd":"10.00"},"dayReached":true,"cardsReached":["70"]}""".replace("\n", ""),
+        )
+
+        assertThat(view.stages).isEmpty()
+        assertThat(view.days).isEmpty()
+        assertThat(view.total.value).isEqualTo("US$ 3,20 est.")
+        assertThat(view.total.limit).isEqualTo("US$ 10,00")
+        assertThat(view.total.limitState).isEqualTo(LimitState.Reached)
+        assertThat(view.cards.map { it.label }).satisfiesExactly(
+            { assertThat(it).contains("70") },
+            { assertThat(it).contains("68") },
+        )
+        assertThat(view.cards.map { it.limitState }).containsExactly(LimitState.Reached, LimitState.Within)
+        assertThat(view.explainsPartial).isFalse()
+    }
+
+    @Test
+    fun `AC-6 the loading and empty views carry no stage or day lines`() {
+        assertThat(CostSummaryView.loading().stages).isEmpty()
+        assertThat(CostSummaryView.loading().days).isEmpty()
+        assertThat(CostSummaryView.of(FeedFixtures.aSummary(total = "0", status = CostStatus.NONE)).stages).isEmpty()
     }
 }
 
