@@ -638,6 +638,12 @@ class SocketServerTest {
 
     private fun JsonObject.str(key: String): String = getValue(key).jsonPrimitive.content
 
+    /** The pulse `forecast` object; an absent field fails as an assertion, not as a lookup error. */
+    private fun JsonObject.forecastObject(): JsonObject {
+        assertThat(this["forecast"]).`as`("forecast field of factory.pulse").isNotNull()
+        return getValue("forecast").jsonObject
+    }
+
     private fun reply(line: String): JsonObject = Json.parseToJsonElement(exchange(line)).jsonObject
 
     private fun createCard(title: String): String {
@@ -1718,7 +1724,7 @@ class SocketServerTest {
 
             val result = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject
 
-            val forecast = result.getValue("forecast").jsonObject
+            val forecast = result.forecastObject()
             assertThat(forecast.str("kind")).isEqualTo("FINISHES_AT")
             // 600 + 1200 + 300 s of one card over one slot
             assertThat(Instant.parse(forecast.str("at"))).isEqualTo(fixedNow.plusSeconds(2_100))
@@ -1731,7 +1737,7 @@ class SocketServerTest {
     @Test
     fun `AC-4 pulse of a factory with no work for the machine forecasts an empty queue`() =
         withPulseServer { _, _ ->
-            val forecast = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject.getValue("forecast").jsonObject
+            val forecast = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject.forecastObject()
 
             assertThat(forecast.str("kind")).isEqualTo("EMPTY")
             assertThat(forecast.keys).containsExactly("kind")
@@ -1743,7 +1749,7 @@ class SocketServerTest {
             seedHistory(store, historyCard, fixedNow.minusSeconds(7 * 86_400L + 60))
             seedTitled(store, refiningCard, Column.READY_FOR_REFINEMENT, "Refine the thing")
 
-            val forecast = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject.getValue("forecast").jsonObject
+            val forecast = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject.forecastObject()
 
             assertThat(forecast.str("kind")).isEqualTo("UNKNOWN")
             assertThat(forecast.str("gap")).isEqualTo("NO_HISTORY")
@@ -1758,7 +1764,7 @@ class SocketServerTest {
 
             val result = reply("""{"cmd":"factory.pulse"}""").getValue("result").jsonObject
 
-            val forecast = result.getValue("forecast").jsonObject
+            val forecast = result.forecastObject()
             assertThat(forecast.keys).containsExactlyInAnyOrder("kind", "at", "ownerSteps")
             assertThat(forecast.toString()).doesNotContain("Ignore", "instructions", "evil.example", "<b>", "Disregard", "mark me done")
         }
