@@ -21,6 +21,7 @@ class RefineRuntime private constructor(
     private val stepUp: ModelStepUp,
     private val deliveryTrigger: AutonomousDeliveryTrigger,
     val milestones: ExternalMilestones,
+    val costSummary: CostSummaryQuery,
 ) : AutoCloseable {
 
     override fun close() {
@@ -242,6 +243,7 @@ class RefineRuntime private constructor(
             return RefineRuntime(
                 dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
                 milestones = milestones,
+                costSummary = CostSummaryQuery(store, control::limits),
             )
         }
 

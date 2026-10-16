@@ -1,5 +1,7 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
+import java.time.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -96,6 +98,9 @@ sealed interface Request {
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
 
+    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
+    data class CostSummary(val from: Instant, val to: Instant) : Request
+
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
 
@@ -115,8 +120,20 @@ data class MilestoneItem(val card: String, val milestone: String, val text: Stri
 /** A board row that was not imported; [reason] is `unknown_column` or `not_found`. */
 data class IgnoredRow(val id: String, val reason: String)
 
+/** The cost of one card in the period asked. */
+data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostStatus)
+
 /** A reply to the client. */
 sealed interface Response {
+    data class CostSummaryResult(
+        val totalUsd: BigDecimal,
+        val status: CostStatus,
+        val cards: List<CardCost>,
+        val limits: CostLimits,
+        val dayReached: Boolean,
+        val cardsReached: List<String>,
+    ) : Response
+
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
     data class CardsResult(val cards: List<CardView>) : Response
@@ -212,6 +229,11 @@ fun parseRequest(line: String): Request {
         }
         "report.csv" -> Request.ReportCsv
         "events.subscribe" -> parseSubscribe(obj)
+        "cost.summary" -> {
+            val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
+            val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
+            Request.CostSummary(from, to)
+        }
         else -> Request.Rejected("unknown cmd")
     }
 }
@@ -231,6 +253,9 @@ private fun parseRows(obj: JsonObject): List<BoardRow>? {
         BoardRow(stringField(row, "id") ?: return null, stringField(row, "column") ?: return null)
     }
 }
+
+private fun instantField(obj: JsonObject, key: String): Instant? =
+    stringField(obj, key)?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
 private fun stringField(obj: JsonObject, key: String): String? {
     val primitive = obj[key] as? JsonPrimitive ?: return null
@@ -389,6 +414,37 @@ fun render(response: Response): String = when (response) {
                     }
                 },
             ),
+        )
+    }.toString()
+    is Response.CostSummaryResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("totalUsd", response.totalUsd.toPlainString())
+                put("status", response.status.name)
+                put(
+                    "cards",
+                    JsonArray(
+                        response.cards.map { cost ->
+                            buildJsonObject {
+                                put("card", cost.card)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
+                put(
+                    "limits",
+                    buildJsonObject {
+                        put("perCardUsd", response.limits.perCardUsd?.toPlainString())
+                        put("perDayUsd", response.limits.perDayUsd?.toPlainString())
+                    },
+                )
+                put("dayReached", response.dayReached)
+                put("cardsReached", JsonArray(response.cardsReached.map { JsonPrimitive(it) }))
+            },
         )
     }.toString()
     is Response.Error -> buildJsonObject {
