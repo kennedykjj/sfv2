@@ -1,0 +1,1 @@
+{"issue":52,"slug":"interface-tracker-e-fake","pipeline":"validate","started_at":"2026-10-16T12:40:00Z","finished_at":"2026-10-16T12:55:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["build"],"manual_edit":false,"amendments":[]}
