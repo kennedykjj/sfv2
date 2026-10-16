@@ -76,6 +76,25 @@ class AgentRequestsTest {
     }
 
     @Test
+    fun `AC-5 only the conflict role works on a card in Ready for Prod`() {
+        val card = Card.create("Add login", Column.READY_FOR_PROD)
+
+        val report = AgentRequests.reportCompletion("c-rfp", card, AgentRequests.CONFLICT_ROLE, "resolved", id, at)
+        val write = AgentRequests.requestWrite("c-rfp", card, AgentRequests.CONFLICT_ROLE, "a.txt", 1, id, at)
+
+        assertThat(report.type).isEqualTo(EventType.AGENT_REPORTED)
+        assertThat(write.type).isEqualTo(EventType.AGENT_WRITE_REQUESTED)
+        assertThatThrownBy { AgentRequests.requestWrite("c-rfp", card, "engineer", "a.txt", 1, id, at) }
+            .isInstanceOf(AgentRequestRefusedException::class.java)
+            .hasMessageContaining("c-rfp")
+        Column.entries.filterNot { it in workColumns || it == Column.READY_FOR_PROD }.forEach { column ->
+            assertThatThrownBy {
+                AgentRequests.reportCompletion("c-out", Card.create("Add login", column), AgentRequests.CONFLICT_ROLE, "done", id, at)
+            }.isInstanceOf(AgentRequestRefusedException::class.java)
+        }
+    }
+
+    @Test
     fun `AC-5 a blank summary or one above 4 KB is refused and 4 KB exactly is accepted`() {
         val atLimit = "a".repeat(4096)
 

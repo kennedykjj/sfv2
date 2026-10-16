@@ -121,6 +121,7 @@ class ValidatePipelineTest {
         gates: ValidateGates,
         maxRounds: Int = 3,
         delivery: PullRequestDelivery = greenDelivery(),
+        conflicts: ConflictResolver? = null,
     ) = ValidatePipeline(
         project = project,
         store = store,
@@ -138,6 +139,7 @@ class ValidatePipelineTest {
         maxRounds = maxRounds,
         log = log,
         delivery = delivery,
+        conflicts = conflicts,
     )
 
     private fun column(id: String): Column = requireNotNull(store.card(id)).column
@@ -210,6 +212,94 @@ class ValidatePipelineTest {
         val blocked = events(EventType.CARD_BLOCKED).single()
         assertThat(blocked.actor).isEqualTo(Actor.Factory("validate"))
         assertThat(requireNotNull(blocked.payload["reason"])).contains("merge_conflict")
+    }
+
+    /** A main that conflicts on every merge: the keeping merge opens a conflict of the given size and the agent's run resolves it. */
+    private class ConflictingSync(private val conflict: ConflictAttempt = ConflictAttempt.Conflicted(files = 1, hunks = 1)) : BranchSync {
+        val calls = mutableListOf<String>()
+
+        override fun mergeMain(worktree: Path): MergeResult {
+            calls.add("merge")
+            return MergeResult.Conflict
+        }
+
+        override fun mergeMainKeepingConflicts(worktree: Path): ConflictAttempt {
+            calls.add("keep")
+            return conflict
+        }
+
+        override fun abortMerge(worktree: Path) {
+            calls.add("abort")
+        }
+
+        override fun concludeMerge(worktree: Path): Boolean {
+            calls.add("conclude")
+            return true
+        }
+    }
+
+    private fun conflictRound(round: Int) {
+        val current = requireNotNull(store.card("c1"))
+        val event = Event(
+            EventId("round-$round"), clock.instant(), Actor.Factory("conflict"), EventType.CARD_MOVED,
+            mapOf("from" to "VALIDATION", "to" to "VALIDATION", "reason" to "conflict_round", "round" to round.toString()),
+        )
+        recorder.record("c1", current, event)
+    }
+
+    private fun conflictResolution(sync: BranchSync, runtime: Runtime, maxRounds: Int) = ConflictResolution(
+        project = project, store = store, recorder = recorder, sessions = sessions, mcpPort = 4317, runtime = runtime,
+        costRecorder = RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log), branchSync = sync,
+        head = WorktreeHead { "head-2" }, configDir = configDir, clock = clock, model = "model-a",
+        limits = ConflictLimits(maxFiles = 5, maxHunks = 20, maxRounds = maxRounds), log = log,
+    )
+
+    @Test
+    fun `AC-6 a new conflict after an earlier round counts as another round, is resolved inside the maximum and the gates then decide`() {
+        card("c1")
+        conflictRound(1)
+        val sync = ConflictingSync()
+        val conflictRuntime = FakeRuntime(listOf(SessionScript.Succeed))
+
+        pipeline(
+            reviewing(approved), sync, gates(green),
+            conflicts = conflictResolution(sync, conflictRuntime, maxRounds = 2),
+        ).run("c1")
+
+        assertThat(conflictRuntime.launched.single().stage).isEqualTo("conflict")
+        val rounds = events(EventType.CARD_MOVED).filter { it.payload["reason"] == "conflict_round" }
+        assertThat(rounds.map { it.payload["round"] }).containsExactly("1", "2")
+        assertThat(order).containsExactly("gates", "review")
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+    }
+
+    @Test
+    fun `AC-6 a new conflict past the maximum rounds blocks the card as exhausted and starts no run`() {
+        card("c1")
+        conflictRound(1)
+        val sync = ConflictingSync()
+        val conflictRuntime = FakeRuntime(listOf(SessionScript.Succeed))
+        val runtime = reviewing(approved)
+
+        pipeline(runtime, sync, gates(green), conflicts = conflictResolution(sync, conflictRuntime, maxRounds = 1)).run("c1")
+
+        assertThat(conflictRuntime.launched).isEmpty()
+        assertThat(runtime.launched()).isEmpty()
+        assertThat(order).isEmpty()
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("conflict_rounds_exhausted")
+    }
+
+    @Test
+    fun `AC-2 a conflict over the limits blocks the validation as merge_conflict without a conflict run`() {
+        card("c1")
+        val sync = ConflictingSync(ConflictAttempt.Conflicted(files = 6, hunks = 1))
+        val conflictRuntime = FakeRuntime(listOf(SessionScript.Succeed))
+
+        pipeline(reviewing(approved), sync, gates(green), conflicts = conflictResolution(sync, conflictRuntime, maxRounds = 2)).run("c1")
+
+        assertThat(conflictRuntime.launched).isEmpty()
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("merge_conflict")
+        assertThat(column("c1")).isNotEqualTo(Column.STAGED)
     }
 
     @Test
@@ -630,6 +720,7 @@ class ValidatePipelineTest {
         val arguments = constructor.parameterTypes.map { type ->
             when {
                 type == PullRequestDelivery::class.java -> null
+                type == ConflictResolver::class.java -> null
                 type.isPrimitive -> 4317
                 else -> values.first { type.isInstance(it) }
             }

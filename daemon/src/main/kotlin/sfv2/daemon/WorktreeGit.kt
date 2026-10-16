@@ -3,6 +3,7 @@ package sfv2.daemon
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -102,9 +103,28 @@ sealed interface MergeResult {
     data object Failed : MergeResult
 }
 
+/** The result of a merge of `origin/main` that leaves its conflicts open in the worktree for an agent to resolve. */
+sealed interface ConflictAttempt {
+    data object Merged : ConflictAttempt
+
+    /** [files] conflicting paths and [hunks] conflict markers; a size the daemon would not read counts as more than any limit. */
+    data class Conflicted(val files: Int, val hunks: Int) : ConflictAttempt
+
+    data object Failed : ConflictAttempt
+}
+
 /** Brings the card's branch up to date with `origin/main`. */
 fun interface BranchSync {
     fun mergeMain(worktree: Path): MergeResult
+
+    /** Like [mergeMain] but a conflict stays open in the worktree, measured. */
+    fun mergeMainKeepingConflicts(worktree: Path): ConflictAttempt = ConflictAttempt.Failed
+
+    /** Drops an open merge, leaving the branch as it was. */
+    fun abortMerge(worktree: Path) = Unit
+
+    /** Commits the open merge; false (merge left open) when a conflict marker or an unresolved path remains. */
+    fun concludeMerge(worktree: Path): Boolean = false
 }
 
 /**
@@ -117,11 +137,61 @@ class SystemBranchSync(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : Bra
         if (git(worktree, "fetch", "origin") != 0) return MergeResult.Failed
         return when (git(worktree, "merge", "--no-edit", "origin/main")) {
             0 -> MergeResult.Merged
-            else -> if (hasUnmergedPaths(worktree)) abortMerge(worktree) else MergeResult.Failed
+            else -> if (hasUnmergedPaths(worktree)) abortAsConflict(worktree) else MergeResult.Failed
         }
     }
 
-    private fun abortMerge(worktree: Path): MergeResult {
+    override fun mergeMainKeepingConflicts(worktree: Path): ConflictAttempt {
+        if (git(worktree, "fetch", "origin") != 0) return ConflictAttempt.Failed
+        return when (git(worktree, "merge", "--no-edit", "origin/main")) {
+            0 -> ConflictAttempt.Merged
+            else -> if (hasUnmergedPaths(worktree)) measure(worktree) else ConflictAttempt.Failed
+        }
+    }
+
+    override fun abortMerge(worktree: Path) {
+        git(worktree, "merge", "--abort")
+    }
+
+    override fun concludeMerge(worktree: Path): Boolean {
+        val conflicted = unmergedFiles(worktree) ?: return false
+        if (conflicted.any { hunksIn(worktree, it) != 0 }) return false
+        if (conflicted.isNotEmpty() && git(worktree, "add", "--", *conflicted.toTypedArray()) != 0) return false
+        if (unmergedFiles(worktree)?.isEmpty() != true) return false
+        return git(worktree, "commit", "--no-edit") == 0
+    }
+
+    private fun measure(worktree: Path): ConflictAttempt {
+        val files = unmergedFiles(worktree) ?: return ConflictAttempt.Failed
+        if (files.size > MAX_FILES_READ) return ConflictAttempt.Conflicted(files.size, Int.MAX_VALUE)
+        var hunks = 0L
+        for (file in files) {
+            hunks += hunksIn(worktree, file)
+            if (hunks >= Int.MAX_VALUE) return ConflictAttempt.Conflicted(files.size, Int.MAX_VALUE)
+        }
+        return ConflictAttempt.Conflicted(files.size, hunks.toInt())
+    }
+
+    private fun unmergedFiles(worktree: Path): List<String>? {
+        val (code, output) = capture(worktree, "diff", "--name-only", "--diff-filter=U")
+        if (code != 0) return null
+        return output.lines().filter { it.isNotBlank() }
+    }
+
+    /** Conflict markers in [file]; a file the daemon will not read whole counts as [Int.MAX_VALUE]. */
+    private fun hunksIn(worktree: Path, file: String): Int {
+        val root = worktree.toAbsolutePath().normalize()
+        val path = root.resolve(file).normalize()
+        if (!path.startsWith(root) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) return 0
+        return try {
+            if (Files.size(path) > MAX_FILE_BYTES) return Int.MAX_VALUE
+            Files.readAllLines(path, Charsets.ISO_8859_1).count { it.startsWith(MARKER) }
+        } catch (e: IOException) {
+            Int.MAX_VALUE
+        }
+    }
+
+    private fun abortAsConflict(worktree: Path): MergeResult {
         git(worktree, "merge", "--abort")
         return MergeResult.Conflict
     }
@@ -129,32 +199,43 @@ class SystemBranchSync(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : Bra
     private fun hasUnmergedPaths(worktree: Path): Boolean = git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD") == 0
 
     /** Exit code of git, or -1 when it could not start or timed out. */
-    private fun git(worktree: Path, vararg args: String): Int {
+    private fun git(worktree: Path, vararg args: String): Int = capture(worktree, *args).first
+
+    /** Exit code (-1 when git could not start or timed out) and stdout; stdout goes to a file so the wait bounds the run. */
+    private fun capture(worktree: Path, vararg args: String): Pair<Int, String> {
         val command = listOf(
             "git", "-C", worktree.toString(),
             "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
             "-c", "user.name=sfv2 factory", "-c", "user.email=factory@sfv2.invalid",
         ) + args
-        val process = try {
-            ProcessBuilder(command)
-                .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
-                .start()
-        } catch (e: IOException) {
-            return -1
-        }
+        val output = Files.createTempFile("sfv2-sync", ".txt")
         try {
-            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) return -1
-            return process.exitValue()
+            val process = try {
+                ProcessBuilder(command)
+                    .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+                    .redirectOutput(output.toFile())
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
+                    .start()
+            } catch (e: IOException) {
+                return -1 to ""
+            }
+            try {
+                if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) return -1 to ""
+                return process.exitValue() to Files.readAllBytes(output).toString(Charsets.UTF_8)
+            } finally {
+                process.destroyForcibly()
+            }
         } finally {
-            process.destroyForcibly()
+            Files.deleteIfExists(output)
         }
     }
 
     private companion object {
         const val TIMEOUT_SECONDS = 120L
+        const val MAX_FILES_READ = 100
+        const val MAX_FILE_BYTES = 1L shl 20
+        const val MARKER = "<<<<<<<"
     }
 }
 

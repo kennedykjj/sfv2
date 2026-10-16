@@ -1,5 +1,6 @@
 package sfv2.daemon
 
+import java.nio.file.Path
 import java.time.Clock
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -52,6 +53,9 @@ class AutonomousDelivery(
     private val maxPolls: Int,
     private val clock: Clock,
     private val log: DaemonLog,
+    private val conflicts: ConflictResolver? = null,
+    private val publisher: BranchPublisher? = null,
+    private val worktreeOf: ((String) -> Path)? = null,
 ) {
     init {
         require(maxPolls > 0) { "maxPolls must be positive, got $maxPolls" }
@@ -104,13 +108,46 @@ class AutonomousDelivery(
                 }
                 is MergeResult.HeadMismatch ->
                     stop(returnToOwner(cardId, card, "head_mismatch expected=$approvedHead actual=${result.actualHead}", emptyMap()))
-                MergeResult.Conflict -> stop(returnToOwner(cardId, card, "merge_conflict", emptyMap()))
+                MergeResult.Conflict -> stop(resolveConflict(cardId, card, branch))
                 is MergeResult.NotOpen -> notOpen(forge, cardId, card, branch, approvedHead)
             }
         } catch (e: ForgeException) {
             val merged = pr?.let { stateOf(forge, it) } == PullRequestState.Merged
             return stop(returnToOwner(cardId, card, if (merged) "merge_unrecorded" else "forge_failed", emptyMap()))
         }
+    }
+
+    /**
+     * A resolved conflict is a new head: it is pushed and the card goes back to Validation, because the owner's approval
+     * and the green gates belong to the old head.
+     */
+    private fun resolveConflict(cardId: String, card: Card, branch: String): DeliveryOutcome {
+        val resolver = conflicts
+        val worktree = worktreeOf?.invoke(cardId)
+        val publish = publisher
+        if (resolver == null || worktree == null || publish == null) return returnToOwner(cardId, card, "merge_conflict", emptyMap())
+        return when (val outcome = resolver.resolve(cardId, worktree)) {
+            is ConflictOutcome.Resolved -> when (publish.push(worktree, branch)) {
+                PushResult.Pushed -> {
+                    val round = maxOf(store.events(cardId).count { ConflictResolution.isRound(it) }, 1)
+                    move(cardId, card, Column.VALIDATION, mapOf("reason" to "conflict_round", "round" to round.toString(), "head" to outcome.head))
+                    log.log("delivery_conflict_resolved", mapOf("card" to cardId, "round" to round.toString()))
+                    DeliveryOutcome.Skipped
+                }
+                PushResult.Refused, PushResult.Failed -> returnToOwner(cardId, card, "push_failed", emptyMap())
+            }
+            ConflictOutcome.OverLimit, ConflictOutcome.Failed -> returnToOwner(cardId, card, "merge_conflict", emptyMap())
+            ConflictOutcome.RoundsExhausted -> {
+                val rounds = store.events(cardId).count { ConflictResolution.isRound(it) }
+                block(cardId, card, "conflict_rounds_exhausted rounds=$rounds")
+            }
+        }
+    }
+
+    private fun block(cardId: String, card: Card, reason: String): DeliveryOutcome {
+        record(cardId, card, EventType.CARD_BLOCKED, mapOf("reason" to reason))
+        log.log("delivery_blocked", mapOf("card" to cardId, "reason" to reason.substringBefore(' ')))
+        return DeliveryOutcome.Skipped
     }
 
     /** No open PR: one merged outside the factory closes the card (same head) or goes to the owner (other head). */
