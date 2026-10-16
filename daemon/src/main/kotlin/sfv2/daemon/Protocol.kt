@@ -74,6 +74,21 @@ sealed interface Request {
             "CardImportBoard(actor=$actor, project=$project, rows=${rows.size}, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Read-only: the milestones held until the owner confirms them. */
+    data object MilestoneList : Request
+
+    /** Owner confirmation of the pending [milestone] of card [id] whose text hash is [textHash]; also the retry of a failed write. */
+    data class MilestoneConfirm(
+        val actor: Actor,
+        val id: String,
+        val milestone: String,
+        val textHash: String,
+        val proof: String? = null,
+    ) : Request {
+        override fun toString(): String =
+            "MilestoneConfirm(actor=$actor, id=$id, milestone=$milestone, textHash=$textHash, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -93,6 +108,9 @@ data class CardView(val id: String, val title: String, val column: Column)
 /** One line of the V0 board: the issue number and the V0 column name. */
 data class BoardRow(val id: String, val column: String)
 
+/** A milestone waiting for the owner: the [text] to be written to the tracker and its [textHash]. */
+data class MilestoneItem(val card: String, val milestone: String, val text: String, val textHash: String)
+
 /** A board row that was not imported; [reason] is `unknown_column` or `not_found`. */
 data class IgnoredRow(val id: String, val reason: String)
 
@@ -106,6 +124,7 @@ sealed interface Response {
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
     data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
+    data class MilestonesResult(val items: List<MilestoneItem>) : Response
     data class Error(val message: String) : Response
 }
 
@@ -175,6 +194,14 @@ fun parseRequest(line: String): Request {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val rows = parseRows(obj) ?: return Request.Rejected("missing or invalid rows")
             Request.CardImportBoard(actor, stringField(obj, "project"), rows, stringField(obj, "proof"))
+        }
+        "milestone.list" -> Request.MilestoneList
+        "milestone.confirm" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            val milestone = stringField(obj, "milestone") ?: return Request.Rejected("missing milestone")
+            val textHash = stringField(obj, "textHash") ?: return Request.Rejected("missing textHash")
+            Request.MilestoneConfirm(actor, id, milestone, textHash, stringField(obj, "proof"))
         }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
@@ -342,6 +369,22 @@ fun render(response: Response): String = when (response) {
                 put("prLink", response.prLink)
                 put("draftHash", response.draftHash)
             },
+        )
+    }.toString()
+    is Response.MilestonesResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            JsonArray(
+                response.items.map { item ->
+                    buildJsonObject {
+                        put("card", item.card)
+                        put("milestone", item.milestone)
+                        put("text", item.text)
+                        put("textHash", item.textHash)
+                    }
+                },
+            ),
         )
     }.toString()
     is Response.Error -> buildJsonObject {

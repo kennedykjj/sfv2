@@ -20,6 +20,7 @@ class RefineRuntime private constructor(
     val dispatcherAllowed: Boolean,
     private val stepUp: ModelStepUp,
     private val deliveryTrigger: AutonomousDeliveryTrigger,
+    val milestones: ExternalMilestones,
 ) : AutoCloseable {
 
     override fun close() {
@@ -81,6 +82,7 @@ class RefineRuntime private constructor(
                 policiesOf = { cardId -> projectOf(cardId, store, registry).policies },
                 clock = clock,
                 log = log,
+                ownerProof = commands.ownerProof,
             )
             val refineLauncher = RefineStageLauncher(
                 pipelineFor = { cardId ->
@@ -238,6 +240,7 @@ class RefineRuntime private constructor(
             )
             return RefineRuntime(
                 dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
+                milestones = milestones,
             )
         }
 
