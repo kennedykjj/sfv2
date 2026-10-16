@@ -90,10 +90,13 @@ class AutonomousDelivery(
 
     private fun approvedHead(events: List<Event>): String? = events
         .lastOrNull {
-            it.type == EventType.CARD_MOVED && it.actor == Actor.Factory(VALIDATE) &&
-                it.payload["to"] == Column.STAGED.name && it.payload["ci"] == "green" && !it.payload["head"].isNullOrEmpty()
+            it.type == EventType.CARD_MOVED && !it.payload["head"].isNullOrEmpty() &&
+                (isCarry(it) || (it.actor == Actor.Factory(VALIDATE) && it.payload["to"] == Column.STAGED.name && it.payload["ci"] == "green"))
         }
         ?.payload?.get("head")
+
+    private fun isCarry(event: Event): Boolean =
+        event.type == EventType.CARD_MOVED && event.actor == Actor.Factory(DELIVER) && event.payload["reason"] == CARRIED
 
     private fun merge(cardId: String, card: Card, branch: String, approvedHead: String): Merge {
         val forge = forge(cardId)
@@ -108,7 +111,7 @@ class AutonomousDelivery(
                 }
                 is MergeResult.HeadMismatch ->
                     stop(returnToOwner(cardId, card, "head_mismatch expected=$approvedHead actual=${result.actualHead}", emptyMap()))
-                MergeResult.Conflict -> stop(resolveConflict(cardId, card, branch))
+                MergeResult.Conflict -> stop(resolveConflict(cardId, card, branch, approvedHead))
                 is MergeResult.NotOpen -> notOpen(forge, cardId, card, branch, approvedHead)
             }
         } catch (e: ForgeException) {
@@ -119,17 +122,58 @@ class AutonomousDelivery(
     }
 
     /**
+     * A branch that only fell behind main (merge without a single conflict, on exactly the approved head) keeps the
+     * owner's approval once the checks of the new head are green: nothing of the card changed, only main moved. The
+     * approval is carried to the new head by an event; after [MAX_CARRIES] the card goes through Validation as usual.
+     */
+    private fun carriesApproval(cardId: String, card: Card, outcome: ConflictOutcome.Resolved, approvedHead: String): Boolean {
+        if (outcome.cleanFrom != approvedHead || outcome.head == approvedHead) return false
+        if (store.events(cardId).count { isCarry(it) } >= MAX_CARRIES) return false
+        if (!checksGreen(forge(cardId), outcome.head)) return false
+        record(
+            cardId,
+            card,
+            EventType.CARD_MOVED,
+            mapOf("from" to card.column.name, "to" to card.column.name, "reason" to CARRIED, "head" to outcome.head, "previous_head" to approvedHead),
+        )
+        log.log("delivery_approval_carried", mapOf("card" to cardId))
+        return true
+    }
+
+    private fun checksGreen(forge: Forge, head: String): Boolean =
+        try {
+            var green = false
+            for (poll in 1..maxPolls) {
+                val state = forge.checks(head)
+                if (state is ChecksState.Failed) break
+                if (state == ChecksState.Passed) {
+                    green = true
+                    break
+                }
+                if (poll == maxPolls) break
+                pause.await()
+                if (Thread.currentThread().isInterrupted) break
+            }
+            green
+        } catch (e: ForgeException) {
+            log.log("delivery_forge_error", mapOf("error" to e.message.orEmpty().take(200)))
+            false
+        }
+
+    /**
      * A resolved conflict is a new head: it is pushed and the card goes back to Validation, because the owner's approval
      * and the green gates belong to the old head.
      */
-    private fun resolveConflict(cardId: String, card: Card, branch: String): DeliveryOutcome {
+    private fun resolveConflict(cardId: String, card: Card, branch: String, approvedHead: String): DeliveryOutcome {
         val resolver = conflicts
         val worktree = worktreeOf?.invoke(cardId)
         val publish = publisher
         if (resolver == null || worktree == null || publish == null) return returnToOwner(cardId, card, "merge_conflict", emptyMap())
         return when (val outcome = resolver.resolve(cardId, worktree)) {
             is ConflictOutcome.Resolved -> when (publish.push(worktree, branch)) {
-                PushResult.Pushed -> {
+                PushResult.Pushed -> if (carriesApproval(cardId, card, outcome, approvedHead)) {
+                    deliver(cardId)
+                } else {
                     val round = maxOf(store.events(cardId).count { ConflictResolution.isRound(it) }, 1)
                     move(cardId, card, Column.VALIDATION, mapOf("reason" to "conflict_round", "round" to round.toString(), "head" to outcome.head))
                     log.log("delivery_conflict_resolved", mapOf("card" to cardId, "round" to round.toString()))
@@ -283,6 +327,8 @@ class AutonomousDelivery(
         const val DELIVER = "deliver"
         const val EXTERNAL = "external"
         const val MAX_REASON_BYTES = 2048
+        const val CARRIED = "approval_carried"
+        const val MAX_CARRIES = 3
     }
 }
 

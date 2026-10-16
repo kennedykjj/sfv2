@@ -58,6 +58,7 @@ class AutonomousDeliveryTest {
     private val pushed = mutableListOf<String>()
     private var resolverOutcome: ConflictOutcome = ConflictOutcome.OverLimit
     private val resolverCalls = mutableListOf<String>()
+    private var onPush: () -> Unit = {}
 
     private fun delivery(maxPolls: Int = 3) = AutonomousDelivery(
         store, recorder, { forge }, { policies }, { pauses++; pauseHook() }, maxPolls, clock, DaemonLog { _, _ -> },
@@ -67,6 +68,7 @@ class AutonomousDeliveryTest {
         },
         publisher = BranchPublisher { _, branch ->
             pushed.add(branch)
+            onPush()
             PushResult.Pushed
         },
         worktreeOf = { dir.resolve("wt-$it") },
@@ -521,6 +523,55 @@ class AutonomousDeliveryTest {
         assertThat(merged("c1")).isEmpty()
         assertThat(delivery().deliver("c1")).isEqualTo(DeliveryOutcome.Skipped)
         assertThat(column("c1")).isNotEqualTo(Column.DONE)
+    }
+
+    @Test
+    fun `a branch that only fell behind main keeps the approval once the new head is green, and is merged`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.Resolved("head-2", cleanFrom = pr.head)
+        onPush = { forge.pushHead(pr, "head-2") }
+        forge.scriptChecks("head-2", ChecksState.Passed)
+        greenOn(pr)
+
+        val outcome = delivery().deliver("c1")
+
+        assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
+        assertThat(forge.merges.map { it.head }).containsExactly("head-2")
+        assertThat(column("c1")).isEqualTo(Column.DONE)
+        assertThat(store.events("c1").filter { it.payload["reason"] == "approval_carried" }.single().payload)
+            .containsEntry("head", "head-2").containsEntry("previous_head", pr.head)
+        assertThat(store.events("c1").none { it.payload["to"] == "VALIDATION" }).isTrue()
+        assertThat(resolverCalls).containsExactly("c1")
+    }
+
+    @Test
+    fun `a clean merge whose new head is not green goes back to Validation instead of keeping the approval`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.Resolved("head-2", cleanFrom = pr.head)
+        onPush = { forge.pushHead(pr, "head-2") }
+        forge.scriptChecks("head-2", unitTestsRed())
+
+        delivery().deliver("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(merged("c1")).isEmpty()
+        assertThat(store.events("c1").none { it.payload["reason"] == "approval_carried" }).isTrue()
+    }
+
+    @Test
+    fun `a clean merge over a head that was not the approved one never keeps the approval`() {
+        val pr = approvedCard("c1")
+        forge.scriptConflict(pr)
+        resolverOutcome = ConflictOutcome.Resolved("head-2", cleanFrom = "some-unreviewed-commit")
+        onPush = { forge.pushHead(pr, "head-2") }
+        forge.scriptChecks("head-2", ChecksState.Passed)
+
+        delivery().deliver("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(merged("c1")).isEmpty()
     }
 
     @Test
