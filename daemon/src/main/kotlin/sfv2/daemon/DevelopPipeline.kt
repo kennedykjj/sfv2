@@ -31,6 +31,9 @@ interface DevelopGates {
     /** Runs after the QA session: the acceptance tests QA wrote must fail for the right reason. */
     fun red(cardId: String, worktree: Path): List<GateResult>
 
+    /** The project layers the card's spec plans tests for: the only ones that get an engineer session. */
+    fun layers(worktree: Path): List<ProjectLayer>
+
     /** Runs after the engineer sessions: tests and build of [layer], acceptance-edit and scope. */
     fun green(cardId: String, layer: ProjectLayer, worktree: Path): List<GateResult>
 }
@@ -86,6 +89,11 @@ class RealDevelopGates(
 ) : DevelopGates {
 
     private val qaCommits = ConcurrentHashMap<String, String>()
+
+    override fun layers(worktree: Path): List<ProjectLayer> {
+        val plan = testPlan(worktree)
+        return project.layers.filter { plan.classesOf(it).isNotEmpty() }
+    }
 
     override fun red(cardId: String, worktree: Path): List<GateResult> {
         head.of(worktree)?.let { qaCommits[cardId] = it }
@@ -307,8 +315,9 @@ class DevelopPipeline(
         runSession(cardId, worktree, model)
         val red = gates.red(cardId, worktree).filter { !it.passed }
         if (red.isNotEmpty()) return red
-        project.layers.forEach { _ -> runSession(cardId, worktree, model) }
-        return project.layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
+        val layers = gates.layers(worktree)
+        layers.forEach { _ -> runSession(cardId, worktree, model) }
+        return layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
     }
 
     private fun runSession(cardId: String, worktree: Path, model: String) {
