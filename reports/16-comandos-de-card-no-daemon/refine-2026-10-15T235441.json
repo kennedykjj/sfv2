@@ -1,0 +1,1 @@
+{"issue":16,"slug":"comandos-de-card-no-daemon","pipeline":"refine","started_at":"2026-10-15T00:00:00Z","finished_at":"2026-10-15T00:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15427,"duration_s":8}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
