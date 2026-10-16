@@ -1,5 +1,6 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
@@ -122,8 +123,22 @@ class DispatcherTest {
         pool: RunPool,
         limits: DispatchLimits = DispatchLimits(emptyMap()),
         tick: Duration = Duration.ofHours(1),
+        guard: LaunchGuard = LaunchGuard.Open,
     ): Dispatcher =
-        Dispatcher(store, pool, launcher, pause, schedule, limits, clock, tick, log).also { toClose.add(it) }
+        Dispatcher(store, pool, launcher, pause, schedule, limits, clock, tick, log, launchGuard = guard).also { toClose.add(it) }
+
+    private fun budget(limits: CostLimits): CostBudget = CostBudget(store, recorder, limits, clock, ZoneOffset.UTC, log)
+
+    private fun cost(cardId: String, runId: String, usd: String) {
+        val event = Event(
+            EventId("cost-$runId"),
+            clock.instant(),
+            Actor.Factory("cost"),
+            EventType.RUN_COST_RECORDED,
+            mapOf("run_id" to runId, "status" to "KNOWN", "cost_usd" to usd, "estimate" to "true"),
+        )
+        recorder.record(cardId, Card.create("Card $cardId", Column.READY_FOR_DEV), event)
+    }
 
     private fun moved(cardId: String, column: Column) {
         val event = Event(EventId("move-$cardId-$column"), clock.instant(), Actor.Owner, EventType.CARD_MOVED, mapOf("to" to column.name))
@@ -354,5 +369,82 @@ class DispatcherTest {
         assertThat(lock.startedAt).isEqualTo(processStart).isNotEqualTo(clock.instant())
         assertThat(pool.sweep()).isEmpty()
         assertThat(pool.isLocked("a")).isTrue()
+    }
+
+    @Test
+    fun `AC-2 a card blocked by its cost limit starts no new run while other cards go on`() {
+        card("a", Column.READY_FOR_DEV)
+        card("b", Column.READY_FOR_DEV)
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("5"), perDayUsd = null))
+        cost("a", "run-1", "6.00")
+        budget.onRunFinished("a")
+        val dispatcher = dispatcher(pool(), guard = budget)
+
+        val started = dispatcher.runCycle()
+
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "b"))
+        assertThat(launcher.attempts).doesNotContain("a")
+    }
+
+    @Test
+    fun `AC-3 with the day limit reached no run starts and no card is blocked`() {
+        card("a", Column.READY_FOR_DEV)
+        val budget = budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("10")))
+        cost("a", "run-1", "10.00")
+        val dispatcher = dispatcher(pool(), guard = budget)
+
+        val started = dispatcher.runCycle()
+
+        assertThat(started).isEmpty()
+        assertThat(launcher.attempts).isEmpty()
+        assertThat(budget.isBlocked("a")).isFalse()
+        assertThat(store.cards().single { it.id == "a" }.card.column).isEqualTo(Column.READY_FOR_DEV)
+        assertThat(store.eventsAfter(0).map { it.event.type.name }).doesNotContain("CARD_BLOCKED")
+    }
+
+    @Test
+    fun `AC-4 on the next day runs start again and the day cost counts from zero`() {
+        card("a", Column.READY_FOR_DEV)
+        val budget = budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("10")))
+        cost("a", "run-1", "10.00")
+        val dispatcher = dispatcher(pool(), guard = budget)
+        assertThat(dispatcher.runCycle()).isEmpty()
+
+        clock.advance(Duration.ofHours(24))
+        val started = dispatcher.runCycle()
+
+        assertThat(budget.dayLimitReached()).isFalse()
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "a"))
+    }
+
+    @Test
+    fun `AC-6 with no limits configured cost never restricts a run`() {
+        card("a", Column.READY_FOR_DEV)
+        val budget = budget(CostLimits.NONE)
+        cost("a", "run-1", "100000.00")
+        budget.onRunFinished("a")
+        val dispatcher = dispatcher(pool(), guard = budget)
+
+        val started = dispatcher.runCycle()
+
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "a"))
+        assertThat(store.eventsAfter(0).map { it.event.type.name }).doesNotContain("CARD_BLOCKED")
+    }
+
+    @Test
+    fun `AC-7 a run in progress survives the day limit being crossed while no new run starts`() {
+        card("a", Column.READY_FOR_DEV)
+        val budget = budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("10")))
+        val pool = pool()
+        val dispatcher = dispatcher(pool, guard = budget)
+        assertThat(dispatcher.runCycle()).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "a"))
+
+        card("b", Column.READY_FOR_DEV)
+        cost("a", "run-1", "50.00")
+        val second = dispatcher.runCycle()
+
+        assertThat(second).isEmpty()
+        assertThat(pool.isLocked("a")).isTrue()
+        assertThat(launcher.launched.map { it.second }).containsExactly("a")
     }
 }

@@ -17,6 +17,7 @@ data class Event(
 enum class EventType {
     CARD_CREATED,
     CARD_MOVED,
+    CARD_BLOCKED,
     OWNER_APPROVED,
     GATE_FINISHED,
     LOCK_RELEASED,
