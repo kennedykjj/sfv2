@@ -1,0 +1,1 @@
+{"issue":50,"slug":"ci-vermelho-na-main-e-revert","pipeline":"validate","started_at":"2026-10-16T11:50:00Z","finished_at":"2026-10-16T12:05:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green daemon sfv2.daemon.AutonomousDeliveryTest"],"manual_edit":false}
