@@ -18,6 +18,7 @@ enum class EventType {
     CARD_CREATED,
     CARD_MOVED,
     OWNER_APPROVED,
+    GATE_FINISHED,
     LOCK_RELEASED,
 }
 

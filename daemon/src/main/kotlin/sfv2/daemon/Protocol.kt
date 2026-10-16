@@ -23,6 +23,12 @@ sealed interface Request {
         override fun toString(): String = "CardMove(actor=$actor, id=$id, to=$to, proof=${if (proof == null) "null" else "***"})"
     }
 
+    data class ProjectAdd(val actor: Actor, val path: String, val proof: String? = null) : Request {
+        override fun toString(): String = "ProjectAdd(actor=$actor, path=$path, proof=${if (proof == null) "null" else "***"})"
+    }
+
+    data object ProjectList : Request
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
@@ -41,6 +47,8 @@ sealed interface Response {
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
     data class CardsResult(val cards: List<CardView>) : Response
+    data class ProjectResult(val project: Project) : Response
+    data class ProjectsResult(val projects: List<Project>) : Response
     data class Error(val message: String) : Response
 }
 
@@ -73,6 +81,12 @@ fun parseRequest(line: String): Request {
             val column = Column.entries.firstOrNull { it.name == to } ?: return Request.Rejected("unknown column")
             Request.CardMove(actor, id, column, stringField(obj, "proof"))
         }
+        "project.add" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val path = stringField(obj, "path") ?: return Request.Rejected("missing path")
+            Request.ProjectAdd(actor, path, stringField(obj, "proof"))
+        }
+        "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
         "card.show" -> {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
@@ -119,6 +133,39 @@ private fun cardJson(card: CardView): JsonObject = buildJsonObject {
     put("column", card.column.name)
 }
 
+private fun projectJson(project: Project): JsonObject = buildJsonObject {
+    put("name", project.name)
+    put("repo", project.repo)
+    put(
+        "layers",
+        JsonArray(
+            project.layers.map { layer ->
+                buildJsonObject {
+                    put("name", layer.name)
+                    put("path", layer.path)
+                }
+            },
+        ),
+    )
+    put(
+        "policies",
+        buildJsonObject {
+            put("delivery_mode", project.policies.deliveryMode.key)
+            put(
+                "signers",
+                buildJsonObject { project.policies.signers.forEach { (effect, signer) -> put(effect.key, signer.key) } },
+            )
+            put(
+                "conventions",
+                buildJsonObject {
+                    put("commit_format", project.policies.conventions.commitFormat)
+                    put("branch_format", project.policies.conventions.branchFormat)
+                },
+            )
+        },
+    )
+}
+
 private fun actorText(actor: Actor): String = when (actor) {
     Actor.Owner -> "owner"
     is Actor.Agent -> "agent:${actor.role}"
@@ -158,6 +205,14 @@ fun render(response: Response): String = when (response) {
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)
         put("result", JsonArray(response.cards.map { cardJson(it) }))
+    }.toString()
+    is Response.ProjectResult -> buildJsonObject {
+        put("ok", true)
+        put("result", projectJson(response.project))
+    }.toString()
+    is Response.ProjectsResult -> buildJsonObject {
+        put("ok", true)
+        put("result", JsonArray(response.projects.map { projectJson(it) }))
     }.toString()
     is Response.Error -> buildJsonObject {
         put("ok", false)
