@@ -1,5 +1,6 @@
 package sfv2.app
 
+import java.lang.reflect.Modifier
 import java.math.BigDecimal
 import java.time.Clock
 import java.time.Instant
@@ -276,9 +277,11 @@ class BoardStateTest {
 
     @Test
     fun `AC-6 flow bar model carries only column names and numbers, never card text`() {
-        assertThat(TimeSegment::class.java.declaredFields.map { it.name }).containsExactlyInAnyOrder("column", "seconds")
-        assertThat(TimeSplit::class.java.declaredFields.map { it.name }.filterNot { it == "Companion" })
-            .containsExactlyInAnyOrder("segments", "waitPercent")
+        fun instanceFields(type: Class<*>) =
+            type.declaredFields.filterNot { Modifier.isStatic(it.modifiers) || it.isSynthetic }.map { it.name }
+
+        assertThat(instanceFields(TimeSegment::class.java)).containsExactlyInAnyOrder("column", "seconds")
+        assertThat(instanceFields(TimeSplit::class.java)).containsExactlyInAnyOrder("segments", "waitPercent")
     }
 
     @Test
