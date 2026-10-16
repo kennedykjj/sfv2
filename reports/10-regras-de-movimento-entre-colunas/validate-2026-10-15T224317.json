@@ -1,0 +1,1 @@
+{"outcome": "staged", "pr": 102, "rounds": 0, "failed_gates": [], "gates_reused": ["green core sfv2.core.MoveRulesTest"], "flaky": [], "amendments": []}
