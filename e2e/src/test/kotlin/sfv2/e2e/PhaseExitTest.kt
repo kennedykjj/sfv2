@@ -37,6 +37,7 @@ import sfv2.daemon.RefineGates
 import sfv2.daemon.RefinePipeline
 import sfv2.daemon.RunCostRecorder
 import sfv2.daemon.SocketServer
+import sfv2.daemon.ValidateGateResults
 import sfv2.daemon.ValidateGates
 import sfv2.daemon.ValidatePipeline
 import sfv2.daemon.WorktreeGit
@@ -168,7 +169,7 @@ class PhaseExitTest {
             override fun green(cardId: String, layer: ProjectLayer, worktree: Path) =
                 gate(cardId, listOf("daemon-tests", "daemon-build", "scope"))
         }
-        val validateGates = ValidateGates { id, _ -> gate(id, listOf("daemon-build", "daemon-tests", "scope")) }
+        val validateGates = ValidateGates { id, _ -> ValidateGateResults(gate(id, listOf("daemon-build", "daemon-tests", "scope"))) }
 
         val refine = RefinePipeline(
             project, store, commands.recorder, worktrees, sessions, 4317, runtime, costs, refineGates, configDir, clock, model, log = silent,
