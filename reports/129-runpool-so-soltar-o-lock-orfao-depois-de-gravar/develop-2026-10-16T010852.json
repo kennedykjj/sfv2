@@ -1,0 +1,12 @@
+{
+  "issue": 129,
+  "slug": "runpool-so-soltar-o-lock-orfao-depois-de-gravar",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "rounds": 0,
+  "failed_gates": [],
+  "amendments": [],
+  "flaky": [],
+  "gates_reused": []
+}
