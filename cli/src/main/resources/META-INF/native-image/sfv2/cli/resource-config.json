@@ -1,0 +1,7 @@
+{
+  "resources": {
+    "includes": [
+      { "pattern": "\\Qsfv2/cli/build.properties\\E" }
+    ]
+  }
+}
