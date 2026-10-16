@@ -1,0 +1,1 @@
+{"outcome": "done", "rounds": 1, "failed_gates": ["build"], "amendments": ["SocketServerTest.kt AC-6: contagem de descritores com settledFds() (corrida com close assíncrono do NIO)"], "flaky": [], "gates_reused": []}
