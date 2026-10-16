@@ -60,6 +60,3 @@ class Dispatcher(
     override fun close() {}
     fun onEvent(event: StoredEvent) {}
 }
-
-@Suppress("UNUSED_PARAMETER")
-fun EventStream.addListener(listener: (StoredEvent) -> Unit) {}
