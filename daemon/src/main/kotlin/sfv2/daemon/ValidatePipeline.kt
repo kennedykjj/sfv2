@@ -37,10 +37,10 @@ class ValidatePipeline(
     private val configDir: Path,
     private val clock: Clock,
     private val model: String,
+    private val delivery: PullRequestDelivery,
     private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
-    private val delivery: PullRequestDelivery? = null,
     private val changedPaths: ChangedPaths = GitChangedPaths(),
 ) {
     private val outcome = ValidationOutcome(store, recorder, project.layers.map { it.name }.toSet(), clock)
@@ -84,14 +84,13 @@ class ValidatePipeline(
         outcome.apply(
             cardId, report, gates,
             ci = { deliver(cardId, worktree) },
-            head = { delivery?.headOf(worktree.path) },
+            head = { delivery.headOf(worktree.path) },
             redLayer = { layerWithMostChanges(worktree.path) },
         )
 
-    /** Without a delivery wired (tests of the earlier stages) there is no CI step and the approval stands on the gates. */
     private fun deliver(cardId: String, worktree: CardWorktree): CiResult {
         val title = store.card(cardId)?.title ?: cardId
-        return delivery?.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path) ?: CiResult.Green
+        return delivery.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path)
     }
 
     private fun layerWithMostChanges(worktree: Path): String {

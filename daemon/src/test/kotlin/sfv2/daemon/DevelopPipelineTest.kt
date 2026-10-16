@@ -23,6 +23,8 @@ import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.core.ProjectPolicies
+import sfv2.ports.ChecksState
+import sfv2.ports.FakeForge
 import sfv2.ports.FakeRuntime
 import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
@@ -391,6 +393,12 @@ class DevelopPipelineTest {
             inner.green(cardId, layer, worktree).also { calls.add("green:${layer.name}") }
     }
 
+    private fun greenDelivery(): PullRequestDelivery {
+        val forge = FakeForge()
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+        return PullRequestDelivery(forge, { _, _ -> PushResult.Pushed }, WorktreeHead { "sha-1" }, CiPause { })
+    }
+
     private fun defaultRoundsOfEachPipeline(): Map<String, Any?> {
         val costRecorder = RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log)
         val refine = RefinePipeline(
@@ -404,6 +412,7 @@ class DevelopPipelineTest {
         val validate = ValidatePipeline(
             project, store, recorder, worktrees, sessions, 4317, succeeding(0), costRecorder,
             BranchSync { MergeResult.Merged }, ValidateGates { _, _ -> ValidateGateResults(emptyList()) }, configDir, clock, "model-a",
+            delivery = greenDelivery(),
         )
         return listOf("refine" to refine, "develop" to develop, "validate" to validate).associate { (name, pipeline) ->
             name to pipeline.javaClass.getDeclaredField("maxRounds").apply { isAccessible = true }.get(pipeline)
