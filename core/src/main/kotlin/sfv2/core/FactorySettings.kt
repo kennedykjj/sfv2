@@ -22,7 +22,7 @@ data class FactorySettings(
 ) {
     companion object {
         val DEFAULT = FactorySettings(
-            poolSize = 1,
+            poolSize = 2,
             workHours = null,
             cost = CostSetting(null, null),
             notifications = NotificationSetting(NotificationType.entries.toSet(), null, null),
