@@ -33,6 +33,8 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // Libraries such as Clikt load native code (JNA); without this the JVM prints a warning into every test run.
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
     // The factory's green gate looks for PASSED in the output to prove a test ran; Gradle prints nothing
     // for passing tests unless told to. FULL exceptions put the assertion message in the red gate's output.
     testLogging {
