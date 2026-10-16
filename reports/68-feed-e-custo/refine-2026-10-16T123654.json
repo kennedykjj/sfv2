@@ -1,0 +1,1 @@
+{"issue":68,"slug":"feed-e-custo","pipeline":"refine","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":16411,"duration_s":23},{"role":"ux-designer","tokens":31205,"duration_s":38}],"rounds":{"po":1,"ux":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
