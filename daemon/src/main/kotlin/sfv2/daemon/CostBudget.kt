@@ -69,8 +69,9 @@ class CostBudget(
 
     fun isBlocked(cardId: String): Boolean {
         val lastBlock = store.lastSeq(cardId, EventType.CARD_BLOCKED) ?: return false
-        val lastOwnerMove = store.lastSeq(cardId, EventType.CARD_MOVED, Actor.Owner) ?: return true
-        return lastOwnerMove < lastBlock
+        val lastOwnerMove = store.lastSeq(cardId, EventType.CARD_MOVED, Actor.Owner) ?: 0L
+        val lastOwnerUnblock = store.lastSeq(cardId, EventType.CARD_UNBLOCKED, Actor.Owner) ?: 0L
+        return maxOf(lastOwnerMove, lastOwnerUnblock) < lastBlock
     }
 
     override fun dayLimitReached(): Boolean {

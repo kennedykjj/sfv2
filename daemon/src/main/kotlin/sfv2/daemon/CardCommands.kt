@@ -4,6 +4,7 @@ import java.time.Clock
 import java.time.Duration
 import java.util.UUID
 import sfv2.core.Actor
+import sfv2.core.AssistantStates
 import sfv2.core.Card
 import sfv2.core.CardValidationException
 import sfv2.core.Column
@@ -41,8 +42,9 @@ class CardCommands(
         is Request.CardCreate -> create(request)
         is Request.CardMove -> move(request)
         is Request.CardApprove -> approve(request)
+        is Request.CardUnblock -> unblock(request)
         is Request.CardRequestChange -> requestChange(request)
-        Request.CardList -> Response.CardsResult(visibleCards().map { CardView(it.id, it.card.title, it.card.column) })
+        Request.CardList -> Response.CardsResult(visibleCards().map { viewOf(it.id, it.card) })
         is Request.CardShow -> show(request.id)
         is Request.CardDetail -> detail(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(visibleCards()) { store.events(it) }))
@@ -183,9 +185,35 @@ class CardCommands(
         return Response.CardResult(CardView(id, moved.title, moved.column))
     }
 
+    /** Owner release of an open block: the event is recorded and the column stays where the work stopped. */
+    private fun unblock(request: Request.CardUnblock): Response {
+        if (request.actor != Actor.Owner || !ownerProof.matches(request.proof)) {
+            log.log("card_command_refused", mapOf("cmd" to "card.unblock", "card" to request.id))
+            return Response.Error("$OWNER_PROOF_ERROR for card ${request.id}")
+        }
+        val current = store.card(request.id) ?: return notFound(request.id)
+        if (!AssistantStates.hasOpenBlock(store.events(request.id))) {
+            log.log("card_command_refused", mapOf("cmd" to "card.unblock", "card" to request.id))
+            return Response.Error("card ${request.id} is not blocked")
+        }
+        val event = Event(
+            id = EventId(UUID.randomUUID().toString()),
+            at = clock.instant(),
+            actor = request.actor,
+            type = EventType.CARD_UNBLOCKED,
+            payload = emptyMap(),
+        )
+        recorder.record(request.id, current, event)
+        log.log("card_command", mapOf("cmd" to "card.unblock", "card" to request.id))
+        return Response.CardResult(viewOf(request.id, current))
+    }
+
+    private fun viewOf(id: String, card: Card): CardView =
+        CardView(id, card.title, card.column, blocked = AssistantStates.hasOpenBlock(store.events(id)))
+
     private fun show(id: String): Response {
         val card = store.card(id) ?: return notFound(id)
-        return Response.CardResult(CardView(id, card.title, card.column))
+        return Response.CardResult(viewOf(id, card))
     }
 
     private fun auditExport(request: Request.AuditExport): Response {
