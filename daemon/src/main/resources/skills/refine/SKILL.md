@@ -17,6 +17,10 @@ Escreva só a spec do card e o plano, em `docs/superpowers/specs/` e `docs/super
 
 1. Ler o card com `card_get`.
 2. Ler os critérios de revisão com `review_criteria_get`, as camadas do projeto com `layers_get` e as políticas com `policies_get`.
-3. Escrever a spec com `file_write_request`, seguindo a estrutura do template de spec da fábrica: cabeçalho com `**Weight:**`, e as seções `## Product`, `## UX`, `## Architecture`, `## Test plan`, `## Security`, `## Rollback`, `## Decisions` e `## Open questions`, nessa ordem. Os cabeçalhos de seção ficam em inglês; o texto fica em português.
-4. Na Test plan, uma linha por critério de aceitação: camada do projeto e caminho completo do arquivo de teste.
+3. Escrever a spec com `file_write_request` em `docs/superpowers/specs/AAAA-MM-DD-<slug>-design.md` e um plano curto em `docs/superpowers/plans/AAAA-MM-DD-<slug>.md`. A spec segue o "Modelo da spec" no fim deste prompt, na mesma ordem de seções; os gates da fábrica leem esses marcadores e recusam a spec que fugir deles. Os cabeçalhos de seção ficam em inglês; o texto fica em português.
+4. Regras que os gates conferem:
+   - **Critérios:** cada um começa com `**AC-n** —` (numeração a partir de 1, sem lacuna); uma lista numerada "1. 2." não é reconhecida.
+   - **Test plan:** uma linha por AC, com a camada exata de `layers_get` (ou `manual`) e o caminho completo do arquivo de teste entre crases, dentro dos testes dessa camada. Prefira o arquivo de teste que já existe no módulo; arquivo novo só quando nenhuma suíte cobre o módulo, com o motivo em `## Decisions`.
+   - **Peso:** `light` quando uma só camada é tocada, até 3 caminhos aparecem em `## Architecture` e `Touches UI` é `no`; `heavy` quando duas ou mais camadas são tocadas, `## Security` ou `## Rollback` têm conteúdo além de `n/a`, ou há mais de 8 caminhos; `standard` nos demais casos. Declare um peso igual ou acima do calculado.
+   - **Escopo:** escreva só a spec e o plano; nenhum outro arquivo.
 5. Encerrar com `completion_report`, com um resumo curto da spec escrita.

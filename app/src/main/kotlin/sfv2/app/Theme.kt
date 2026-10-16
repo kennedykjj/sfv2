@@ -32,11 +32,14 @@ internal object Texts {
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
     const val BOARD = "Esteira"
+    const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
     const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun goToColumn(column: BoardColumn, count: Int): String = "Ir para ${column.displayName}, ${cardCount(count)}"
 
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
@@ -82,6 +85,18 @@ internal object Texts {
     const val SEND_BACK = "Devolver"
     const val CANCEL = "Cancelar"
     const val DISMISS = "Entendi"
+
+    const val SPEC_DECISION = "Decisão sobre a spec"
+    const val APPROVE = "Aprovar"
+    const val REQUEST_CHANGE = "Pedir mudança"
+    const val SEND_NOTE = "Enviar"
+    const val SENDING = "Enviando…"
+    const val APPROVAL_SENT = "Aprovação enviada"
+    const val CHANGE_SENT = "Pedido de mudança enviado"
+    const val DISMISS_NOTICE = "Dispensar"
+    const val NOTICE_REFUSED = "Recusado"
+    const val NOTICE_NOT_SENT = "Não enviado"
+    const val NOTE_REQUIRED = "A nota é obrigatória para pedir mudança."
 
     fun holding(id: String): String = "Segurando #${id.take(8)}. Setas escolhem o destino, Enter confirma, Esc cancela."
 
