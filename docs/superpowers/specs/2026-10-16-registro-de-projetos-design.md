@@ -58,7 +58,7 @@ _Revisão do dono interino_
 - **Por que só o dono registra:** o `factory.yml` do projeto declara quem assina cada efeito externo (`signers`, #19), inclusive `policy` (dispensa a assinatura do dono). Quem registra um repositório escolhe, na prática, quais efeitos saem sem o dono; um agente nunca pode fazer isso (ARCHITECTURE, invariante 4).
 - **`path` vem de fora:** canonicalizar com `toRealPath`, exigir diretório com repositório git, recusar caminho inexistente com mensagem sem eco do conteúdo.
 - **`git` seguro:** `git -C <repo> show main:.shipfloor/factory.yml` sem shell, argumentos fixos, `GIT_TERMINAL_PROMPT=0`, `-c core.fsmonitor=false`, timeout, tamanho máximo do arquivo e saída padrão lida com limite. Nada do conteúdo do `factory.yml` vira comando.
-- **YAML não confiável:** `snakeyaml-engine` em modo seguro (sem tipos arbitrários, limites de aliases e de tamanho); campos desconhecidos viram erro com o nome do campo.
+- **YAML não confiável:** `snakeyaml-engine` em modo seguro (sem tipos arbitrários, limites de aliases e de tamanho); chaves que o registro não lê (as da V0: `board`, `language`, `limits`, `layers[].build` etc.) são ignoradas; os campos que lê são validados e o erro nomeia o campo.
 - **Log:** só o id do projeto (nome validado) e o caminho; nunca o conteúdo do arquivo.
 
 ## Rollback

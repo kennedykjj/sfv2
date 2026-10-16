@@ -11,7 +11,13 @@ import sfv2.core.ProjectPolicies
 
 data class ProjectLayer(val name: String, val path: String)
 
-data class Project(val name: String, val repo: String, val layers: List<ProjectLayer>, val policies: ProjectPolicies)
+data class Project(
+    val name: String,
+    val repo: String,
+    val layers: List<ProjectLayer>,
+    val policies: ProjectPolicies,
+    val forbidden: List<String> = emptyList(),
+)
 
 /** The project's `factory.yml` on `main` is invalid; [field] names the offending field. */
 class InvalidProjectConfigException(val field: String, message: String) : RuntimeException(message)
@@ -61,9 +67,7 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
             throw InvalidProjectConfigException("factory.yml", "$CONFIG_FILE is not valid YAML")
         }
         val map = asMap(root, "factory.yml")
-        rejectUnknown(map, TOP_LEVEL_KEYS, null)
         val projectSection = asMap(map["project"], "project")
-        rejectUnknown(projectSection, setOf("name"), "project")
         val name = (projectSection["name"] as? String)?.takeIf { it.isNotBlank() }
             ?: throw InvalidProjectConfigException("project.name", "project.name must be a non-empty text")
         val layers = parseLayers(map["layers"])
@@ -72,7 +76,21 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         } catch (e: InvalidPolicyException) {
             throw InvalidProjectConfigException(e.field, "invalid policy field ${e.field}")
         }
-        return Project(name, repo.toString(), layers, policies)
+        return Project(name, repo.toString(), layers, policies, parseForbidden(map["forbidden"]))
+    }
+
+    private fun parseForbidden(raw: Any?): List<String> {
+        if (raw == null) return emptyList()
+        val items = raw as? List<*> ?: throw InvalidProjectConfigException("forbidden", "forbidden must be a list")
+        return items.mapIndexed { index, item ->
+            val field = "forbidden[$index]"
+            val path = (item as? String)?.takeIf { it.isNotBlank() }
+                ?: throw InvalidProjectConfigException(field, "$field must be a non-empty text")
+            if (path.startsWith("/") || path.split("/").any { it == ".." }) {
+                throw InvalidProjectConfigException(field, "$field must be a relative path without '..'")
+            }
+            path
+        }
     }
 
     private fun parseLayers(raw: Any?): List<ProjectLayer> {
@@ -81,7 +99,6 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         val layers = items.mapIndexed { index, item ->
             val field = "layers[$index]"
             val layer = asMap(item, field)
-            rejectUnknown(layer, setOf("name", "path"), field)
             val name = (layer["name"] as? String)?.takeIf { it.isNotBlank() }
                 ?: throw InvalidProjectConfigException("$field.name", "$field.name must be a non-empty text")
             val path = (layer["path"] as? String)?.takeIf { it.isNotBlank() }
@@ -102,17 +119,12 @@ class ProjectRegistry(private val source: ProjectConfigSource) {
         }
     }
 
-    private fun rejectUnknown(map: Map<String, Any?>, allowed: Set<String>, parent: String?) {
-        val unknown = map.keys.firstOrNull { it !in allowed } ?: return
-        val field = if (parent == null) unknown else "$parent.$unknown"
-        throw InvalidProjectConfigException(field, "unknown field $field")
-    }
-
+    // Keys the registry does not read (board, language, limits, layer build/test commands...) belong to the V0
+    // factory.yml and are ignored here; the fields it does read are validated.
     private companion object {
         const val CONFIG_FILE = ".shipfloor/factory.yml"
         const val MAX_CHARS = 64 * 1024
         const val MAX_ALIASES = 10
         val POLICY_KEYS = setOf("delivery_mode", "signers", "conventions")
-        val TOP_LEVEL_KEYS = POLICY_KEYS + setOf("project", "layers")
     }
 }

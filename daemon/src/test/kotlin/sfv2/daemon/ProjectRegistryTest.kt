@@ -78,6 +78,33 @@ class ProjectRegistryTest {
     }
 
     @Test
+    fun `the factory yml of this repository registers despite the keys the registry does not read`() {
+        val repo = aRepo("self")
+        val real = Files.readString(Path.of("..", ".shipfloor", "factory.yml"))
+        val source = FakeSource().also { it.put(repo, real) }
+
+        val registered = ProjectRegistry(source).register(repo)
+
+        assertThat(registered.name).isEqualTo("sfv2")
+        assertThat(registered.layers.map { it.name }).contains("core", "store", "ports", "adapters", "daemon", "cli")
+        assertThat(registered.layers.first { it.name == "core" }.path).isEqualTo("core/")
+    }
+
+    @Test
+    fun `unknown keys are ignored but an invalid known field still names itself`() {
+        val ok = aRepo("extra-keys")
+        val bad = aRepo("extra-keys-bad")
+        val source = FakeSource().also {
+            it.put(ok, validYaml().replace("project:\n  name: alpha", "project:\n  name: alpha\n  repo: o/r") + "\nboard: {owner: o, number: 4}\n")
+            it.put(bad, validYaml().replace("close: policy", "close: nobody") + "\nboard: {owner: o, number: 4}\n")
+        }
+        val registry = ProjectRegistry(source)
+
+        assertThat(registry.register(ok).name).isEqualTo("alpha")
+        assertThat(assertThrows(InvalidProjectConfigException::class.java) { registry.register(bad) }.field).isEqualTo("signers.close")
+    }
+
+    @Test
     fun `AC-2 an invalid factory yml is refused and the reply names the invalid field`() {
         val repo = aRepo("bad-policy")
         val noName = aRepo("no-name")
@@ -168,6 +195,59 @@ class ProjectRegistryTest {
         assertThat(byPath.message).contains(repo.toRealPath().toString())
         assertThat(bySymlink.message).contains(repo.toRealPath().toString())
         assertThat(registry.list()).containsExactly(first)
+    }
+
+    @Test
+    fun `scope AC-5 the forbidden list and layers come from main, not from the edited working tree`() {
+        val repo = aRepo("scoped")
+        Files.delete(repo.resolve(".git"))
+        git(repo, "init", "-q", "-b", "main")
+        Files.createDirectories(repo.resolve(".shipfloor"))
+        val file = repo.resolve(".shipfloor/factory.yml")
+        Files.writeString(file, validYaml("scoped") + "\nforbidden:\n  - gradle/wrapper/\n  - docs/private\n")
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "main config")
+        git(repo, "checkout", "-q", "-b", "feat/loosen")
+        Files.writeString(file, validYaml("scoped").replace("path: core/", "path: .") + "\nforbidden: []\n")
+
+        val registered = ProjectRegistry(GitProjectConfigSource()).register(repo)
+
+        assertThat(registered.forbidden).containsExactly("gradle/wrapper/", "docs/private")
+        assertThat(registered.layers).containsExactly(ProjectLayer("core", "core/"), ProjectLayer("daemon", "daemon/"))
+        // The gate built on that project still rejects the path the working tree tried to release.
+        val verdict = ScopeGate.check(registered, listOf("gradle/wrapper/gradle-wrapper.jar"), setOf("daemon"))
+        assertThat(verdict).isInstanceOf(ScopeVerdict.Violations::class.java)
+    }
+
+    @Test
+    fun `scope forbidden is optional and empty by default`() {
+        val repo = aRepo("no-forbidden")
+        val source = FakeSource().also { it.put(repo, validYaml()) }
+
+        assertThat(ProjectRegistry(source).register(repo).forbidden).isEmpty()
+    }
+
+    @Test
+    fun `scope an invalid forbidden item is refused naming forbidden`() {
+        val invalid = listOf(
+            "forbidden: build/\n",
+            "forbidden:\n  - 5\n",
+            "forbidden:\n  - ''\n",
+            "forbidden:\n  - /etc\n",
+            "forbidden:\n  - a/../b\n",
+        )
+        val registry = ProjectRegistry(FakeSource().also { source ->
+            invalid.forEachIndexed { index, extra -> source.put(aRepo("bad-forbidden-$index"), validYaml() + "\n" + extra) }
+        })
+
+        invalid.indices.forEach { index ->
+            val failure = assertThrows(InvalidProjectConfigException::class.java) {
+                registry.register(dir.resolve("bad-forbidden-$index"))
+            }
+            assertThat(failure.field).startsWith("forbidden")
+            assertThat(failure.message).contains("forbidden")
+        }
+        assertThat(registry.list()).isEmpty()
     }
 
     // ---- AC-7: through the socket of a real daemon ----
