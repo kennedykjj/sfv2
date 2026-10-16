@@ -59,6 +59,7 @@ import kotlinx.coroutines.launch
 
 private val COMPACT_WIDTH = 860.dp
 private val OWNER_DECISIONS = setOf("OWNER_APPROVED", "OWNER_CHANGE_REQUESTED")
+private const val DONE_COLUMN = "DONE"
 private const val PASS = "PASS"
 private const val FAIL = "FAIL"
 private const val NO_GATE = "none"
@@ -86,7 +87,10 @@ private fun body(color: Color = Tokens.soft) = TextStyle(fontFamily = sans, font
 private fun meta(color: Color = Tokens.muted) = TextStyle(fontFamily = sans, fontSize = 13.sp, color = color)
 private fun tabular(style: TextStyle) = style.copy(fontFeatureSettings = "tnum")
 
-/** [specReview] is null without a daemon; the owner's actions show only for a card in `SPEC_REVIEW`. */
+/**
+ * [specReview] is null without a daemon; the owner's actions show only for a card in `SPEC_REVIEW`.
+ * [closure] is the closure screen's controller; without it (no daemon socket) a Done card has no closing action.
+ */
 @Composable
 fun CardDetailScreen(
     cardId: String,
@@ -94,6 +98,7 @@ fun CardDetailScreen(
     onBack: () -> Unit,
     zone: ZoneId = ZoneId.systemDefault(),
     specReview: SpecReviewController? = null,
+    closure: ClosureController? = null,
 ) {
     when (state) {
         CardDetailState.Disconnected -> ConnectionScreen(ConnectionState.Disconnected(DisconnectReason.NOT_RESPONDING))
@@ -101,7 +106,7 @@ fun CardDetailScreen(
         CardDetailState.Loading -> Page { Header(cardId, null, null); Section(Texts.SPEC) { Muted(Texts.LOADING_CARD) } }
         is CardDetailState.Loaded -> {
             LaunchedEffect(state.detail) { specReview?.onDetail(state.detail) }
-            Page { Detail(state.detail, zone, specReview.takeIf { specReviewActionsVisible(state) }) }
+            Page { Detail(state.detail, zone, specReview.takeIf { specReviewActionsVisible(state) }, closure) }
         }
     }
 }
@@ -168,9 +173,10 @@ private fun Header(cardId: String, detail: CardDetail?, total: CostTotal?) {
 }
 
 @Composable
-private fun Detail(detail: CardDetail, zone: ZoneId, specReview: SpecReviewController?) {
+private fun Detail(detail: CardDetail, zone: ZoneId, specReview: SpecReviewController?, closure: ClosureController?) {
     Header(detail.id, detail, detail.total)
     if (specReview != null) SpecReviewActions(detail.id, specReview)
+    if (closure != null && detail.column == DONE_COLUMN) ClosureEntry(detail, closure)
     Section(Texts.SPEC) {
         if (detail.spec.status == "missing" || detail.spec.text.isBlank()) {
             Faint(Texts.NO_SPEC)
@@ -205,6 +211,25 @@ private fun Detail(detail: CardDetail, zone: ZoneId, specReview: SpecReviewContr
                 BasicText(formatCost(detail.total.costUsd), style = tabular(bold))
             }
         }
+    }
+}
+
+/** The way into the closure screen; only a Done card has it. Opening it asks for the draft but sends nothing. */
+@Composable
+private fun ClosureEntry(detail: CardDetail, closure: ClosureController) {
+    var open by remember(detail.id) { mutableStateOf(false) }
+    if (open) {
+        Section(Texts.CLOSURE_OPEN) { ClosureScreen(closure, detail.events, detail.id) { open = false } }
+    } else {
+        BasicText(
+            Texts.CLOSURE_OPEN,
+            modifier = Modifier
+                .heightIn(min = 24.dp)
+                .border(1.dp, Tokens.edgeHi, RoundedCornerShape(8.dp))
+                .clickable(role = Role.Button) { open = true }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            style = body(Tokens.text),
+        )
     }
 }
 

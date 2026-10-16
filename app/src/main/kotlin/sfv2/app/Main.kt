@@ -111,12 +111,19 @@ private fun openNoticePorts(requests: MutableSharedFlow<WindowRequest>): NoticeP
     return NoticePorts(tray, notifier)
 }
 
-/** [commands] is null without a daemon; the card view then shows no owner action. */
+/** [commands] and [closure] are null without a daemon; the card view then shows no owner action. */
 @Composable
-private fun OpenCard(cardId: String, source: CardDetailSource?, commands: OwnerCommands?, onBack: () -> Unit) {
+private fun OpenCard(
+    cardId: String,
+    source: CardDetailSource?,
+    commands: OwnerCommands?,
+    closure: ClosureCommands?,
+    onBack: () -> Unit,
+) {
     val model = remember(cardId) {
         CardDetailModel(cardId, source ?: CardDetailSource { throw IOException("no runtime dir") })
     }
+    val controller = remember(cardId, closure) { closure?.let { ClosureController(it, Dispatchers.IO) } }
     val state by model.state.collectAsState()
     val specReview = remember(cardId, commands) { commands?.let { SpecReviewController(it, Dispatchers.IO) } }
     LaunchedEffect(model) { withContext(Dispatchers.IO) { model.refresh() } }
@@ -128,7 +135,7 @@ private fun OpenCard(cardId: String, source: CardDetailSource?, commands: OwnerC
             withContext(Dispatchers.IO) { model.refresh() }
         }
     }
-    CardDetailScreen(cardId, state, onBack, specReview = specReview)
+    CardDetailScreen(cardId, state, onBack, specReview = specReview, closure = controller)
 }
 
 private const val TOKEN_RELATIVE_PATH = "sfv2/owner.token"
@@ -166,6 +173,10 @@ fun main() {
         )
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
+    val closureCommands = runtimeDir?.let {
+        val socket = Path.of(it, SOCKET_RELATIVE_PATH)
+        SocketClosureCommands(socket, socket.resolveSibling(OWNER_TOKEN_FILE))
+    }
     val pulse = runtimeDir?.let {
         val socket = Path.of(it, SOCKET_RELATIVE_PATH)
         PulseMonitor(SocketPulseSource(socket), SocketCostSummarySource(socket), Clock.systemUTC(), ZoneId.systemDefault(), Dispatchers.IO)
@@ -267,7 +278,8 @@ fun main() {
             val feedAvailable = feed != null && connected
             Box(Modifier.fillMaxSize()) {
                 when {
-                    openCardId != null -> OpenCard(requireNotNull(openCardId), cardSource, ownerCommands) { openCardId = null }
+                    openCardId != null ->
+                        OpenCard(requireNotNull(openCardId), cardSource, ownerCommands, closureCommands) { openCardId = null }
                     showSettings && settingsClient != null -> SettingsScreen(settingsClient, onBack = { showSettings = false })
                     feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                         val feedState by feed.client.state.collectAsState()
