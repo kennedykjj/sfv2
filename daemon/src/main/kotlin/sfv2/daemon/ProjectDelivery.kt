@@ -10,6 +10,7 @@ import sfv2.adapters.GhForge
 import sfv2.ports.Forge
 import sfv2.ports.ForgeException
 import sfv2.ports.MergeResult
+import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
@@ -69,4 +70,10 @@ private object UnavailableForge : Forge {
     override fun findOpenPullRequest(branch: String): PullRequestRef? = unavailable("findOpenPullRequest")
 
     override fun state(pr: PullRequestRef): PullRequestState = unavailable("state")
+
+    override fun rerunChecks(head: String) = unavailable("rerunChecks")
+
+    override fun revert(pr: PullRequestRef): PullRequestRef = unavailable("revert")
+
+    override fun findMergedPullRequest(branch: String): MergedPullRequest? = unavailable("findMergedPullRequest")
 }

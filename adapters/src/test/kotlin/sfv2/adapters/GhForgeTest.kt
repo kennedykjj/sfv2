@@ -13,6 +13,7 @@ import sfv2.ports.FakeForge
 import sfv2.ports.Forge
 import sfv2.ports.ForgeException
 import sfv2.ports.MergeResult
+import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
@@ -185,6 +186,47 @@ class GhForgeTest {
         assertThat(h.callsTo("pr merge")).isEmpty()
     }
 
+    private fun mergedJson(login: String? = "octocat", oid: String? = GhForgeFixtures.MERGE_OID) =
+        """[{"number":7,"mergeCommit":${if (oid == null) "{}" else """{"oid":"$oid"}"""},""" +
+            """"headRefOid":"${GhForgeFixtures.HEAD}","mergedBy":${if (login == null) "null" else """{"login":"$login"}"""}}]"""
+
+    @Test
+    fun `AC-9 finds the merged PR of a branch with number, merge commit, head and mergedBy`() {
+        val h = harness()
+        h.on("pr-list", mergedJson())
+
+        val merged = h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)
+
+        assertThat(merged).isEqualTo(
+            MergedPullRequest(7, GhForgeFixtures.MERGE_OID, GhForgeFixtures.HEAD, "octocat"),
+        )
+        assertThat(h.callsTo("pr list").single())
+            .contains("--repo ${GhForgeFixtures.REPO}", "--head ${GhForgeFixtures.BRANCH}", "--state merged")
+    }
+
+    @Test
+    fun `AC-9 no merged PR is null and a login out of format is omitted`() {
+        val h = harness()
+        h.on("pr-list", "[]")
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)).isNull()
+
+        h.on("pr-list", mergedJson(login = "bad login;rm"))
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)?.mergedBy).isNull()
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)?.number).isEqualTo(7)
+    }
+
+    @Test
+    fun `AC-9 refuses an invalid branch or repo without calling gh and fails on a missing merge commit`() {
+        val h = harness()
+        h.on("pr-list", mergedJson())
+        assertThrows<ForgeException> { h.forge().findMergedPullRequest("-evil") }
+        assertThrows<ForgeException> { h.forge(repo = "no-slash").findMergedPullRequest(GhForgeFixtures.BRANCH) }
+        assertThat(h.calls()).isEmpty()
+
+        h.on("pr-list", mergedJson(oid = null))
+        assertThrows<ForgeException> { h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH) }
+    }
+
     @Test
     fun `AC-4 a missing gh binary becomes a ForgeException`() {
         val h = harness()
@@ -317,6 +359,72 @@ class GhForgeTest {
         val fromGh = sequence(h.forge()) { }
 
         assertThat(fromGh).isEqualTo(fromFake)
+    }
+
+    @Test
+    fun `rerunChecks posts rerun-failed-jobs only for completed failed runs using integer ids`() {
+        val h = harness()
+        h.on(
+            "api",
+            """{"workflow_runs":[{"id":111,"status":"completed","conclusion":"failure"},""" +
+                """{"id":222,"status":"completed","conclusion":"success"},""" +
+                """{"id":333,"status":"in_progress","conclusion":null},""" +
+                """{"id":444,"status":"completed","conclusion":"failure"}]}""",
+        )
+
+        h.forge().rerunChecks(GhForgeFixtures.HEAD)
+
+        assertThat(h.callsTo("api -X POST"))
+            .containsExactly(
+                "api -X POST repos/acme/widgets/actions/runs/111/rerun-failed-jobs",
+                "api -X POST repos/acme/widgets/actions/runs/444/rerun-failed-jobs",
+            )
+    }
+
+    @Test
+    fun `rerunChecks refuses an invalid sha without calling gh`() {
+        val h = harness()
+
+        assertThrows<ForgeException> { h.forge().rerunChecks("main; rm -rf /") }
+
+        assertThat(h.calls()).isEmpty()
+    }
+
+    @Test
+    fun `rerunChecks failure carries the operation and no gh output`() {
+        val h = harness()
+        h.on("api", err = GhForgeFixtures.SECRET, exit = 1)
+
+        val e = assertThrows<ForgeException> { h.forge().rerunChecks(GhForgeFixtures.HEAD) }
+
+        assertThat(e.message).contains("rerunChecks").doesNotContain("SUPERSECRET")
+    }
+
+    @Test
+    fun `revert opens the PR through the mutation and returns the opened ref`() {
+        val h = harness()
+        h.on("pr-view", """{"id":"PR_kwDOabc123"}""")
+        h.on(
+            "api",
+            """{"data":{"revertPullRequest":{"revertPullRequest":""" +
+                """{"number":9,"headRefName":"revert-7-feat","headRefOid":"${GhForgeFixtures.OTHER_HEAD}"}}}}""",
+        )
+
+        val ref = h.forge().revert(GhForgeFixtures.aRef(number = 7))
+
+        assertThat(ref).isEqualTo(PullRequestRef(9, "revert-7-feat", GhForgeFixtures.OTHER_HEAD))
+        assertThat(h.callsTo("api graphql").single()).contains("revertPullRequest").contains("id=PR_kwDOabc123")
+    }
+
+    @Test
+    fun `revert failure names the PR and hides gh output`() {
+        val h = harness()
+        h.on("pr-view", """{"id":"PR_kwDOabc123"}""")
+        h.on("api", err = GhForgeFixtures.SECRET, exit = 1)
+
+        val e = assertThrows<ForgeException> { h.forge().revert(GhForgeFixtures.aRef(number = 7)) }
+
+        assertThat(e.message).contains("revert").contains("pr=7").doesNotContain("SUPERSECRET")
     }
 
     /** Observable outcomes of one delivery sequence, with SHAs and numbers reduced to their kind. */
