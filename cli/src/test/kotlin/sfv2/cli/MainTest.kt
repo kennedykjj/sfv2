@@ -496,6 +496,117 @@ class MainTest {
         assertThat(requests.single()).contains("\"project.list\"").doesNotContain("secret-token")
     }
 
+    // ---- sfv2 init ----
+
+    private val factoryYml = ".shipfloor/factory.yml"
+    private val contextDocs = listOf("PRODUCT.md", "ARCHITECTURE.md", "DESIGN.md")
+
+    /** A fake git: [isRepo] answers rev-parse, and `git show main:<file>` prints content only for the [onMain] files. */
+    private fun fakeGit(isRepo: Boolean = true, onMain: Set<String> = emptySet()): (List<String>) -> String? = { command ->
+        val show = command.indexOf("show")
+        when {
+            command.contains("rev-parse") -> if (isRepo) ".git\n" else null
+            show >= 0 -> command.getOrNull(show + 1)?.takeIf { it.startsWith("main:") && it.removePrefix("main:") in onMain }?.let { "content\n" }
+            else -> null
+        }
+    }
+
+    private fun runInit(path: Path, git: (List<String>) -> String?): Int =
+        runCli(listOf("init", path.toString()), "1.2.3", { out.appendLine(it) }, { err.appendLine(it) }, mapOf("XDG_RUNTIME_DIR" to runtimeDir.toString()), git)
+
+    private fun registerableDaemon(registered: Boolean = false, canonical: String = "") {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        fakeDaemon { line ->
+            when {
+                line.contains("\"project.list\"") ->
+                    listOf(if (registered) """{"ok":true,"result":[{"name":"alpha","repo":"$canonical","layers":[]}]}""" else """{"ok":true,"result":[]}""")
+                else -> listOf("""{"ok":true,"result":{"name":"alpha","repo":"acme/alpha","layers":[{"name":"core"}]}}""")
+            }
+        }
+    }
+
+    private fun addRequests(): List<String> = requests.filter { it.contains("\"project.add\"") }
+
+    @Test
+    fun `AC-1 init on a directory that is not a git repository exits 1 with git init guidance and sends no project add`() {
+        registerableDaemon()
+
+        assertThat(runInit(projectDir(), fakeGit(isRepo = false))).isEqualTo(1)
+
+        assertThat(err.toString()).contains("git init")
+        assertThat(addRequests()).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 init on a repository without factory yml on main exits 1 naming the file and the branch and sends no project add`() {
+        registerableDaemon()
+
+        assertThat(runInit(projectDir(), fakeGit(onMain = setOf("PRODUCT.md")))).isEqualTo(1)
+
+        assertThat(err.toString()).contains(factoryYml).contains("main")
+        assertThat(addRequests()).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 init registers the project with the owner proof and prints the project line and the readiness score`() {
+        registerableDaemon()
+        val dir = projectDir()
+
+        assertThat(runInit(dir, fakeGit(onMain = setOf(factoryYml) + contextDocs))).isZero()
+
+        val add = addRequests().single()
+        assertThat(add).contains(dir.toRealPath().toString())
+            .containsPattern("\"proof\"\\s*:\\s*\"secret-token\"").containsPattern("\"actor\"\\s*:\\s*\"owner\"")
+        val lines = out.toString().lines().filter { it.isNotBlank() }
+        assertThat(lines).contains("alpha  acme/alpha")
+        assertThat(out.toString()).contains("3/3").doesNotContain("ausente")
+    }
+
+    @Test
+    fun `AC-4 init with missing context documents exits 0 and lists each one as ausente`() {
+        registerableDaemon()
+
+        assertThat(runInit(projectDir(), fakeGit(onMain = setOf(factoryYml, "PRODUCT.md")))).isZero()
+
+        val lines = out.toString().lines()
+        assertThat(out.toString()).contains("1/3")
+        assertThat(lines.filter { it.contains("ausente") }).hasSize(2)
+        assertThat(lines.single { it.contains("ARCHITECTURE.md") }).contains("ausente")
+        assertThat(lines.single { it.contains("DESIGN.md") }).contains("ausente")
+        assertThat(lines.filter { it.contains("PRODUCT.md") }).noneMatch { it.contains("ausente") }
+        assertThat(addRequests()).hasSize(1)
+    }
+
+    @Test
+    fun `AC-5 init on an already registered project sends no second project add, prints the score and exits 0`() {
+        val dir = projectDir()
+        registerableDaemon(registered = true, canonical = dir.toRealPath().toString())
+
+        assertThat(runInit(dir, fakeGit(onMain = setOf(factoryYml, "PRODUCT.md", "DESIGN.md")))).isZero()
+
+        assertThat(addRequests()).isEmpty()
+        assertThat(out.toString()).contains("2/3")
+        assertThat(err).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 init shows the daemon refusal with the field name and exits 1`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+        fakeDaemon { line ->
+            if (line.contains("\"project.list\"")) {
+                listOf("""{"ok":true,"result":[]}""")
+            } else {
+                listOf("""{"ok":false,"error":"factory.yml invalid: layers[0].test is required"}""")
+            }
+        }
+
+        assertThat(runInit(projectDir(), fakeGit(onMain = setOf(factoryYml)))).isEqualTo(1)
+
+        assertThat(err.toString()).contains("layers[0].test")
+    }
+
     // ---- sfv2 doctor ----
 
     private val checkNames = listOf("java", "git", "gh", "claude", "socket", "banco", "serviço", "permissões", "ambiente do serviço")
