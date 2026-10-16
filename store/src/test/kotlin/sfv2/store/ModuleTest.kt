@@ -10,6 +10,7 @@ import sfv2.core.Card
 import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventId
+import sfv2.core.EventJson
 import sfv2.core.EventType
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -45,14 +46,14 @@ class ModuleTest {
     }
 
     @Test
-    fun `AC-1 creates a new database at schema version 2 in WAL mode`() {
+    fun `AC-1 creates a new database at schema version 3 in WAL mode`() {
         val file = dir.resolve("fresh.db")
 
         Database.open(file).close()
 
         assertThat(Files.exists(file)).isTrue()
-        assertThat(Database.SCHEMA_VERSION).isEqualTo(2)
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("2")
+        assertThat(Database.SCHEMA_VERSION).isEqualTo(3)
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
         val tables = jdbc(file) { c ->
             c.createStatement().use { s ->
@@ -81,7 +82,7 @@ class ModuleTest {
         assertThat(scalar(file, "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)"))
             .isEqualTo(schemaBefore)
         assertThat(scalar(file, "SELECT note FROM probe")).isEqualTo("kept")
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("2")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
     }
 
@@ -231,6 +232,146 @@ class ModuleTest {
 
         assertThat(store.events("c1").first { it.id == first.id }).isEqualTo(first)
         assertThat(store.events("c1")).hasSize(2)
+    }
+
+    private val v1Ddl = listOf(
+        "CREATE TABLE card (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, column_name TEXT NOT NULL)",
+        "CREATE TABLE event (id TEXT NOT NULL PRIMARY KEY, card_id TEXT NOT NULL, at TEXT NOT NULL, " +
+            "actor TEXT NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL)",
+        "CREATE INDEX event_card_id ON event(card_id)",
+    )
+    private val v2Ddl = v1Ddl + "CREATE TABLE spec (card_id TEXT NOT NULL PRIMARY KEY, path TEXT NOT NULL, hash TEXT NOT NULL)"
+
+    // Ids are deliberately not in lexicographic order and share one instant: only insertion order can sort them.
+    private val legacyEvents = listOf(
+        anEvent("e-b", EventType.CARD_CREATED, "2026-10-15T10:00:00Z"),
+        anEvent("e-a", EventType.CARD_MOVED, "2026-10-15T10:00:00Z"),
+        anEvent("e-c", EventType.OWNER_APPROVED, "2026-10-15T10:00:00Z"),
+    )
+
+    private fun legacyDatabase(name: String, version: Int, withSpec: Boolean): Path {
+        val file = dir.resolve(name)
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                (if (withSpec) v2Ddl else v1Ddl).forEach { s.execute(it) }
+                s.execute("INSERT INTO card (id, title, column_name) VALUES ('c1', 'Write docs', 'INBOX')")
+                if (withSpec) s.execute("INSERT INTO spec (card_id, path, hash) VALUES ('c1', '/specs/c1.md', 'abc123')")
+            }
+            c.prepareStatement(
+                "INSERT INTO event (id, card_id, at, actor, type, payload_json) VALUES (?, 'c1', ?, 'owner', ?, ?)",
+            ).use { p ->
+                legacyEvents.forEach { e ->
+                    p.setString(1, e.id.value)
+                    p.setString(2, e.at.toString())
+                    p.setString(3, e.type.name)
+                    p.setString(4, EventJson.encode(e))
+                    p.executeUpdate()
+                }
+            }
+            c.createStatement().use { it.execute("PRAGMA user_version = $version") }
+        }
+        return file
+    }
+
+    private fun columns(file: Path, table: String): List<String> =
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.executeQuery("PRAGMA table_info($table)").use { rs ->
+                    generateSequence { if (rs.next()) "${rs.getString("name")}:${rs.getString("type")}:${rs.getInt("pk")}" else null }.toList()
+                }
+            }
+        }
+
+    private fun longs(file: Path, sql: String): List<Long> =
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.executeQuery(sql).use { rs -> generateSequence { if (rs.next()) rs.getLong(1) else null }.toList() }
+            }
+        }
+
+    @Test
+    fun `AC-1 history has increasing database-assigned seq and reads in that order schema-v3`() = withStore { store, file ->
+        val base = "2026-10-15T10:00:00Z"
+        val written = listOf("e-z", "e-m", "e-a").map { anEvent(it, EventType.CARD_MOVED, base) }
+        written.forEach { store.recordChange("c1", Card.create("Write docs", Column.INBOX), it) }
+
+        assertThat(columns(file, "event").map { it.substringBefore(":") }).contains("seq")
+        val seqs = longs(file, "SELECT seq FROM event WHERE card_id = 'c1' ORDER BY rowid")
+        assertThat(seqs).hasSize(3).isSorted()
+        assertThat(seqs.toSet()).hasSize(3)
+        assertThat(store.events("c1")).containsExactlyElementsOf(written)
+    }
+
+    @Test
+    fun `AC-2 event for an unknown card is rejected and for a known card accepted schema-v3`() = withStore { store, file ->
+        Database.open(dir.resolve("fk.db")).use { db ->
+            val q = db.queries.schemaQueries
+            assertThatThrownBy {
+                q.insertEvent("e-orphan", "ghost", "2026-10-15T10:00:00Z", "owner", "CARD_CREATED", "{}")
+            }.isInstanceOf(Exception::class.java)
+            assertThat(q.eventPayloadsByCard("ghost").executeAsList()).isEmpty()
+        }
+
+        store.recordChange("c1", Card.create("Write docs", Column.INBOX), anEvent("e1"))
+        store.recordChange("c1", Card.create("Write docs", Column.CODING), anEvent("e2", EventType.CARD_MOVED))
+        assertThat(store.events("c1")).hasSize(2)
+        assertThat(longs(file, "SELECT count(*) FROM event WHERE card_id NOT IN (SELECT id FROM card)")).containsExactly(0L)
+    }
+
+    private fun assertMigratedLegacy(file: Path, withSpec: Boolean) {
+        Database.open(file).use { db ->
+            assertThat(CardEventStore(db).card("c1")).isEqualTo(Card.create("Write docs", Column.INBOX))
+            assertThat(CardEventStore(db).events("c1")).containsExactlyElementsOf(legacyEvents)
+            if (withSpec) {
+                assertThat(db.queries.schemaQueries.selectSpec("c1").executeAsOne().hash).isEqualTo("abc123")
+            }
+        }
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
+        assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
+    }
+
+    @Test
+    fun `AC-3 version 1 database migrates to the new version keeping all data schema-v3`() {
+        assertMigratedLegacy(legacyDatabase("v1.db", 1, withSpec = false), withSpec = false)
+    }
+
+    @Test
+    fun `AC-3 version 2 database migrates to the new version keeping cards events and specs schema-v3`() {
+        assertMigratedLegacy(legacyDatabase("v2.db", 2, withSpec = true), withSpec = true)
+    }
+
+    @Test
+    fun `AC-4 migrated v1 and v2 databases end with the same schema as a fresh one schema-v3`() {
+        val fresh = dir.resolve("fresh-schema.db")
+        Database.open(fresh).close()
+        val v1 = legacyDatabase("m1.db", 1, withSpec = false).also { Database.open(it).close() }
+        val v2 = legacyDatabase("m2.db", 2, withSpec = true).also { Database.open(it).close() }
+
+        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("3")
+        listOf(v1, v2).forEach { migrated ->
+            listOf("card", "event", "spec").forEach { table ->
+                assertThat(columns(migrated, table)).isEqualTo(columns(fresh, table))
+            }
+            assertThat(scalar(migrated, "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name)"))
+                .isEqualTo(scalar(fresh, "SELECT group_concat(name) FROM (SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name)"))
+            assertThat(scalar(migrated, "SELECT count(*) FROM pragma_foreign_key_list('event')")).isEqualTo("1")
+        }
+    }
+
+    @Test
+    fun `AC-5 changed card is updated in place and its events stay linked schema-v3`() = withStore { store, file ->
+        store.recordChange("c1", Card.create("Write docs", Column.INBOX), anEvent("e1"))
+        store.recordChange("c2", Card.create("Other", Column.INBOX), anEvent("e2"))
+        val rowidBefore = longs(file, "SELECT rowid FROM card WHERE id = 'c1'")
+        val moved = Card.create("Write docs v2", Column.CODING)
+
+        store.recordChange("c1", moved, anEvent("e3", EventType.CARD_MOVED, "2026-10-15T11:00:00Z"))
+
+        assertThat(longs(file, "SELECT rowid FROM card WHERE id = 'c1'")).isEqualTo(rowidBefore)
+        assertThat(longs(file, "SELECT count(*) FROM card")).containsExactly(2L)
+        assertThat(store.card("c1")).isEqualTo(moved)
+        assertThat(store.events("c1").map { it.id.value }).containsExactly("e1", "e3")
+        assertThat(longs(file, "SELECT count(*) FROM event WHERE card_id NOT IN (SELECT id FROM card)")).containsExactly(0L)
     }
 
     @Test

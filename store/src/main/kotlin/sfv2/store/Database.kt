@@ -5,6 +5,7 @@ import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import java.nio.file.Path
+import java.util.Properties
 import sfv2.store.db.Sfv2Database
 
 /** The factory's SQLite database, versioned by `PRAGMA user_version`. */
@@ -14,10 +15,10 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
     override fun close() = driver.close()
 
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
 
         fun open(path: Path): Database {
-            val driver = JdbcSqliteDriver("jdbc:sqlite:$path")
+            val driver = JdbcSqliteDriver("jdbc:sqlite:$path", Properties().apply { setProperty("foreign_keys", "true") })
             try {
                 // The version is read before any write PRAGMA: WAL changes the file header.
                 val found = driver.readInt("PRAGMA user_version")
