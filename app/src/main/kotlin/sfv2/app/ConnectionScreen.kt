@@ -33,6 +33,14 @@ internal object Texts {
     const val CONNECTING = "Conectando ao daemon…"
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
+    const val BOARD = "Esteira"
+    const val WAITS_FOR_YOU = "Aguarda você"
+    const val EMPTY_COLUMN = "Vazia"
+    const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
+    const val LOADING_BOARD = "Carregando a esteira…"
+    const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
 
     const val FEED_TITLE = "Feed do dia"
     const val TODAY = "Hoje"

@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS project (
+    repo_path TEXT NOT NULL PRIMARY KEY,
+    registered_at TEXT NOT NULL
+);

@@ -42,6 +42,17 @@ CREATE TABLE card_project (
     repo TEXT NOT NULL
 );
 
+CREATE TABLE project (
+    repo_path TEXT NOT NULL PRIMARY KEY,
+    registered_at TEXT NOT NULL
+);
+
+insertProject:
+INSERT OR IGNORE INTO project (repo_path, registered_at) VALUES (:repoPath, :registeredAt);
+
+allProjects:
+SELECT repo_path FROM project ORDER BY rowid;
+
 upsertProject:
 INSERT OR REPLACE INTO card_project (card_id, repo) VALUES (:cardId, :repo);
 
