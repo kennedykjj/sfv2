@@ -95,6 +95,9 @@ SELECT seq FROM event WHERE id = :id;
 eventsAfter:
 SELECT seq, card_id, payload_json FROM event WHERE seq > :seq ORDER BY seq;
 
+latestEvents:
+SELECT seq, card_id, payload_json FROM event ORDER BY seq DESC LIMIT :limit;
+
 costEventsBetween:
 SELECT seq, card_id, payload_json FROM event
 WHERE type = 'RUN_COST_RECORDED' AND at >= :fromAt AND at < :toAt

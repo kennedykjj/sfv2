@@ -27,20 +27,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** Tokens of DESIGN.md (Charcoal) used by this screen. */
-internal object Tokens {
-    val ground = Color(0xFF0A0A0A)
-    val panel = Color(0xFF14171B)
-    val edge = Color(0xFF2A2F39)
-    val text = Color(0xFFF2F1EE)
-    val soft = Color(0xFFD6D8DA)
-    val muted = Color(0xFFA3ABB6)
-    val ok = Color(0xFF9FCBAA)
-    val warn = Color(0xFFDCB872)
-    val faint = Color(0xFF8F98A3)
-    val sand = Color(0xFFC7B9A6)
-}
-
 /** Every user-facing string of the shell, in one place for the future i18n. */
 internal object Texts {
     const val TITLE = "sfv2"
@@ -55,6 +41,31 @@ internal object Texts {
     const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
 
     fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
+
+    const val FEED_TITLE = "Feed do dia"
+    const val TODAY = "Hoje"
+    const val PREVIOUS_DAY = "Dia anterior"
+    const val NEXT_DAY = "Próximo dia"
+    const val CURRENT_DAY = "Este é o dia atual"
+    const val RECONNECTING = "Reconectando…"
+    const val COST_TITLE = "Custo do dia"
+    const val COST_BY_CARD = "Por card"
+    const val COST_TOTAL = "Total do dia"
+    const val ESTIMATE_TAG = "estimativa"
+    const val ESTIMATE_SUFFIX = "est."
+    const val PARTIAL = "parcial"
+    const val UNKNOWN = "desconhecido"
+    const val LIMIT_REACHED = "limite atingido"
+    const val LIMIT_EXCEEDED = "limite ultrapassado"
+    const val LIMIT_OF = "de"
+    const val LOADING = "Lendo o feed…"
+    const val EMPTY_DAY = "Nenhum evento neste dia."
+    const val FEED_ERROR = "Não consegui ler o feed. Tentando de novo."
+    const val PARTIAL_EXPLANATION = "Sem preço ou transcrição completa; o valor real pode ser maior."
+    const val EARLIER_HISTORY_UNAVAILABLE = "Histórico anterior indisponível"
+    const val FAILED = "falhou"
+
+    fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
 
     /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
     data class Explanation(val reason: String, val step: String, val command: String?)
