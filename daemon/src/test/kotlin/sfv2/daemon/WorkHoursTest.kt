@@ -1,5 +1,7 @@
 package sfv2.daemon
 
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
@@ -7,6 +9,7 @@ import java.time.ZoneId
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
 
 class WorkHoursTest {
     // 2026-10-16 is a Friday; 2026-10-17 a Saturday.
@@ -112,6 +115,49 @@ class WorkHoursTest {
     fun `AC-4 a window with equal start and end is invalid`() {
         assertThrows<InvalidWorkHoursException> {
             WorkHours.from(raw("start" to "09:00", "end" to "09:00"))
+        }
+    }
+
+    @TempDir
+    lateinit var dir: Path
+
+    private fun composedCycle(workHours: String, instant: String): List<DispatchedRun> =
+        ComposedDaemon(Files.createDirectories(dir.resolve("run-${System.nanoTime()}")), Instant.parse(instant)).use { daemon ->
+            daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS + workHours)
+            daemon.prices()
+            daemon.card("c1")
+            daemon.cycle()
+        }
+
+    private val office = "work_hours:\n  start: \"09:00\"\n  end: \"18:00\"\n  days: [mon, tue, wed, thu, fri]\n  timezone: America/Sao_Paulo\n"
+
+    @Test
+    fun `AC-4 the composed dispatcher launches only inside the work_hours of the factory yml`() {
+        // 15:00Z Friday = 12:00 in Sao Paulo.
+        assertThat(composedCycle(office, "2026-10-16T15:00:00Z")).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+        // 22:00Z Friday = 19:00 local, after the window.
+        assertThat(composedCycle(office, "2026-10-16T22:00:00Z")).isEmpty()
+        // Saturday inside the hours.
+        assertThat(composedCycle(office, "2026-10-17T15:00:00Z")).isEmpty()
+    }
+
+    @Test
+    fun `AC-4 without work_hours the composed dispatcher launches at any time`() {
+        assertThat(composedCycle("", "2026-10-17T03:00:00Z")).containsExactly(DispatchedRun(DispatchStage.REFINE, "c1"))
+    }
+
+    @Test
+    fun `AC-4 an invalid work_hours closes the composed dispatcher and the log names the field`() {
+        ComposedDaemon(Files.createDirectories(dir.resolve("invalid")), Instant.parse("2026-10-16T15:00:00Z")).use { daemon ->
+            daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS + "work_hours:\n  start: \"9h\"\n  end: \"18:00\"\n")
+            daemon.prices()
+            daemon.card("c1")
+
+            assertThat(daemon.cycle()).isEmpty()
+
+            assertThat(daemon.log.events("dispatcher_state").map { it.second }).anyMatch {
+                it["state"] == "invalid" && it["field"] == "work_hours.start"
+            }
         }
     }
 }

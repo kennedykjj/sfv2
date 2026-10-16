@@ -430,4 +430,44 @@ class RunCostTest {
         assertThat(payload["reason"]).isNotBlank()
         assertThat(payload).doesNotContainKey("cost_usd")
     }
+
+    private fun composedStart(prices: String?): ComposedDaemon.SyncLog =
+        ComposedDaemon(Files.createDirectories(dir.resolve("composed-${System.nanoTime()}")), now).use { daemon ->
+            daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+            daemon.prices(prices)
+            daemon.card("c1")
+            daemon.start()
+            daemon.log
+        }
+
+    @Test
+    fun `AC-3 a valid prices yml in the data dir lets the dispatcher start`() {
+        val log = composedStart(RunCostFixtures.pricesYaml)
+
+        assertThat(log.events("dispatcher_not_started")).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 a missing prices yml leaves the dispatcher stopped and names prices yml, while the daemon stays up`() {
+        val log = composedStart(null)
+
+        val stopped = log.events("dispatcher_not_started").single().second
+        assertThat(requireNotNull(stopped["field"])).startsWith("prices.yml")
+    }
+
+    @Test
+    fun `AC-3 an invalid prices yml leaves the dispatcher stopped, names the field and never logs its content`() {
+        listOf(
+            "models:\n  model-a:\n    input: NOT-A-PRICE-9931\n",
+            "models:\n  model-a:\n    input: -3\n",
+            "- just\n- a list 7718\n",
+            "models: [unterminated 5521\n",
+        ).forEach { yaml ->
+            val log = composedStart(yaml)
+
+            val stopped = log.events("dispatcher_not_started").single().second
+            assertThat(requireNotNull(stopped["field"])).`as`(yaml).startsWith("prices.yml")
+            assertThat(log.everything()).doesNotContain("NOT-A-PRICE-9931").doesNotContain("7718").doesNotContain("5521")
+        }
+    }
 }
