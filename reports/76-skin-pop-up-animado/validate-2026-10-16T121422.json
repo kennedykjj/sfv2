@@ -1,0 +1,1 @@
+{"issue": 76, "slug": "skin-pop-up-animado", "pipeline": "validate", "started_at": "2026-10-16T15:10:00Z", "finished_at": "2026-10-16T15:20:00Z", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": ["green app sfv2.app.PopupSkinTest"], "manual_edit": false, "amendments": []}
