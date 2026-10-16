@@ -1,0 +1,1 @@
+{"issue":21,"slug":"interface-runtime-e-fake","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:10:00Z","outcome":"ok","agents":[{"role":"qa-engineer","tokens":21378,"duration_s":26}],"rounds":{"qa":0,"implementation":0},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
