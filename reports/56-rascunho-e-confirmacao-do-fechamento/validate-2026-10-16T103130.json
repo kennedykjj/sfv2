@@ -1,0 +1,1 @@
+{"outcome": "staged", "agents": [{"name": "engineer", "purpose": "merge conflicts", "tokens": 22096}], "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": [], "amendments": []}
