@@ -58,6 +58,30 @@ object DispatcherFixtures {
         }
     }
 
+    /**
+     * Builds a Dispatcher restricted to [stages] through its `stages` constructor parameter (last, after `launchGuard`).
+     * Reflective so the missing parameter shows as a failed assertion instead of a compile error.
+     */
+    fun dispatcherFor(
+        stages: Set<DispatchStage>,
+        store: CardEventStore,
+        pool: RunPool,
+        launcher: StageLauncher,
+        pause: PauseSwitch,
+        schedule: WorkSchedule,
+        clock: Clock,
+        log: DaemonLog,
+        guard: LaunchGuard = LaunchGuard.Open,
+    ): Dispatcher {
+        val constructor = Dispatcher::class.java.constructors.firstOrNull { c ->
+            c.parameterTypes.size == 11 && c.parameterTypes.last() == Set::class.java
+        }
+        assertThat(constructor).`as`("Dispatcher has a `stages: Set<DispatchStage>` constructor parameter").isNotNull()
+        return requireNotNull(constructor).newInstance(
+            store, pool, launcher, pause, schedule, DispatchLimits(emptyMap()), clock, Duration.ofHours(1), log, guard, stages,
+        ) as Dispatcher
+    }
+
     class FakePause(@Volatile var paused: Boolean = false) : PauseSwitch {
         override fun isPaused(): Boolean = paused
     }
@@ -124,8 +148,13 @@ class DispatcherTest {
         limits: DispatchLimits = DispatchLimits(emptyMap()),
         tick: Duration = Duration.ofHours(1),
         guard: LaunchGuard = LaunchGuard.Open,
+        stages: Set<DispatchStage> = DispatchStage.entries.toSet(),
     ): Dispatcher =
-        Dispatcher(store, pool, launcher, pause, schedule, limits, clock, tick, log, launchGuard = guard).also { toClose.add(it) }
+        if (stages == DispatchStage.entries.toSet()) {
+            Dispatcher(store, pool, launcher, pause, schedule, limits, clock, tick, log, launchGuard = guard)
+        } else {
+            DispatcherFixtures.dispatcherFor(stages, store, pool, launcher, pause, schedule, clock, log, guard)
+        }.also { toClose.add(it) }
 
     private fun budget(limits: CostLimits): CostBudget = CostBudget(store, recorder, limits, clock, ZoneOffset.UTC, log)
 
@@ -429,6 +458,39 @@ class DispatcherTest {
 
         assertThat(started).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "a"))
         assertThat(store.eventsAfter(0).map { it.event.type.name }).doesNotContain("CARD_BLOCKED")
+    }
+
+    @Test
+    fun `AC-6 refine starts no run without a free slot, for a blocked card or for a card in Spec Review`() {
+        val refine = setOf(DispatchStage.REFINE)
+        card("held", Column.READY_FOR_REFINEMENT)
+        card("waiting", Column.READY_FOR_REFINEMENT)
+        val full = pool(capacity = 1)
+        probe.alive.add(77)
+        full.tryStart("other", 77, DispatcherFixtures.start)
+        assertThat(dispatcher(full, stages = refine).runCycle()).isEmpty()
+
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("5"), perDayUsd = null))
+        val block = Event(EventId("block-held"), clock.instant(), Actor.Factory("cost"), EventType.CARD_BLOCKED, mapOf("reason" to "card_cost_limit"))
+        recorder.record("held", Card.create("Card held", Column.READY_FOR_REFINEMENT), block)
+        assertThat(budget.isBlocked("held")).isTrue()
+        card("review", Column.SPEC_REVIEW)
+        val started = dispatcher(pool(), guard = budget, stages = refine).runCycle()
+
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.REFINE, "waiting"))
+        assertThat(launcher.attempts).doesNotContain("held", "review")
+    }
+
+    @Test
+    fun `AC-6 stages outside the configured set are ignored`() {
+        card("r", Column.READY_FOR_REFINEMENT)
+        card("d", Column.READY_FOR_DEV)
+        card("v", Column.VALIDATION)
+
+        val started = dispatcher(pool(), stages = setOf(DispatchStage.REFINE)).runCycle()
+
+        assertThat(started).containsExactly(DispatchedRun(DispatchStage.REFINE, "r"))
+        assertThat(launcher.launched).containsExactly(DispatchStage.REFINE to "r")
     }
 
     @Test
