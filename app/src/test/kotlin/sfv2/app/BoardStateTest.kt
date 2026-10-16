@@ -4,6 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import sfv2.core.Column
 import sfv2.core.EventType
+import sfv2.core.OWNER_WAIT_COLUMNS
 
 /**
  * Shape the implementation must follow (pure, in `BoardState.kt` and `BoardSource.kt`):
@@ -122,6 +123,18 @@ class BoardStateTest {
         assertThat(OWNER_DECISION_COLUMNS).containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
         assertThat(Column.entries.filter { isWaitingForOwner(it) })
             .containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
+    }
+
+    @Test
+    fun `AC-3 the board owner decision columns are the core owner wait set`() {
+        assertThat(OWNER_DECISION_COLUMNS).isEqualTo(OWNER_WAIT_COLUMNS)
+    }
+
+    @Test
+    fun `AC-3 isWaitingForOwner is true for exactly the core owner wait columns`() {
+        assertThat(OWNER_WAIT_COLUMNS).isNotEmpty()
+        assertThat(Column.entries.filter { isWaitingForOwner(it) })
+            .containsExactlyInAnyOrderElementsOf(OWNER_WAIT_COLUMNS)
     }
 
     @Test
