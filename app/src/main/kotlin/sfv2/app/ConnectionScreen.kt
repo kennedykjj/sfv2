@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /** Tokens of DESIGN.md (Charcoal) used by this screen. */
-private object Tokens {
+internal object Tokens {
     val ground = Color(0xFF0A0A0A)
     val panel = Color(0xFF14171B)
     val edge = Color(0xFF2A2F39)
@@ -37,6 +37,8 @@ private object Tokens {
     val muted = Color(0xFFA3ABB6)
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
+    val faint = Color(0xFF8F98A3)
+    val sand = Color(0xFFC7B9A6)
 }
 
 /** Every user-facing string of the shell, in one place for the future i18n. */
@@ -45,6 +47,14 @@ internal object Texts {
     const val CONNECTING = "Conectando ao daemon…"
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
+    const val BOARD = "Esteira"
+    const val WAITS_FOR_YOU = "Aguarda você"
+    const val EMPTY_COLUMN = "Vazia"
+    const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
+    const val LOADING_BOARD = "Carregando a esteira…"
+    const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun cardCount(count: Int): String = if (count == 1) "1 card" else "$count cards"
 
     /** What went wrong and the next step; the command, when there is one, is shown apart in mono. */
     data class Explanation(val reason: String, val step: String, val command: String?)
