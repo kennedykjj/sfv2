@@ -1,6 +1,5 @@
 package sfv2.app
 
-import javax.imageio.ImageIO
 import org.freedesktop.dbus.DBusPath
 import org.freedesktop.dbus.Struct
 import org.freedesktop.dbus.Tuple
@@ -21,7 +20,6 @@ private const val ITEM_PATH = "/StatusNotifierItem"
 private const val MENU_PATH = "/Menu"
 private const val WATCHER_SERVICE = "org.kde.StatusNotifierWatcher"
 private const val WATCHER_PATH = "/StatusNotifierWatcher"
-private val ICON_SIZES = listOf(22, 24, 48)
 
 private const val MENU_ROOT = 0
 private const val MENU_OPEN = 1
@@ -154,8 +152,8 @@ class DbusTray(
 
     @Volatile private var activated: () -> Unit = {}
 
-    private val neutral = ICON_SIZES.map { pixmap("tray-neutral-$it.png") }
-    private val waitingIcons = ICON_SIZES.map { pixmap("tray-waiting-$it.png") }
+    private val neutral = TrayIcons.SIZES.map { TrayIcons.pixmap(it, waiting = false) }
+    private val waitingIcons = TrayIcons.SIZES.map { TrayIcons.pixmap(it, waiting = true) }
 
     private val item = object : StatusNotifierItem {
         override fun getCategory() = "ApplicationStatus"
@@ -272,21 +270,4 @@ class DbusTray(
             MENU_QUIT -> mapOf("label" to Variant(if (language == NoticeLanguage.PT_BR) "Sair" else "Quit"))
             else -> mapOf("children-display" to Variant("submenu"))
         }
-
-    private fun pixmap(resource: String): IconPixmap {
-        val stream = requireNotNull(DbusTray::class.java.getResourceAsStream("/$resource")) { "missing tray icon $resource" }
-        val image = stream.use { ImageIO.read(it) }
-        val bytes = ByteArray(image.width * image.height * 4)
-        var at = 0
-        for (y in 0 until image.height) {
-            for (x in 0 until image.width) {
-                val argb = image.getRGB(x, y)
-                bytes[at++] = (argb ushr 24).toByte()
-                bytes[at++] = (argb ushr 16).toByte()
-                bytes[at++] = (argb ushr 8).toByte()
-                bytes[at++] = argb.toByte()
-            }
-        }
-        return IconPixmap(image.width, image.height, bytes)
-    }
 }
