@@ -95,6 +95,9 @@ sealed interface Request {
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
+    /** Read-only: card, spec, events and runs of card [id]. */
+    data class CardDetail(val id: String) : Request
+
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
 
@@ -142,6 +145,7 @@ sealed interface Response {
 
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
+    data class CardDetailResult(val detail: JsonObject) : Response
     data class CardsResult(val cards: List<CardView>) : Response
     data class BoardImportResult(val cards: List<CardView>, val ignored: List<IgnoredRow>) : Response
     data class ReportResult(val csv: String) : Response
@@ -232,6 +236,10 @@ fun parseRequest(line: String): Request {
         "card.show" -> {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardShow(id)
+        }
+        "card.detail" -> {
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardDetail(id)
         }
         "report.csv" -> Request.ReportCsv
         "events.subscribe" -> parseSubscribe(obj)
@@ -338,7 +346,7 @@ private fun projectJson(project: Project): JsonObject = buildJsonObject {
     )
 }
 
-private fun actorText(actor: Actor): String = when (actor) {
+internal fun actorText(actor: Actor): String = when (actor) {
     Actor.Owner -> "owner"
     is Actor.Agent -> "agent:${actor.role}"
     is Actor.Adapter -> "adapter:${actor.provider}"
@@ -370,6 +378,10 @@ fun render(response: Response): String = when (response) {
     is Response.CardResult -> buildJsonObject {
         put("ok", true)
         put("result", cardJson(response.card))
+    }.toString()
+    is Response.CardDetailResult -> buildJsonObject {
+        put("ok", true)
+        put("detail", response.detail)
     }.toString()
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)

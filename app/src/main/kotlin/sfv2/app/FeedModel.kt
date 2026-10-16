@@ -37,8 +37,6 @@ interface FeedTransport {
     fun subscribe(after: Long?, listener: FeedListener): AutoCloseable
 }
 
-enum class CostStatus { KNOWN, PARTIAL, UNKNOWN, NONE }
-
 data class CardCost(val card: String, val costUsd: BigDecimal?, val status: CostStatus)
 
 data class CostLimitsInfo(val perCardUsd: BigDecimal?, val perDayUsd: BigDecimal?)
