@@ -41,7 +41,7 @@ class ClaudeRuntime(
                 .redirectErrorStream(true)
                 .redirectOutput(transcript.toFile())
                 .also {
-                    it.environment().keys.removeAll(PROVIDER_VARIABLES)
+                    it.environment().keys.removeAll(PROVIDER_VARIABLES - provider.inheritedVariables())
                     it.environment().putAll(providerEnvironment)
                 }
                 .start()
