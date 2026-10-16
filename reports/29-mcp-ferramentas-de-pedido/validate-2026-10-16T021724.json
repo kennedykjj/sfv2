@@ -1,0 +1,1 @@
+{"issue": 29, "slug": "mcp-ferramentas-de-pedido", "pipeline": "validate", "started_at": "2026-10-16T05:20:00Z", "finished_at": "2026-10-16T05:45:00Z", "outcome": "ok", "agents": [{"role": "cybersec", "tokens": 21490, "duration_s": 23}], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": ["green core sfv2.core.AgentRequestsTest"], "manual_edit": false}
