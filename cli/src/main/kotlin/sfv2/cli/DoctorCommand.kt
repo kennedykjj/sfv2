@@ -19,6 +19,7 @@ import java.nio.file.attribute.PosixFilePermission.OTHERS_READ
 import java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE
 import java.nio.file.attribute.PosixFilePermission.OWNER_READ
 import java.nio.file.attribute.PosixFilePermission.OWNER_WRITE
+import java.util.concurrent.TimeUnit
 
 private const val DAEMON_START_HINT = "inicie o daemon com `./gradlew :daemon:run`"
 private const val SERVICE_HINT = "instale o serviço com `service install` no daemon"
@@ -26,6 +27,9 @@ private const val APP_DIR_NAME = "sfv2"
 private const val DATABASE_FILE_NAME = "sfv2.db"
 private const val SERVICE_UNIT_NAME = "sfv2.service"
 private const val SERVICE_ENV_NAME = "service.env"
+private const val APPINDICATOR_PREFIX = "appindicatorsupport@"
+private const val DEFAULT_APPINDICATOR_UUID = "appindicatorsupport@rgcjonas.gmail.com"
+private const val PROCESS_TIMEOUT_SECONDS = 3L
 private val OWNER_ONLY_FILE = setOf(OWNER_READ, OWNER_WRITE)
 private val GROUP_OR_OTHERS = setOf(
     GROUP_READ, GROUP_WRITE, GROUP_EXECUTE,
@@ -47,6 +51,7 @@ class DoctorCommand(private val cli: CliEnvironment) : CliktCommand(name = "doct
     override fun run() {
         val checks = diagnose(cli.env)
         checks.forEach { cli.out(it.line()) }
+        appIndicatorWarning(cli.env, cli.runCommand)?.let { cli.out(it) }
         if (checks.any { !it.ok }) throw ProgramResult(EXIT_FAILURE)
     }
 }
@@ -156,6 +161,36 @@ private fun serviceEnvCheck(configDir: Path?): Check {
         Check("ambiente do serviço", ok = false, detail = "não foi possível ler o modo de $envFile: ${e.javaClass.simpleName}")
     }
 }
+
+/** Warns when GNOME would hide the tray: only on GNOME, only when `gnome-extensions` answers and the extension is off. */
+private fun appIndicatorWarning(env: Map<String, String>, runCommand: (List<String>) -> String?): String? {
+    if (!env["XDG_CURRENT_DESKTOP"].orEmpty().contains("GNOME")) return null
+    val enabled = runCommand(listOf("gnome-extensions", "list", "--enabled")) ?: return null
+    if (enabled.lines().any { it.trim().startsWith(APPINDICATOR_PREFIX) }) return null
+    val installed = runCommand(listOf("gnome-extensions", "list"))
+        ?.lines()?.map { it.trim() }?.firstOrNull { it.startsWith(APPINDICATOR_PREFIX) }
+    val uuid = installed ?: DEFAULT_APPINDICATOR_UUID
+    return "AVISO  A bandeja não vai aparecer: a extensão AppIndicator do GNOME está desligada. Ligue com: gnome-extensions enable $uuid"
+}
+
+/** Stdout of [command], or null when it does not exist, fails, or takes longer than a few seconds. */
+fun runProcess(command: List<String>): String? =
+    try {
+        val process = ProcessBuilder(command).redirectErrorStream(false).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        process.outputStream.close()
+        val output = StringBuilder()
+        val reader = Thread { output.append(process.inputStream.bufferedReader().readText()) }
+        reader.start()
+        if (!process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            null
+        } else {
+            reader.join(PROCESS_TIMEOUT_SECONDS * 1000)
+            if (process.exitValue() == 0) output.toString() else null
+        }
+    } catch (e: IOException) {
+        null
+    }
 
 /** Database directory, as the daemon resolves it: XDG_DATA_HOME, else HOME/.local/share, else the socket's directory. */
 private fun resolveDataDir(env: Map<String, String>, location: SocketLocation?): Path? {

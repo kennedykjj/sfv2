@@ -28,8 +28,9 @@ fun runCli(
     out: (String) -> Unit,
     err: (String) -> Unit,
     env: Map<String, String>,
+    runCommand: (List<String>) -> String? = ::runProcess,
 ): Int {
-    val cli = CliEnvironment(env, out, err)
+    val cli = CliEnvironment(env, out, err, runCommand)
     val command = Sfv2Command(version).withCardCommands(cli).withDoctorCommand(cli).withProjectCommands(cli)
     return try {
         command.parse(args)
