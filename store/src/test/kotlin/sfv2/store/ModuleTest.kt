@@ -55,8 +55,8 @@ class ModuleTest {
         Database.open(file).close()
 
         assertThat(Files.exists(file)).isTrue()
-        assertThat(Database.SCHEMA_VERSION).isEqualTo(6)
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(Database.SCHEMA_VERSION).isEqualTo(7)
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
         val tables = jdbc(file) { c ->
             c.createStatement().use { s ->
@@ -85,7 +85,7 @@ class ModuleTest {
         assertThat(scalar(file, "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)"))
             .isEqualTo(schemaBefore)
         assertThat(scalar(file, "SELECT note FROM probe")).isEqualTo("kept")
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
     }
 
@@ -330,7 +330,7 @@ class ModuleTest {
                 assertThat(db.queries.schemaQueries.selectSpec("c1").executeAsOne().hash).isEqualTo("abc123")
             }
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -351,7 +351,7 @@ class ModuleTest {
         val v1 = legacyDatabase("m1.db", 1, withSpec = false).also { Database.open(it).close() }
         val v2 = legacyDatabase("m2.db", 2, withSpec = true).also { Database.open(it).close() }
 
-        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("7")
         listOf(v1, v2).forEach { migrated ->
             listOf("card", "event", "spec").forEach { table ->
                 assertThat(columns(migrated, table)).isEqualTo(columns(fresh, table))
@@ -482,7 +482,7 @@ class ModuleTest {
             assertThat(store.card("c1")?.references).isEmpty()
             assertThat(store.events("c1")).containsExactlyElementsOf(legacyEvents)
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -523,7 +523,7 @@ class ModuleTest {
             store.assignProject("c1", "/repos/alpha")
             assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         val fresh = dir.resolve("fresh-v5.db").also { Database.open(it).close() }
         assertThat(columns(file, "card_project")).isEqualTo(columns(fresh, "card_project")).isNotEmpty()
     }
@@ -804,10 +804,61 @@ class ModuleTest {
             assertThat(store.lastSeq("c1", EventType.CARD_BLOCKED)).isEqualTo(seqsBefore.last())
         }
 
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("6")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).isEqualTo(seqsBefore)
         val fresh = dir.resolve("fresh-v6.db").also { Database.open(it).close() }
         assertThat(scalar(file, indexSql)).isEqualTo(scalar(fresh, indexSql)).contains("event_type_at", "event_card_type_actor")
+    }
+
+    @Test
+    fun `AC-4 version 6 database with cards and events gains the project table and keeps everything`() {
+        val file = dir.resolve("v6.db")
+        val card = Card.create("Write docs", Column.INBOX)
+        val first = anEvent("e1")
+        val second = anEvent("e2", EventType.CARD_MOVED, "2026-10-16T11:00:00Z")
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            store.recordChange("c1", card, first)
+            store.recordChange("c1", card, second)
+            store.assignProject("c1", "/repos/alpha")
+        }
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.execute("DROP TABLE IF EXISTS project")
+                s.execute("PRAGMA user_version = 6")
+            }
+        }
+        val seqsBefore = longs(file, "SELECT seq FROM event ORDER BY seq")
+
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            assertThat(store.card("c1")).isEqualTo(card)
+            assertThat(store.events("c1")).containsExactly(first, second)
+            assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
+
+            val paths = ProjectPathStore(db)
+            assertThat(paths.all()).isEmpty()
+            paths.add("/repos/alpha", Instant.parse("2026-10-16T12:00:00Z"))
+            assertThat(paths.all()).containsExactly("/repos/alpha")
+        }
+
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("7")
+        assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).isEqualTo(seqsBefore)
+    }
+
+    @Test
+    fun `AC-5 project paths persist across reopen once each and in registration order`() {
+        val file = dir.resolve("paths.db")
+        Database.open(file).use { db ->
+            val paths = ProjectPathStore(db)
+            paths.add("/repos/zeta", Instant.parse("2026-10-16T10:00:00Z"))
+            paths.add("/repos/alpha", Instant.parse("2026-10-16T10:01:00Z"))
+            paths.add("/repos/zeta", Instant.parse("2026-10-16T10:02:00Z"))
+        }
+
+        Database.open(file).use { db ->
+            assertThat(ProjectPathStore(db).all()).containsExactly("/repos/zeta", "/repos/alpha")
+        }
     }
 
     @Test
