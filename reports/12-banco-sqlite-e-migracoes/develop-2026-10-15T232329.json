@@ -1,0 +1,12 @@
+{
+  "issue": 12,
+  "slug": "banco-sqlite-e-migracoes",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "rounds": 0,
+  "failed_gates": ["scope store (libs.versions.toml fora da camada; separado em commit próprio)"],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": []
+}
