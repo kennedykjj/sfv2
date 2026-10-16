@@ -1,6 +1,8 @@
 package sfv2.daemon
 
+import java.io.File
 import java.io.IOException
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -14,28 +16,34 @@ interface ProjectConfigSource {
 class GitProjectConfigSource(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : ProjectConfigSource {
 
     override fun read(repo: Path): String? {
-        val process = try {
-            ProcessBuilder(
-                "git", "-C", repo.toString(), "-c", "core.fsmonitor=false", "show", "main:$CONFIG_PATH",
-            ).redirectErrorStream(false)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
-                .start()
-        } catch (e: IOException) {
-            throw InvalidProjectConfigException(CONFIG_FIELD, "cannot run git to read $CONFIG_FIELD")
-        }
+        // Output goes to a file so the wait below bounds the whole run: a pipe read would block until EOF.
+        val output = Files.createTempFile("sfv2-factory-yml", ".txt")
         try {
-            process.outputStream.close()
-            val bytes = process.inputStream.readNBytes(MAX_BYTES + 1)
-            if (bytes.size > MAX_BYTES) {
+            val process = try {
+                ProcessBuilder(
+                    "git", "-C", repo.toString(), "-c", "core.fsmonitor=false", "show", "main:$CONFIG_PATH",
+                ).redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+                    .redirectOutput(output.toFile())
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
+                    .start()
+            } catch (e: IOException) {
+                throw InvalidProjectConfigException(CONFIG_FIELD, "cannot run git to read $CONFIG_FIELD")
+            }
+            try {
+                if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                    throw InvalidProjectConfigException(CONFIG_FIELD, "reading $CONFIG_FIELD timed out")
+                }
+            } finally {
+                process.destroyForcibly()
+            }
+            if (process.exitValue() != 0) return null
+            if (Files.size(output) > MAX_BYTES) {
                 throw InvalidProjectConfigException(CONFIG_FIELD, "$CONFIG_FIELD exceeds the $MAX_BYTES byte limit")
             }
-            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-                throw InvalidProjectConfigException(CONFIG_FIELD, "reading $CONFIG_FIELD timed out")
-            }
-            return if (process.exitValue() == 0) bytes.toString(Charsets.UTF_8) else null
+            return Files.readAllBytes(output).toString(Charsets.UTF_8)
         } finally {
-            process.destroyForcibly()
+            Files.deleteIfExists(output)
         }
     }
 
