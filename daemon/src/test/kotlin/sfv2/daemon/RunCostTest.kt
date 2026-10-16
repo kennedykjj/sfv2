@@ -3,6 +3,7 @@ package sfv2.daemon
 import java.math.BigDecimal
 import java.nio.file.Files
 import java.nio.file.Path
+import java.sql.DriverManager
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -356,6 +357,48 @@ class RunCostTest {
         assertThat(budget.isBlocked("c1")).isTrue()
 
         move("c1", Actor.Owner, "owner-after")
+        assertThat(budget.isBlocked("c1")).isFalse()
+    }
+
+    @Test
+    fun `AC-4 the day limit counts only costs inside today in the budget zone, fractions and boundaries included`() {
+        costEvent("c1", "run-yesterday", "100", Instant.parse("2026-10-15T23:59:59.9Z"))
+        costEvent("c1", "run-start", "3.00", Instant.parse("2026-10-16T00:00:00Z"))
+        costEvent("c1", "run-frac", "2.50", Instant.parse("2026-10-16T11:59:59.5Z"))
+        costEvent("c1", "run-tomorrow", "100", Instant.parse("2026-10-17T00:00:00Z"))
+        costEvent("c1", "run-tomorrow-frac", "100", Instant.parse("2026-10-17T00:00:00.5Z"))
+
+        assertThat(budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("5.4"))).dayLimitReached()).isTrue()
+        assertThat(budget(CostLimits(perCardUsd = null, perDayUsd = BigDecimal("6"))).dayLimitReached()).isFalse()
+    }
+
+    @Test
+    fun `AC-4 the database the budget reads from carries the indexes behind the day and block queries`() {
+        val indexes = DriverManager.getConnection("jdbc:sqlite:${dir.resolve("cost.db")}").use { c ->
+            c.createStatement().use { s ->
+                s.executeQuery("SELECT name FROM sqlite_master WHERE type = 'index'").use { rs ->
+                    generateSequence { if (rs.next()) rs.getString(1) else null }.toList()
+                }
+            }
+        }
+
+        assertThat(indexes).contains("event_type_at", "event_card_type_actor")
+    }
+
+    @Test
+    fun `AC-4 a card blocked many times stays blocked until an owner move after the latest block`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        costEvent("c1", "run-1", "2.00")
+        budget.onRunFinished("c1")
+        move("c1", Actor.Owner, "owner-1")
+        assertThat(budget.isBlocked("c1")).isFalse()
+
+        costEvent("c1", "run-2", "2.00")
+        budget.onRunFinished("c1")
+        assertThat(budget.isBlocked("c1")).isTrue()
+        assertThat(budget.isBlocked("ghost")).isFalse()
+
+        move("c1", Actor.Owner, "owner-2")
         assertThat(budget.isBlocked("c1")).isFalse()
     }
 
