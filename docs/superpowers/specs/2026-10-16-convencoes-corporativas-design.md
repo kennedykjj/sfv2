@@ -12,12 +12,13 @@ _Product Owner_
 **Público:** o desenvolvedor dentro de uma empresa (Jira, convenções da empresa).
 
 **Critérios de aceitação**
-- AC-1: Dado um card importado de um ticket (ex.: PROJ-123) e `commit_format` com `{id}` no factory.yml, quando a fábrica commita, então a mensagem leva a chave do ticket (PROJ-123) no lugar indicado.
+- AC-1: Dado um card importado de um ticket (ex.: PROJ-123) e `commit_format` com `{ticket}` no factory.yml, quando a fábrica commita, então a mensagem leva a chave do ticket (PROJ-123) no lugar indicado.
 - AC-2: Dado `branch_format` no factory.yml, quando a fábrica cria a branch do card, então o nome segue o padrão (`{id}`, `{slug}`).
 - AC-3: Dado um template de PR no repositório (lido da `main`), quando a fábrica abre o PR, então o corpo segue as seções do template.
 - AC-4: Dado o idioma do projeto no factory.yml, quando a fábrica abre o PR, então título e corpo saem nesse idioma.
 - AC-5: Dado convenção ausente ou inválida no factory.yml, quando a fábrica commita, cria branch ou abre PR, então usa o padrão da fábrica e registra o motivo, sem travar o card.
-- AC-6: Dado um card sem ticket externo, quando a fábrica commita com `{id}` no formato, então usa o id do card, sem placeholder solto na mensagem.
+- AC-6: Dado um card sem ticket externo, quando a fábrica commita com `{ticket}` no formato, então usa o id do card, sem placeholder solto na mensagem; e `{id}` continua sendo o id do card em todos os formatos (nunca a chave do ticket).
+- AC-7: Dado uma chave de ticket com caractere fora de `[A-Za-z0-9_-]` ou com mais de 40 caracteres, quando entraria no commit, no título ou no corpo do PR, então a fábrica usa o id do card no lugar (a chave vem de fora e não pode injetar linha ou marcação na mensagem).
 
 **Fora de escopo:** criar ou editar convenções pela UI; validar convenções contra regras do servidor (hooks, branch protection); mudar commits/branches já criados; template de issue; atualizar o ticket no tracker.
 
@@ -31,7 +32,7 @@ _UX/UI Designer_ — n/a
 ## Architecture
 _Tech Lead_
 
-- **Contratos:** `Conventions` (core) ganha `prTemplate: String` (chave `conventions.pr_template`, padrão `.github/pull_request_template.md`) e `language: String` (chave `conventions.language`, padrão `en`; valores `en` e `pt-BR`). Valor inválido segue o `InvalidPolicyException` existente (o registro rejeita só o campo e usa o padrão da fábrica, registrando o campo). `{id}` no `commit_format` passa a significar a chave do ticket (`ExternalRef.externalId` da primeira referência do card) e, sem referência, o id do card; `branch_format` não muda (AC-2 já é atendido por `WorktreeManager.branchName`).
+- **Contratos:** `Conventions` (core) ganha `prTemplate: String` (chave `conventions.pr_template`, padrão `.github/pull_request_template.md`) e `language: String` (chave `conventions.language`, padrão `en`; valores `en` e `pt-BR`). Valor inválido segue o `InvalidPolicyException` existente (o registro rejeita só o campo e usa o padrão da fábrica, registrando o campo). o `commit_format` ganha o marcador `{ticket}` = chave do ticket (`ExternalRef.externalId` da primeira referência do card, só se casar `^[A-Za-z0-9_-]{1,40}$`) e, sem referência ou com chave inválida, o id do card; `{id}` mantém o significado de hoje (id do card), porque o `branch_format` e o `CardRebuild.idFromBranch` dependem dele e um formato de commit com `{id}` já existente mudaria de sentido em silêncio; `branch_format` não muda (AC-2 já é atendido por `WorktreeManager.branchName`).
 - **Novo `ConventionText` (daemon):** funções puras `commitSubject(format, type, scope, subject, ticketOrCardId)`, `pullRequestTitle(...)` (usa o `commit_format` com `type=feat`) e `pullRequestBody(template, language, ticket)` (template da `main` verbatim com a linha `Ticket: <chave>` rotulada no idioma; sem template, corpo mínimo no idioma). Sem placeholder solto na saída.
 - **Camadas e arquivos:** `core` — `core/src/main/kotlin/sfv2/core/ProjectPolicies.kt`; `daemon` — `daemon/src/main/kotlin/sfv2/daemon/ConventionText.kt` (novo), `ValidatePipeline.kt` (monta título e corpo do PR no `deliver`, lendo o template via `ProjectFileSource`), `McpServerFactory.kt` e `Protocol.kt` (expõem `ticket`, `prTemplate` e `language` às skills para o agente commitar com a chave). `ProjectRegistry.POLICY_KEYS` já aceita `conventions`.
 - **Migração:** nenhuma (config opcional; os padrões preservam o comportamento atual).
@@ -47,6 +48,7 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidatePipelineTest.kt` |
 | AC-5 | core | `core/src/test/kotlin/sfv2/core/ProjectPoliciesTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ConventionTextTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ConventionTextTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
