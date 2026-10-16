@@ -1,0 +1,19 @@
+{
+  "issue": 11,
+  "slug": "referencia-externa-e-spec",
+  "pipeline": "develop",
+  "outcome": "done",
+  "weight": "light",
+  "head": "575b898af389e3ebb5f7c95368171427dcb6c450",
+  "base": "fd7ebe6a283102eb5d4ce45456ff60bf24893dce",
+  "plan": "918b74edf2f00714e0e0292204041da9fc98d653",
+  "qa": "9dc670aaaece495275dc20cdfd5834ce21946daa",
+  "agents": [
+    {"name": "sf:qa-engineer", "calls": 2, "tokens": 45082}
+  ],
+  "rounds": {"qa_sent_back": 1, "implementation": 0},
+  "amendments": [],
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": []
+}
