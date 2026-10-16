@@ -22,12 +22,17 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
                 // The version is read before any write PRAGMA: WAL changes the file header.
                 val found = driver.readInt("PRAGMA user_version")
                 if (found > SCHEMA_VERSION) throw DatabaseSchemaTooNewException(found, SCHEMA_VERSION, path)
-                if (found == 0) {
-                    Sfv2Database.Schema.create(driver)
-                    driver.execute(null, "PRAGMA user_version = $SCHEMA_VERSION", 0)
-                } else if (found < SCHEMA_VERSION) {
-                    Sfv2Database.Schema.migrate(driver, found.toLong(), SCHEMA_VERSION.toLong())
-                    driver.execute(null, "PRAGMA user_version = $SCHEMA_VERSION", 0)
+                if (found < SCHEMA_VERSION) {
+                    // DDL and user_version are transactional in SQLite: all or nothing.
+                    // An exception inside transaction {} rolls everything back.
+                    Sfv2Database(driver).transaction {
+                        if (found == 0) {
+                            Sfv2Database.Schema.create(driver)
+                        } else {
+                            Sfv2Database.Schema.migrate(driver, found.toLong(), SCHEMA_VERSION.toLong())
+                        }
+                        driver.execute(null, "PRAGMA user_version = $SCHEMA_VERSION", 0)
+                    }
                 }
                 driver.readInt("PRAGMA journal_mode=WAL")
             } catch (e: Throwable) {
