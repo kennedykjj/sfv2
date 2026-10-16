@@ -12,6 +12,8 @@ data class SessionRequest(
     val worktree: Path,
     val model: String,
     val mcpConfig: Path,
+    /** The only instruction of the session: the stage skill plus the card and role it runs for. */
+    val prompt: String,
 )
 
 sealed interface SessionResult {

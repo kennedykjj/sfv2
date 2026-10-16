@@ -2,8 +2,11 @@ package sfv2.app
 
 import java.io.IOException
 import java.math.BigDecimal
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import sfv2.core.Column
 
 /**
  * Shape the implementation must follow (deterministic: no sockets, no sleeps, no clock):
@@ -49,7 +52,8 @@ class CardDetailModelTest {
         total: String = """{"status":"KNOWN","cost_usd":"0"}""",
         spec: String = """{"status":"valid","text":"Do the thing"}""",
         truncated: Boolean = false,
-    ) = """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"CODING"},"spec":$spec,""" +
+        column: String = "CODING",
+    ) = """{"ok":true,"detail":{"card":{"id":"c1","title":"Detail card","column":"$column"},"spec":$spec,""" +
         """"events":[${events.joinToString(",")}],"truncated":$truncated,"runs":[${runs.joinToString(",")}],"total":$total}}"""
 
     @Test
@@ -159,4 +163,66 @@ class CardDetailModelTest {
         assertThat(formatCost(allUnknown.costUsd)).isEqualTo("US$ ?")
         assertThat(formatCost(BigDecimal("1.356"))).isEqualTo("US$ 1,36 est.")
     }
+
+    @Test
+    fun `AC-6 once the approval event reaches the view the new column shows, the actions go away and the timeline has the owner approval`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val commands = FakeOwnerCommands()
+            val controller = SpecReviewController(commands, Dispatchers.Unconfined)
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            controller.approve("c1")
+
+            // Accepted, but the daemon event has not arrived: the column is still the one the daemon last reported.
+            assertThat(commands.calls).containsExactly(SentMove("c1", Column.SPEC_REVIEW, Column.READY_FOR_DEV, null))
+            assertThat(controller.state.value.sent).isTrue()
+            assertThat(loaded(model).column).isEqualTo("SPEC_REVIEW")
+            assertThat(specReviewActionsVisible(model.state.value)).isTrue()
+
+            val approval = event(1, "owner", "OWNER_APPROVED", """{"from":"SPEC_REVIEW","to":"READY_FOR_DEV"}""")
+            source.reply = { reply(events = listOf(created, approval), column = "READY_FOR_DEV") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_DEV")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.type).isEqualTo("OWNER_APPROVED")
+            assertThat(signed.actor).isEqualTo("owner")
+        }
+
+    @Test
+    fun `AC-6 a change request event sends the card back to refinement, hides the actions and shows the signed request with its note`() =
+        runBlocking {
+            val created = event(0, "owner", "CARD_CREATED")
+            val source = FakeSource { reply(events = listOf(created), column = "SPEC_REVIEW") }
+            val model = CardDetailModel("c1", source)
+            model.refresh()
+            val controller = SpecReviewController(FakeOwnerCommands(), Dispatchers.Unconfined)
+
+            controller.requestChange("c1", "cover offline")
+            assertThat(controller.state.value.sent).isTrue()
+
+            val change = event(
+                1,
+                "owner",
+                "OWNER_CHANGE_REQUESTED",
+                """{"from":"SPEC_REVIEW","to":"READY_FOR_REFINEMENT","note":"cover offline"}""",
+            )
+            source.reply = { reply(events = listOf(created, change), column = "READY_FOR_REFINEMENT") }
+            model.onCardEvent("c1")
+            controller.onDetail(loaded(model))
+
+            assertThat(loaded(model).column).isEqualTo("READY_FOR_REFINEMENT")
+            assertThat(specReviewActionsVisible(model.state.value)).isFalse()
+            assertThat(controller.state.value.sent).isFalse()
+            val signed = loaded(model).events.last()
+            assertThat(signed.actor).isEqualTo("owner")
+            assertThat(signed.payload["note"]).isEqualTo("cover offline")
+        }
 }

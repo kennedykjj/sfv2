@@ -58,4 +58,28 @@ class SystemWorktreeGitTest {
         assertThrows<WorktreeException> { git.removeWorktree(repo, dir) }
         assertThat(Files.exists(dir.resolve("work.txt"))).isTrue()
     }
+
+    @Test
+    fun `commitAll commits what a session left in the worktree and does nothing when the tree is clean`() {
+        val dir = tmp.resolve("wt").resolve("c1")
+        git.addWorktree(repo, dir, "feat/c1-x")
+        Files.writeString(dir.resolve("work.txt"), "written by the agent")
+        val commit = SystemWorktreeCommit()
+
+        val first = commit.commitAll(dir, "test(daemon): acceptance tests")
+        val second = commit.commitAll(dir, "feat(daemon): nothing new")
+
+        assertThat(first).isTrue()
+        assertThat(second).isTrue()
+        assertThat(git.isDirty(dir)).isFalse()
+        assertThat(sh(dir, "log", "--format=%s", "main..HEAD").trim()).isEqualTo("test(daemon): acceptance tests")
+    }
+
+    @Test
+    fun `commitAll reports a failure when the directory is not a repository`() {
+        val plain = Files.createDirectory(tmp.resolve("plain"))
+        Files.writeString(plain.resolve("a.txt"), "a")
+
+        assertThat(SystemWorktreeCommit().commitAll(plain, "x")).isFalse()
+    }
 }

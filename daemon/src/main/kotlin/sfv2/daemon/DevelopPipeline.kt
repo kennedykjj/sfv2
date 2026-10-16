@@ -266,6 +266,10 @@ class RealDevelopGates(
 
 /** One pass of the develop stage: QA writes red tests, engineers implement per layer, gates move the card. */
 @Suppress("LongParameterList")
+private const val MAX_FEEDBACK_GATES = 3
+private const val MAX_FEEDBACK_CHARS = 1500
+private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
+
 class DevelopPipeline(
     private val project: Project,
     private val store: CardEventStore,
@@ -283,6 +287,7 @@ class DevelopPipeline(
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
     private val milestones: ExternalMilestones? = null,
+    private val commit: WorktreeCommit = WorktreeCommit.None,
 ) {
     init {
         require(maxRounds > 0) { "maxRounds must be positive, got $maxRounds" }
@@ -303,8 +308,11 @@ class DevelopPipeline(
         }
         val worktree = worktrees.ensure(project, cardId, card.title)
         var failed: List<GateResult> = emptyList()
+        var redPassed = false
         for (round in 1..maxRounds) {
-            failed = playRound(cardId, worktree.path)
+            val outcome = playRound(cardId, worktree.path, redPassed, failed)
+            redPassed = outcome.redPassed
+            failed = outcome.failed
             log.log("develop_round", mapOf("card" to cardId, "round" to round.toString(), "failed" to failed.size.toString()))
             if (failed.isEmpty()) {
                 move(cardId, Column.VALIDATION)
@@ -314,22 +322,53 @@ class DevelopPipeline(
         block(cardId, failed)
     }
 
-    /** Failed gates of one round; empty when every gate is green. */
-    private fun playRound(cardId: String, worktree: Path): List<GateResult> {
+    /** Where a round ended: whether the tests were proven red, and the gates that failed (empty when all are green). */
+    private data class Round(val redPassed: Boolean, val failed: List<GateResult>)
+
+    /**
+     * One round. Once the QA tests were proven red they stay committed, so a later round only reruns the engineers:
+     * replaying the QA and the red gate over code that already implements the tests could never be red again.
+     * The agents of the next round get the output of the gates that failed in the previous one.
+     */
+    private fun playRound(cardId: String, worktree: Path, redPassed: Boolean, previous: List<GateResult>): Round {
         val model = modelStepUp.modelFor(cardId)
-        runSession(cardId, worktree, model)
-        val red = gates.red(cardId, worktree).filter { !it.passed }
-        if (red.isNotEmpty()) return red
+        val feedback = feedbackOf(previous)
+        if (!redPassed) {
+            runSession(cardId, worktree, model, QA_ROLE, feedback)
+            commitSession(cardId, worktree, "test", "tests")
+            val red = gates.red(cardId, worktree).filter { !it.passed }
+            if (red.isNotEmpty()) return Round(false, red)
+        }
         val layers = gates.layers(worktree)
-        layers.forEach { _ -> runSession(cardId, worktree, model) }
-        return layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
+        layers.forEach { layer ->
+            runSession(cardId, worktree, model, engineerRole(layer), feedback.takeIf { redPassed })
+            commitSession(cardId, worktree, "feat", layer.name)
+        }
+        return Round(true, layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed })
     }
 
-    private fun runSession(cardId: String, worktree: Path, model: String) {
+    private fun feedbackOf(failed: List<GateResult>): String? =
+        failed.take(MAX_FEEDBACK_GATES).joinToString("\n") { "${it.name}: ${it.reason.orEmpty().take(MAX_FEEDBACK_CHARS)}" }
+            .takeIf { it.isNotBlank() }
+
+    /** The agents have no shell: what a session wrote becomes a commit of the card's branch here. */
+    private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
+        val card = store.card(cardId) ?: return
+        val message = ConventionText.commitSubject(
+            project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
+        )
+        if (!commit.commitAll(worktree, message)) log.log("develop_commit_failed", mapOf("card" to cardId, "scope" to scope))
+    }
+
+    private fun engineerRole(layer: ProjectLayer): String =
+        "engenheiro da camada `${layer.name}` (caminho `${layer.path}`): implemente só dentro dela, até os testes de aceitação " +
+            "passarem, sem alterar os testes da QA"
+
+    private fun runSession(cardId: String, worktree: Path, model: String, role: String, feedback: String?) {
         val token = sessions.open(project.repo, "develop", cardId)
         val config = writeConfig(token)
         try {
-            val result = runtime.launch(SessionRequest("develop", worktree, model, config))
+            val result = runtime.launch(SessionRequest("develop", worktree, model, config, StagePrompt.of("develop", cardId, role, feedback)))
             recordCost(cardId, model, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }
