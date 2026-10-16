@@ -1,7 +1,12 @@
 package sfv2.daemon
 
 import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.ParameterizedType
+import java.lang.reflect.Type
+import java.lang.reflect.WildcardType
+import java.nio.file.Files
 import java.nio.file.Path
+import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -44,11 +49,16 @@ class ExternalMilestonesTest {
     private val logged = mutableListOf<Pair<String, Map<String, String>>>()
     private val imported = item("Title", "imported body")
     private val cardId = "card-1"
+    private lateinit var proof: OwnerProof
+    private lateinit var token: String
 
     private fun item(title: String, body: String): TrackerItem =
         TrackerItem.of("7", ExternalText(title), ExternalText(body), emptyList(), "https://github.com/acme/alpha/issues/7", TrackerItemState.OPEN)
 
     private fun policies(vararg keys: String): ProjectPolicies =
+        ProjectPolicies.from(mapOf("milestones" to keys.toList(), "signers" to mapOf("milestone" to "policy")))
+
+    private fun ownerPolicies(vararg keys: String): ProjectPolicies =
         ProjectPolicies.from(mapOf("milestones" to keys.toList()))
 
     /** Looks production types up by name so a missing one fails an assertion, not the compilation. */
@@ -68,15 +78,120 @@ class ExternalMilestonesTest {
                 throw requireNotNull(e.cause)
             }
         }
+
+        /** Sends a socket line through the same parser the daemon uses. */
+        fun send(line: String): Response {
+            val method = instance.javaClass.methods.single { it.name == "handle" && it.parameterCount == 1 }
+            return try {
+                method.invoke(instance, parseRequest(line)) as Response
+            } catch (e: InvocationTargetException) {
+                throw requireNotNull(e.cause)
+            }
+        }
     }
 
     private fun milestones(policies: ProjectPolicies, with: Tracker = tracker): Subject {
         val type = production("sfv2.daemon.ExternalMilestones")
-        val constructor = type.constructors.single { it.parameterCount == 6 }
-        val trackerOf: (Any?) -> Tracker = { with }
-        val policiesOf: (Any?) -> ProjectPolicies = { policies }
-        val instance = constructor.newInstance(store, recorder, trackerOf, policiesOf, clock, DaemonLog { event, fields -> synchronized(logged) { logged.add(event to fields) } })
-        return Subject(instance, production("sfv2.core.Milestone"))
+        val constructor = type.constructors.filter { !it.isSynthetic }.maxBy { it.parameterCount }
+        val project = Project("alpha", dir.toString(), listOf(ProjectLayer("daemon", "daemon/")), policies)
+        val log = DaemonLog { event, fields -> synchronized(logged) { logged.add(event to fields) } }
+        val args = constructor.parameterTypes.indices.map { index ->
+            when (val parameter = constructor.parameterTypes[index]) {
+                CardEventStore::class.java -> store
+                EventRecorder::class.java -> recorder
+                Clock::class.java -> clock
+                DaemonLog::class.java -> log
+                OwnerProof::class.java -> proof
+                ProjectRegistry::class.java -> ProjectRegistry(object : ProjectConfigSource {
+                    override fun read(repo: Path): String? = null
+                })
+                Function2::class.java -> { _: Any?, pr: Any? -> prLink(pr as String) }
+                Function1::class.java -> {
+                    val result = rawOf((constructor.genericParameterTypes[index] as ParameterizedType).actualTypeArguments[1])
+                    val value: Any = when (result) {
+                        Tracker::class.java -> with
+                        ProjectPolicies::class.java -> policies
+                        Project::class.java -> project
+                        else -> error("unexpected lookup returning $result")
+                    }
+                    val lookup: (Any?) -> Any = { value }
+                    lookup
+                }
+                else -> error("unexpected constructor parameter $parameter")
+            }
+        }
+        return Subject(constructor.newInstance(*args.toTypedArray()), production("sfv2.core.Milestone"))
+    }
+
+    private fun rawOf(type: Type): Class<*> = when (type) {
+        is Class<*> -> type
+        is WildcardType -> rawOf(type.upperBounds[0])
+        is ParameterizedType -> rawOf(type.rawType)
+        else -> error("unexpected type $type")
+    }
+
+    /** The forge link the milestones are given for a PR number; null stands for a project without a GitHub origin. */
+    private var prLink: (String) -> String? = { pr -> "https://github.com/acme/alpha/pull/$pr" }
+
+    @Test
+    fun `AC-2 of #197 a Jira card gets its milestones through the project tracker with the forge link and the jira actor`() {
+        val jira = ProjectPolicies.from(
+            mapOf(
+                "milestones" to listOf("started", "pr_opened"),
+                "tracker" to "jira",
+                "jira_site" to "acme.atlassian.net",
+                "jira_project" to "PROJ",
+                "signers" to mapOf("milestone" to "policy"),
+            ),
+        )
+        val source = TrackerItem.of("PROJ-1", ExternalText("Jira title"), ExternalText("body"), emptyList(), "https://acme.atlassian.net/browse/PROJ-1", TrackerItemState.OPEN)
+        tracker.seed(source)
+        val ref = ExternalRef("jira", "PROJ-1", source.url, clock.instant(), TextHash(source.textHash))
+        val jiraCard = "card-jira"
+        recorder.record(jiraCard, Card.create("Title", Column.CODING).withReference(ref), Event(EventId("seed-jira"), clock.instant(), Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Title")))
+        val subject = milestones(jira)
+        val written = { store.events(jiraCard).filter { it.type == EventType.MILESTONE_WRITTEN } }
+
+        subject.reached(jiraCard, "STARTED")
+        prLink = { null }
+        subject.reached(jiraCard, "PR_OPENED", "12")
+
+        assertThat(tracker.milestones["PROJ-1"]).containsExactly("started")
+        assertThat(written().map { it.payload["milestone"] }).containsExactly("started")
+        assertThat(written().single().actor).isEqualTo(Actor.Adapter("jira"))
+
+        prLink = { pr -> "https://github.com/acme/alpha/pull/$pr" }
+        tracker.seed(TrackerItem.of("PROJ-1", ExternalText("Changed"), ExternalText("changed"), emptyList(), source.url, TrackerItemState.OPEN))
+        subject.reached(jiraCard, "PR_OPENED", "12")
+
+        assertThat(tracker.milestones["PROJ-1"]).containsExactly("started", "https://github.com/acme/alpha/pull/12")
+        assertThat(store.events(jiraCard).single { it.type == EventType.EXTERNAL_TEXT_CHANGED }.actor).isEqualTo(Actor.Adapter("jira"))
+    }
+
+    private fun pending(subject: Subject): List<Map<String, String>> {
+        val response = subject.send("""{"cmd":"milestone.list"}""")
+        assertThat(response.javaClass.simpleName).isEqualTo("MilestonesResult")
+        val items = response.javaClass.methods.single { it.name == "getItems" }.invoke(response) as List<*>
+        return items.map { item ->
+            requireNotNull(item).let { i ->
+                listOf("card", "milestone", "text", "textHash").associateWith { name ->
+                    i.javaClass.methods.single { it.name == "get" + name.replaceFirstChar { c -> c.uppercase() } }.invoke(i) as String
+                }
+            }
+        }
+    }
+
+    private fun confirm(
+        subject: Subject,
+        hash: String,
+        proofText: String? = token,
+        actor: String = "owner",
+        milestone: String = "started",
+    ): Response {
+        val proofField = proofText?.let { ""","proof":"$it"""" } ?: ""
+        return subject.send(
+            """{"cmd":"milestone.confirm","actor":"$actor","id":"$cardId","milestone":"$milestone","textHash":"$hash"$proofField}""",
+        )
     }
 
     @BeforeEach
@@ -86,6 +201,8 @@ class ExternalMilestonesTest {
         stream = EventStream(store)
         recorder = EventRecorder(store, stream)
         tracker.seed(imported)
+        proof = OwnerProof.create(dir.resolve("run").resolve("owner.token"), SecureRandom())
+        token = Files.readString(dir.resolve("run").resolve("owner.token"))
         val ref = ExternalRef("github", "7", imported.url, clock.instant(), TextHash(imported.textHash))
         val seed = Event(EventId("seed"), clock.instant(), Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Title"))
         recorder.record(cardId, Card.create("Title", Column.CODING).withReference(ref), seed)
@@ -213,6 +330,124 @@ class ExternalMilestonesTest {
 
         assertThat(writes.get()).isEqualTo(1)
         assertThat(tracker.milestones["7"]).containsExactly("started")
+        assertThat(eventsOf("MILESTONE_WRITTEN")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-1 owner-signed milestone is held as pending once per milestone and nothing reaches the tracker`() {
+        val subject = milestones(ownerPolicies("started", "pr_opened"))
+
+        subject.reached(cardId, "STARTED")
+        subject.reached(cardId, "STARTED")
+
+        assertThat(tracker.milestones).isEmpty()
+        assertThat(tracker.calls["writeMilestone"]).isNull()
+        assertThat(eventsOf("MILESTONE_WRITTEN")).isEmpty()
+        val held = eventsOf("MILESTONE_PENDING").single()
+        assertThat(held.payload["milestone"]).isEqualTo("started")
+        assertThat(held.payload["externalId"]).isEqualTo("7")
+        assertThat(held.payload["textHash"]).isNotBlank()
+
+        subject.reached(cardId, "PR_OPENED", "12")
+
+        assertThat(eventsOf("MILESTONE_PENDING").map { it.payload["milestone"] }).containsExactly("started", "pr_opened")
+    }
+
+    @Test
+    fun `AC-2 owner-signed setting declared as policy writes at once without a pending`() {
+        milestones(policies("started")).reached(cardId, "STARTED")
+
+        assertThat(tracker.milestones["7"]).containsExactly("started")
+        assertThat(eventsOf("MILESTONE_WRITTEN")).hasSize(1)
+        assertThat(eventsOf("MILESTONE_PENDING")).isEmpty()
+    }
+
+    @Test
+    fun `AC-3 owner-signed pending milestones are listed with card, milestone and text`() {
+        val subject = milestones(ownerPolicies("started", "pr_opened"))
+        subject.reached(cardId, "STARTED")
+        subject.reached(cardId, "PR_OPENED", "12")
+
+        val items = pending(subject)
+
+        assertThat(items.map { it["card"] }).containsOnly(cardId)
+        assertThat(items.associate { it["milestone"] to it["text"] })
+            .containsEntry("started", "started")
+            .containsEntry("pr_opened", "https://github.com/acme/alpha/pull/12")
+        assertThat(items.map { it["textHash"] }).allSatisfy { assertThat(it).isNotBlank() }
+    }
+
+    @Test
+    fun `AC-4 owner-signed confirmation is recorded for the owner with the text hash and only then written`() {
+        val subject = milestones(ownerPolicies("started"))
+        subject.reached(cardId, "STARTED")
+        val hash = pending(subject).single().getValue("textHash")
+
+        val response = confirm(subject, hash)
+
+        assertThat(response).isNotInstanceOf(Response.Error::class.java)
+        assertThat(tracker.milestones["7"]).containsExactly("started")
+        val confirmed = eventsOf("MILESTONE_CONFIRMED").single()
+        assertThat(confirmed.actor).isEqualTo(Actor.Owner)
+        assertThat(confirmed.payload["milestone"]).isEqualTo("started")
+        assertThat(confirmed.payload["textHash"]).isEqualTo(hash)
+        val order = store.events(cardId).map { it.type.name }.filter { it.startsWith("MILESTONE_") }
+        assertThat(order).containsExactly("MILESTONE_PENDING", "MILESTONE_CONFIRMED", "MILESTONE_WRITTEN")
+        assertThat(pending(subject)).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 owner-signed confirmation with missing or wrong proof, wrong actor or wrong hash is refused`() {
+        val subject = milestones(ownerPolicies("started"))
+        subject.reached(cardId, "STARTED")
+        val hash = pending(subject).single().getValue("textHash")
+
+        val refused = listOf(
+            confirm(subject, hash, proofText = null),
+            confirm(subject, hash, proofText = "wrong"),
+            confirm(subject, hash, actor = "factory:deliver"),
+            confirm(subject, "0".repeat(64)),
+        )
+
+        assertThat(refused).allSatisfy { assertThat(it).isInstanceOf(Response.Error::class.java) }
+        assertThat(eventsOf("MILESTONE_CONFIRMED")).isEmpty()
+        assertThat(eventsOf("MILESTONE_WRITTEN")).isEmpty()
+        assertThat(tracker.milestones).isEmpty()
+        assertThat(tracker.calls["writeMilestone"]).isNull()
+    }
+
+    @Test
+    fun `AC-6 owner-signed milestone already written is not written again by a second confirmation`() {
+        val subject = milestones(ownerPolicies("started"))
+        subject.reached(cardId, "STARTED")
+        val hash = pending(subject).single().getValue("textHash")
+        confirm(subject, hash)
+
+        confirm(subject, hash)
+
+        assertThat(tracker.milestones["7"]).containsExactly("started")
+        assertThat(eventsOf("MILESTONE_CONFIRMED")).hasSize(1)
+        assertThat(eventsOf("MILESTONE_WRITTEN")).hasSize(1)
+    }
+
+    @Test
+    fun `AC-7 owner-signed confirmed milestone whose write failed is retried without a second confirmation`() {
+        val subject = milestones(ownerPolicies("started"))
+        subject.reached(cardId, "STARTED")
+        val hash = pending(subject).single().getValue("textHash")
+        tracker.failNext("writeMilestone")
+
+        confirm(subject, hash)
+
+        assertThat(eventsOf("MILESTONE_CONFIRMED")).hasSize(1)
+        assertThat(eventsOf("MILESTONE_WRITTEN")).isEmpty()
+        assertThat(tracker.milestones).isEmpty()
+
+        val retry = confirm(subject, hash)
+
+        assertThat(retry).isNotInstanceOf(Response.Error::class.java)
+        assertThat(tracker.milestones["7"]).containsExactly("started")
+        assertThat(eventsOf("MILESTONE_CONFIRMED")).hasSize(1)
         assertThat(eventsOf("MILESTONE_WRITTEN")).hasSize(1)
     }
 

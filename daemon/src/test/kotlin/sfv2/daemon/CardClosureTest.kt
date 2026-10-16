@@ -6,6 +6,7 @@ import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.concurrent.TimeUnit
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -60,10 +61,26 @@ class CardClosureTest {
         return requireNotNull(found)
     }
 
+    /** The forge link the closure is given for a PR number; null stands for a project without a GitHub origin. */
+    private var prLink: (String) -> String? = { pr -> "https://github.com/acme/alpha/pull/$pr" }
+
     private fun closure(): (String) -> Response {
-        val constructor = production("sfv2.daemon.CardClosure").constructors.single { it.parameterCount == 7 }
-        val trackerArg: Any = if (Tracker::class.java.isAssignableFrom(constructor.parameterTypes[3])) tracker else { _: Project -> tracker }
-        val instance = constructor.newInstance(store, recorder, registry, trackerArg, proof, clock, DaemonLog { _, _ -> })
+        val constructor = production("sfv2.daemon.CardClosure").constructors.filter { !it.isSynthetic }.maxBy { it.parameterCount }
+        val args = constructor.parameterTypes.map { type ->
+            when (type) {
+                CardEventStore::class.java -> store
+                EventRecorder::class.java -> recorder
+                ProjectRegistry::class.java -> registry
+                OwnerProof::class.java -> proof
+                Clock::class.java -> clock
+                DaemonLog::class.java -> DaemonLog { _, _ -> }
+                Tracker::class.java -> tracker
+                Function1::class.java -> { _: Any? -> tracker }
+                Function2::class.java -> { _: Any?, pr: Any? -> prLink(pr as String) }
+                else -> error("unexpected constructor parameter $type")
+            }
+        }
+        val instance = constructor.newInstance(*args.toTypedArray())
         val handle = instance.javaClass.methods.single { it.name == "handle" }
         return { line -> handle.invoke(instance, parseRequest(line)) as Response }
     }
@@ -76,7 +93,8 @@ class CardClosureTest {
         recorder = EventRecorder(store, stream)
         registry = ProjectRegistry(object : ProjectConfigSource {
             override fun read(repo: Path): String =
-                "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n"
+                "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n" +
+                    if (repo.fileName.toString() == "jira") "tracker: jira\njira_site: acme.atlassian.net\njira_project: PROJ\n" else ""
         })
         val path = Files.createDirectories(dir.resolve("alpha"))
         Files.createDirectories(path.resolve(".git"))
@@ -264,6 +282,69 @@ class CardClosureTest {
         assertThat((refused as Response.Error).message).contains("no_pr_recorded")
         assertThat(confirm(none, "x")).isInstanceOf(Response.Error::class.java)
         nothingWritten(none)
+    }
+
+    private fun seedJira(): String {
+        val repo = registry.register(Files.createDirectories(dir.resolve("jira")).also { Files.createDirectories(it.resolve(".git")) }).repo
+        val url = "https://acme.atlassian.net/browse/PROJ-1"
+        val id = "card-${sequence++}"
+        val card = Card.create("Local title", Column.DONE).withReference(ExternalRef("jira", "PROJ-1", url, clock.instant(), TextHash("h")))
+        record(id, card, EventType.CARD_CREATED, mapOf("title" to "Local title"), Actor.Owner)
+        store.assignProject(id, repo)
+        record(id, card, EventType.PR_MERGED, mapOf("pr" to "42", "merge_commit" to "abc1234", "head" to "h1"))
+        record(id, card, EventType.CARD_MOVED, mapOf("from" to "STAGED", "to" to "DONE"))
+        return id
+    }
+
+    @Test
+    fun `AC-3 of #197 a Jira card takes the PR link from the forge and closes the ticket with it`() {
+        fake.seed(item("PROJ-1"))
+        val id = seedJira()
+
+        val response = draft(id)
+
+        assertThat(prop(response, "prLink")).isEqualTo("https://github.com/acme/alpha/pull/42")
+        assertThat(prop(response, "summary")).contains(id).contains("abc1234")
+        assertThat(confirm(id, prop(response, "draftHash"))).isNotInstanceOf(Response.Error::class.java)
+        assertThat(typesOf(id)).containsExactly("CLOSURE_CONFIRMED", "CLOSURE_WRITTEN")
+        assertThat(fake.closures.getValue("PROJ-1")).contains("https://github.com/acme/alpha/pull/42").doesNotContain("browse")
+    }
+
+    @Test
+    fun `AC-3 of #197 a card whose project has no PR link is refused naming the card and writes nothing`() {
+        fake.seed(item("PROJ-1"))
+        fake.seed(item("7"))
+        val ids = listOf(seedJira(), seed())
+        prLink = { null }
+
+        ids.forEach { id ->
+            val refused = draft(id)
+
+            assertThat(refused).describedAs("draft of $id").isInstanceOf(Response.Error::class.java)
+            assertThat((refused as Response.Error).message).contains(id)
+            assertThat(confirm(id, "x")).isInstanceOf(Response.Error::class.java)
+            nothingWritten(id)
+        }
+    }
+
+    @Test
+    fun `AC-3 of #197 the PR link is built from the origin slug and is null without a GitHub origin`() {
+        val withOrigin = registry.register(Files.createDirectories(dir.resolve("origin")).also { Files.createDirectories(it.resolve(".git")) })
+        val without = registry.register(Files.createDirectories(dir.resolve("plain")).also { Files.createDirectories(it.resolve(".git")) })
+        git(Path.of(withOrigin.repo), "init", "-q")
+        git(Path.of(withOrigin.repo), "remote", "add", "origin", "git@github.com:acme/alpha.git")
+        git(Path.of(without.repo), "init", "-q")
+        val method = production("sfv2.daemon.ProjectDelivery").methods.single { it.name == "pullRequestUrl" }
+        val delivery = production("sfv2.daemon.ProjectDelivery").getField("INSTANCE").get(null)
+
+        assertThat(method.invoke(delivery, withOrigin, "42")).isEqualTo("https://github.com/acme/alpha/pull/42")
+        assertThat(method.invoke(delivery, without, "42")).isNull()
+    }
+
+    private fun git(repo: Path, vararg args: String) {
+        val process = ProcessBuilder(listOf("git", "-C", repo.toString()) + args).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+        assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue()
+        assertThat(process.exitValue()).isZero()
     }
 
     @Test

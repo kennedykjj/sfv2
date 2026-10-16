@@ -114,7 +114,7 @@ class PhaseFourExitTest {
         assertThat(store.card(id)?.column).isEqualTo(Column.DONE)
         assertThat(tracker.calls).isEqualTo(afterImport)
 
-        val closure = CardClosure(store, recorder, registry, tracker, proof, clock, silent)
+        val closure = CardClosure(store, recorder, registry, tracker, { _, number -> "https://github.com/acme/alpha/pull/$number" }, proof, clock, silent)
         val draft = closure.handle(parseRequest("""{"cmd":"card.close.draft","id":"$id"}"""))
         assertThat(draft).isInstanceOf(Response.CloseDraftResult::class.java)
         assertThat(tracker.calls).isEqualTo(afterImport)

@@ -20,7 +20,17 @@ interface ProcessRunner {
         stdoutFile: Path,
         timeout: Duration,
         env: Map<String, String> = emptyMap(),
+        envMode: EnvMode = EnvMode.INHERIT,
     ): ProcessOutcome
+}
+
+/** What the child inherits from the parent environment. */
+enum class EnvMode {
+    /** The whole parent environment (default). */
+    INHERIT,
+
+    /** Only PATH, HOME, LANG, LC_* and ACLI_* variables; names that look like credentials are dropped. */
+    FILTERED,
 }
 
 sealed interface ProcessOutcome {
