@@ -1,0 +1,1 @@
+{"issue":101,"slug":"daemon-robustez-do-socket-follow-up-do-1","pipeline":"refine","started_at":"2026-10-15T22:30:00Z","finished_at":"2026-10-15T23:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15810,"duration_s":10}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
