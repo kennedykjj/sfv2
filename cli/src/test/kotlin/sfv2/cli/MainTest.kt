@@ -98,6 +98,37 @@ class MainTest {
     }
 
     @Test
+    fun `card import-board sends the tsv rows and prints created and ignored cards`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+        val tsv = runtimeDir.resolve("board.tsv")
+        Files.writeString(tsv, "12\tTechnical Refinement\textra\n\n13\tNowhere\n")
+        fakeDaemon {
+            listOf(
+                """{"ok":true,"result":[{"id":"c12","title":"Twelve","column":"REFINEMENT"}],"ignored":[{"id":"13","reason":"unknown_column"}]}""",
+            )
+        }
+
+        assertThat(run("card", "import-board", tsv.toString(), "--project", "p1")).isZero()
+
+        assertThat(out.toString().lines().filter { it.isNotBlank() })
+            .containsExactly("c12  REFINEMENT  Twelve", "ignorada: #13 (unknown_column)")
+        val request = requests.single()
+        assertThat(request).contains("\"card.import_board\"").contains("\"project\":\"p1\"")
+            .contains("""{"id":"12","column":"Technical Refinement"}""").contains("""{"id":"13","column":"Nowhere"}""")
+    }
+
+    @Test
+    fun `card import-board fails in portuguese when the file cannot be read`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "tok\n")
+
+        assertThat(run("card", "import-board", runtimeDir.resolve("missing.tsv").toString())).isEqualTo(1)
+
+        assertThat(err.toString()).contains("não foi possível ler o arquivo")
+    }
+
+    @Test
     fun `AC-1 card list prints one line per card`() {
         fakeDaemon {
             listOf(

@@ -42,8 +42,59 @@ class CardImport private constructor(
 
     /** Serialized so two imports cannot both create the card of the same issue. */
     @Synchronized
-    fun handle(request: Request): Response {
-        if (request !is Request.CardImport) return Response.Error("not an import command")
+    fun handle(request: Request): Response = when (request) {
+        is Request.CardImport -> handleImport(request)
+        is Request.CardImportBoard -> handleBoard(request)
+        else -> Response.Error("not an import command")
+    }
+
+    private fun handleBoard(request: Request.CardImportBoard): Response {
+        if (request.actor != Actor.Owner || !ownerProof.matches(request.proof)) {
+            log.log("card_command_refused", mapOf("cmd" to BOARD_CMD))
+            return Response.Error(OWNER_PROOF_ERROR)
+        }
+        val project = when (val chosen = chooseProject(request.project)) {
+            is Chosen.Found -> chosen.project
+            is Chosen.Failed -> return Response.Error(chosen.message)
+        }
+        val tracker = trackerOf(project)
+        val created = mutableListOf<CardView>()
+        val ignored = mutableListOf<IgnoredRow>()
+        for (row in request.rows) {
+            val target = V0_COLUMNS[row.column]
+            if (target == null) {
+                ignored.add(IgnoredRow(row.id, "unknown_column"))
+                continue
+            }
+            val item = try {
+                tracker.fetch(row.id)
+            } catch (e: TrackerException) {
+                log.log("card_import_failed", mapOf("cmd" to BOARD_CMD, "operation" to "fetch", "externalId" to row.id))
+                return Response.Error("fetch failed for issue ${row.id}")
+            }
+            if (item == null) {
+                ignored.add(IgnoredRow(row.id, "not_found"))
+                continue
+            }
+            if (existing(project, item.id) != null) continue
+            val extra = if (row.column in IN_FLIGHT_V0_COLUMNS) mapOf("v0_column" to row.column) else emptyMap()
+            created.add(create(item, project, target, "v0", extra))
+        }
+        val onBoard = request.rows.map { it.id }.toSet()
+        val open = try {
+            tracker.search("")
+        } catch (e: TrackerException) {
+            log.log("card_import_failed", mapOf("cmd" to BOARD_CMD, "operation" to "search"))
+            return Response.Error("search failed")
+        }
+        open
+            .filter { it.state == TrackerItemState.OPEN && it.id !in onBoard && existing(project, it.id) == null }
+            .forEach { created.add(create(it, project, Column.INBOX, "v0", emptyMap())) }
+        log.log("card_import_board", mapOf("cmd" to BOARD_CMD, "created" to created.size.toString(), "ignored" to ignored.size.toString()))
+        return Response.BoardImportResult(created, ignored)
+    }
+
+    private fun handleImport(request: Request.CardImport): Response {
         if (request.actor != Actor.Owner || !ownerProof.matches(request.proof)) {
             log.log("card_command_refused", mapOf("cmd" to CMD))
             return Response.Error(OWNER_PROOF_ERROR)
@@ -94,15 +145,21 @@ class CardImport private constructor(
                 stored.card.references.any { it.provider == PROVIDER && it.externalId == externalId }
         }
 
-    private fun create(item: TrackerItem, project: Project): CardView {
-        val card = Card.create(normalizeTitle(item.title.value, item.id), Column.INBOX).withReference(refOf(item))
+    private fun create(
+        item: TrackerItem,
+        project: Project,
+        column: Column = Column.INBOX,
+        origin: String = "imported",
+        extra: Map<String, String> = emptyMap(),
+    ): CardView {
+        val card = Card.create(normalizeTitle(item.title.value, item.id), column).withReference(refOf(item))
         val id = UUID.randomUUID().toString()
         val event = Event(
             id = EventId(UUID.randomUUID().toString()),
             at = clock.instant(),
             actor = Actor.Adapter(PROVIDER),
             type = EventType.CARD_CREATED,
-            payload = mapOf("title" to card.title, "origin" to "imported", "provider" to PROVIDER, "externalId" to item.id),
+            payload = mapOf("title" to card.title, "origin" to origin, "provider" to PROVIDER, "externalId" to item.id) + extra,
         )
         recorder.record(id, card, event)
         store.assignProject(id, project.repo)
@@ -159,7 +216,16 @@ class CardImport private constructor(
 
     companion object {
         private const val CMD = "card.import"
+        private const val BOARD_CMD = "card.import_board"
         private const val PROVIDER = "github"
+        private val IN_FLIGHT_V0_COLUMNS = setOf("Ready for Dev", "Coding", "Validation", "Staged", "Ready for Prod")
+        private val V0_COLUMNS: Map<String, Column> = mapOf(
+            "Inbox" to Column.INBOX,
+            "Ready for Refinement" to Column.READY_FOR_REFINEMENT,
+            "Technical Refinement" to Column.READY_FOR_REFINEMENT,
+            "Spec Review" to Column.SPEC_REVIEW,
+            "Done" to Column.DONE,
+        ) + IN_FLIGHT_V0_COLUMNS.associateWith { Column.SPEC_REVIEW }
         private const val MAX_TITLE = 200
         private const val OWNER_PROOF_ERROR = "owner proof missing or invalid"
         private val EDITABLE_TITLE_COLUMNS = setOf(
