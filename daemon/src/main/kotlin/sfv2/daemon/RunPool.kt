@@ -8,7 +8,6 @@ import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
-import sfv2.store.StoredEvent
 
 data class RunLock(val cardId: String, val pid: Long, val startedAt: Instant)
 
@@ -25,7 +24,7 @@ class RunPool(
     private val clock: Clock,
     private val probe: ProcessProbe,
     private val log: DaemonLog = StderrDaemonLog,
-    private val onEvent: (StoredEvent) -> Unit = {},
+    private val recorder: EventRecorder,
 ) {
     private val locks = linkedMapOf<String, RunLock>()
 
@@ -73,8 +72,7 @@ class RunPool(
             type = EventType.LOCK_RELEASED,
             payload = mapOf("reason" to "owner_dead", "pid" to lock.pid.toString()),
         )
-        val seq = store.recordChange(lock.cardId, card, event)
+        recorder.record(lock.cardId, card, event)
         log.log("lock_released", mapOf("card" to lock.cardId, "pid" to lock.pid.toString()))
-        onEvent(StoredEvent(seq, lock.cardId, event))
     }
 }
