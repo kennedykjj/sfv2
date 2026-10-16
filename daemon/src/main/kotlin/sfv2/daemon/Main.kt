@@ -1,8 +1,14 @@
 package sfv2.daemon
 
+import java.io.IOException
 import java.io.PrintStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Clock
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
+import sfv2.store.CardEventStore
+import sfv2.store.Database
 
 /** Outcome of starting the daemon; only [main] turns a failure into a process exit. */
 sealed interface DaemonLaunch {
@@ -12,7 +18,15 @@ sealed interface DaemonLaunch {
 
 /** Starts the daemon from [env]; failures are reported on [err] and returned, never thrown. */
 fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try {
-    DaemonLaunch.Started(SocketServer.start(resolveSocketPath(env)))
+    val socketPath = resolveSocketPath(env)
+    val database = openDatabase(resolveDatabasePath(env, socketPath))
+    try {
+        val commands = CardCommands(CardEventStore(database), Clock.systemUTC())
+        DaemonLaunch.Started(SocketServer.start(socketPath, commands = commands, onClose = { database.close() }))
+    } catch (e: Throwable) {
+        runCatching { database.close() }
+        throw e
+    }
 } catch (e: DaemonStartException) {
     err.println(e.message)
     DaemonLaunch.Failed(exitCode = 1)
@@ -20,6 +34,26 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
     err.println(e.message)
     DaemonLaunch.Failed(exitCode = 1)
 }
+
+private fun openDatabase(path: Path): Database = try {
+    Files.createDirectories(path.parent)
+    Database.open(path)
+} catch (e: IOException) {
+    throw DaemonStartException("cannot open database at $path: ${e.javaClass.simpleName}")
+}
+
+/**
+ * Database under XDG_DATA_HOME, else HOME/.local/share. Without either (no home to persist to)
+ * it falls back to the socket's runtime directory so the daemon never guesses a path outside [env].
+ */
+internal fun resolveDatabasePath(env: Map<String, String>, socketPath: Path): Path {
+    val dataHome = env["XDG_DATA_HOME"]?.takeIf { it.isNotBlank() }?.let { Path.of(it) }
+        ?: env["HOME"]?.takeIf { it.isNotBlank() }?.let { Path.of(it).resolve(".local/share") }
+        ?: return requireNotNull(socketPath.parent) { "socket path has no parent directory" }.resolve(DATABASE_FILE_NAME)
+    return dataHome.resolve("sfv2").resolve(DATABASE_FILE_NAME)
+}
+
+private const val DATABASE_FILE_NAME = "sfv2.db"
 
 fun main() {
     when (val launch = launchDaemon(System.getenv(), System.err)) {
