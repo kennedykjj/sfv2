@@ -716,7 +716,8 @@ class ProjectRegistryTest {
 
         assertThat(reply.isOk()).describedAs(reply.toString()).isTrue()
         val session = runtime.seen.single()
-        assertThat(session.worktree.toAbsolutePath()).startsWith(scratchRoot.toAbsolutePath())
+        // Raw comparison: the scratch directory is already removed, so it cannot be resolved to a real path.
+        assertThat(session.worktree.toAbsolutePath().normalize()).startsWithRaw(scratchRoot.toAbsolutePath().normalize())
         assertThat(session.worktree.toAbsolutePath().toString()).doesNotStartWith(repo.toAbsolutePath().toString())
         assertThat(session.hasMainTree).describedAs("main tree exported for context").isTrue()
         assertThat(session.role).isEqualTo("docs-draft")
@@ -751,9 +752,11 @@ class ProjectRegistryTest {
         val hung = FakeRuntime { request -> onlyProduct(request); SessionResult.Hung(Files.createTempFile(dir, "transcript", ".jsonl")) }
         val silent = FakeRuntime { request -> onlyProduct(request); exited(0) }
 
-        val byExit = docsService(repo, FakeDocs(), nonZero).ask(draftRequest()).draftsByDoc()
-        val byHang = docsService(repo, FakeDocs(), hung).ask(draftRequest()).draftsByDoc()
-        val byOmission = docsService(repo, FakeDocs(), silent).ask(draftRequest()).draftsByDoc()
+        // ARCHITECTURE.md exists on main, so only PRODUCT.md and DESIGN.md are asked for.
+        val architectureOnMain = mapOf("ARCHITECTURE.md" to "# Architecture of the project")
+        val byExit = docsService(repo, FakeDocs(architectureOnMain), nonZero).ask(draftRequest()).draftsByDoc()
+        val byHang = docsService(repo, FakeDocs(architectureOnMain), hung).ask(draftRequest()).draftsByDoc()
+        val byOmission = docsService(repo, FakeDocs(architectureOnMain), silent).ask(draftRequest()).draftsByDoc()
 
         listOf(byExit to "exit_code", byHang to "hung", byOmission to "not_written").forEach { (drafts, reason) ->
             assertThat(drafts.keys).describedAs(reason).containsExactlyInAnyOrder("PRODUCT.md", "DESIGN.md")
