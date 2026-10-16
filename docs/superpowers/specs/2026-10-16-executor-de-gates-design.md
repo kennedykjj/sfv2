@@ -13,6 +13,7 @@ _Product Owner_
 - **AC-1** — Given um gate executado pelo executor, when ele termina, then o resultado é registrado como evento com ator `factory:gate`, o veredito (pass ou fail) e a saída resumida.
 - **AC-2** — Given um gate que excede o tempo limite, when o limite estoura, then o veredito é fail com motivo `timeout`.
 - **AC-3** — Given um gate com saída longa, when ele termina, then a saída completa fica em arquivo do run, fora do banco, e o evento guarda só o resumo.
+- **AC-4** — Given um `GateSpec` com nome fora de `[a-z0-9][a-z0-9-]*` (por exemplo com `/`, `..` ou vazio), when o gate é executado, then o executor recusa com erro que nomeia o campo `name`, nenhum processo roda e nenhum arquivo é criado.
 **Out of scope:** Os gates em si (o conteúdo e as regras de cada script); decidir o que o veredito faz com o card.
 **Product fit:** Serve ao princípio "gates são scripts, não a palavra do agente" e a "toda ação é um evento com ator". Não contradiz o posicionamento nem o fora de escopo.
 **Touches UI:** no
@@ -45,9 +46,14 @@ _Tech Lead_
 | AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/GateExecutorTest.kt` |
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/GateExecutorTest.kt` |
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/GateExecutorTest.kt` |
+| AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/GateExecutorTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **`name` vira nome de arquivo** (`gate-<name>.log`) e vem da configuração do projeto: validar com `[a-z0-9][a-z0-9-]*` antes de qualquer IO (AC-4); `runDir` é resolvido e o arquivo de saída precisa ficar dentro dele.
+- **`command` vem do `factory.yml` do projeto registrado pelo dono:** executado sem shell, com `workingDir` dentro do worktree do card; o executor nunca interpola texto de issue, spec ou transcrição no comando.
+- **Saída do gate é dado não confiável:** o resumo vai para evento e stream como texto; nunca vira instrução para agente.
+- **Timeout mata a árvore de processos** (`destroyForcibly` nos descendentes) e a saída é lida só pelo fim do arquivo, com limite.
 
 ## Rollback
 n/a
