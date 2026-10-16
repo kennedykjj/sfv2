@@ -35,9 +35,10 @@ class ModelStepUp(private val ladder: List<String>, private val store: CardEvent
         }
     }
 
-    /** Stops the worker thread. Events not yet handled are dropped. */
+    /** Stops the worker thread and waits for it, so nothing touches the store after the caller closes it. Events not yet handled are dropped. */
     override fun close() {
         worker.interrupt()
+        worker.join(JOIN_MILLIS)
     }
 
     private fun run() {
@@ -73,6 +74,8 @@ class ModelStepUp(private val ladder: List<String>, private val store: CardEvent
     }
 
     companion object {
+        private const val JOIN_MILLIS = 2_000L
+
         /**
          * Closed set of gate failure reasons that step the model up; every other reason is not about model
          * capacity and keeps the model.
