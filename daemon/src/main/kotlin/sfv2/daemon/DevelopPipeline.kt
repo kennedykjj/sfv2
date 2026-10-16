@@ -353,6 +353,7 @@ class DevelopPipeline(
 
     /** The agents have no shell: what a session wrote becomes a commit of the card's branch here. */
     private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
+        if (type == "feat") RedStubFiles.removeEmptied(worktree)
         val card = store.card(cardId) ?: return
         val message = ConventionText.commitSubject(
             project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
@@ -362,7 +363,8 @@ class DevelopPipeline(
 
     private fun engineerRole(layer: ProjectLayer): String =
         "engenheiro da camada `${layer.name}` (caminho `${layer.path}`): implemente só dentro dela, até os testes de aceitação " +
-            "passarem, sem alterar os testes da QA"
+            "passarem, sem alterar os testes da QA. Se a spec pede dependência nova ou outra versão de uma, o catálogo " +
+            "`gradle/libs.versions.toml` (versão fixa) também é seu"
 
     private fun runSession(cardId: String, worktree: Path, model: String, role: String, feedback: String?) {
         val token = sessions.open(project.repo, "develop", cardId)
