@@ -1,0 +1,12 @@
+{
+  "issue": 24,
+  "slug": "worktree-por-card",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "rounds": 0,
+  "failed_gates": [],
+  "amendments": [],
+  "flaky": [],
+  "gates_reused": []
+}
