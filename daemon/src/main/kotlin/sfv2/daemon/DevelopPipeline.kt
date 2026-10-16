@@ -108,7 +108,7 @@ class RealDevelopGates(
     private val clock: Clock,
     private val head: WorktreeHead = GitWorktreeHead(),
     private val keepAssertions: Regex = DEFAULT_ASSERTIONS,
-    private val baseRevision: String = "main",
+    private val baseRevision: String = "origin/main",
 ) : DevelopGates {
 
     private val qaCommits = ConcurrentHashMap<String, String>()
