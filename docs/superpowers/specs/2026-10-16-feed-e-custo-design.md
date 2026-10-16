@@ -17,6 +17,9 @@ _Product Owner_
 - **AC-5** — Dado custo com status PARTIAL ou UNKNOWN, quando ele entra nos totais, então a tela marca o valor como parcial ou desconhecido, nunca como um número exato.
 - **AC-6** — Dado que o projeto define limites de custo por card e por dia, quando vejo o painel, então cada total aparece ao lado do seu limite e destacado quando o atingiu ou ultrapassou.
 - **AC-7** — Dado um projeto sem limite definido ou com limite indisponível, quando vejo o painel, então os totais aparecem sem limite e sem erro.
+- **AC-9** — Dado o app abrindo o feed num daemon com muitos eventos acumulados, quando a tela carrega os eventos do dia, então o daemon devolve só os últimos 2000 eventos (com `truncated: true` quando há mais), a tela mostra do dia escolhido o que essa janela cobre e avisa `Histórico anterior indisponível` quando a janela não alcança o início do dia; abrir o feed nunca reproduz o histórico inteiro.
+- **AC-10** — Dado o painel de custo, quando ele mostra o total do dia, o total por card, o limite e o destaque de limite atingido, então esses números vêm todos do daemon (a mesma conta do `CostBudget` que bloqueia os cards), nunca recalculados no app: o app só formata, e o painel nunca diz que está dentro do limite quando o daemon bloqueou o card.
+- **AC-11** — Dado um dia em que a janela de eventos não cobre o início, quando o painel mostra o total do dia, então o total vem do daemon (que soma o dia inteiro por consulta indexada) e portanto não fica subestimado pela janela do feed.
 - **AC-8** — Dado um dia sem eventos, quando abro o feed, então vejo um estado vazio explícito e custo zero.
 **Out of scope:** Editar limites ou política de custo; alertas, notificações ou bloqueio ao estourar o limite; histórico de outros dias além de escolher o dia; filtros e busca no feed; exportação; custo em moeda que não seja USD.
 **Product fit:** Serve "custo medido das transcrições de cada run" e "custo é estimativa, sempre rotulada" (AC-4, AC-5), e "toda ação é um evento com ator" (AC-1). Não contradiz o posicionamento nem o que está fora de escopo; o app é só cliente do daemon, sem escrever estado.
@@ -42,8 +45,9 @@ _Tech Lead_
 
 **Contratos**
 - Existente, só leitura: `events.subscribe` (`{"cmd":"events.subscribe","after":<seq>}`); linhas `{"event":{seq,card,id,at,actor,type,payload}}`; `RUN_COST_RECORDED` traz `status` (KNOWN|PARTIAL|UNKNOWN) e `cost_usd`.
-- Novo (daemon), leitura: `{"cmd":"cost.limits"}` → `{"ok":true,"result":{"perCardUsd":"<decimal>|null","perDayUsd":"<decimal>|null"}}`; origem `DispatcherSettings.limits` (`factory.yml`, seção `cost`). `Request.CostLimits` e `Response.CostLimitsResult` em `Protocol.kt`, tratado em `SocketServer.kt`.
-- Novo (app, interno): `EventFeedClient` (assina o stream, guarda o último `seq`, reconecta com `after=<último seq>` e descarta `seq` já visto), `FeedEvent`, `FeedState`, `CostSummary` (puro: total do dia e por card, status PARTIAL/UNKNOWN propagado, `BigDecimal`, limite atingido/ultrapassado), `CostLimitsSource` (`fun interface`, falha → sem limites), `FeedScreen` e `CostPanel` (Compose), tokens compartilhados em `Tokens.kt` (extraídos de `ConnectionScreen`).
+- Novo (daemon), leitura, `events.recent`: `{"cmd":"events.recent","limit":<=2000}` → `{"ok":true,"result":[<eventos no formato de renderEvent, em ordem de seq>],"truncated":<bool>}`: os últimos N eventos, sem varrer o histórico (consulta por `seq` decrescente com limite); depois o app assina com `after=<último seq>`. Não existe consulta por dia hoje e `events.subscribe` sem `after` só traz eventos novos, então o feed abre com essa janela (AC-9).
+- Novo (daemon), leitura, `cost.summary`: `{"cmd":"cost.summary","from":"<instante ISO>","to":"<instante ISO>"}` → `{"ok":true,"result":{"totalUsd":"…","status":"KNOWN|PARTIAL|UNKNOWN|NONE","cards":[{"card","costUsd","status"}],"limits":{"perCardUsd":"<decimal>|null","perDayUsd":"<decimal>|null"},"dayReached":<bool>,"cardsReached":["<id>"]}}`. Calculado no daemon com `store.costEventsBetween` e a mesma conta de `CostBudget` (único lugar que decide "limite atingido" e bloqueia o card), limites de `DispatcherSettings.limits`. O app só formata (AC-10, AC-11). `Request.EventsRecent`, `Request.CostSummary` e as respostas em `Protocol.kt`, tratados em `SocketServer.kt`; o `CostSummary` do daemon fica em `daemon/.../CostSummaryQuery.kt`.
+- Novo (app, interno): `EventFeedClient` (assina o stream, guarda o último `seq`, reconecta com `after=<último seq>` e descarta `seq` já visto), `FeedEvent`, `FeedState`, `CostSummaryView` (só formata o que o daemon devolveu: prefixo `≥`, tag `parcial`/`desconhecido`, `US$ ?`, nunca recalcula total nem limite), `CostSummarySource` (`fun interface`; falha → painel sem limites e sem destaque, nunca erro), `FeedScreen` e `CostPanel` (Compose), tokens compartilhados em `Tokens.kt` (extraídos de `ConnectionScreen`).
 
 **Camadas e módulos**
 - `app` (`app/src/main/kotlin/sfv2/app/`): arquivos acima; `Main.kt` passa a mostrar `FeedScreen` quando `Connected`.
@@ -65,6 +69,9 @@ _Tech Lead_
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProtocolTest.kt` |
 | AC-7 | app | `app/src/test/kotlin/sfv2/app/FeedTest.kt` |
 | AC-8 | app | `app/src/test/kotlin/sfv2/app/FeedTest.kt` |
+| AC-9 | app | `app/src/test/kotlin/sfv2/app/FeedTest.kt` |
+| AC-10 | app | `app/src/test/kotlin/sfv2/app/FeedTest.kt` |
+| AC-11 | app | `app/src/test/kotlin/sfv2/app/FeedTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
