@@ -1,0 +1,1 @@
+{"outcome": "staged", "issue": 43, "pr": 169, "head": "69a7ed2ac0525d7055af797c6ca074d02668f0af", "agents": [], "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": ["green ports sfv2.ports.ForgeTest"], "amendments": [], "review": {"blockers": 0, "should_fix": 0, "nits": 0}, "ci": {"guard": "success", "build": "success"}}
