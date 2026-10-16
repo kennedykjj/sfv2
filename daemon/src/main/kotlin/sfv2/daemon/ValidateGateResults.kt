@@ -1,10 +1,7 @@
 package sfv2.daemon
 
-/**
- * Rounds the validate pipeline runs before it blocks the card. The project has no configuration for it: this is the
- * factory's default, injectable through the pipeline's constructor.
- */
-const val DEFAULT_VALIDATE_MAX_ROUNDS = 3
+/** Rounds the validate pipeline runs before it blocks the card: the shared [DEFAULT_MAX_ROUNDS], not a second value. */
+const val DEFAULT_VALIDATE_MAX_ROUNDS = DEFAULT_MAX_ROUNDS
 
 /** The gates' word on a card: the single place that turns gate results into the state and the failed names. */
 class ValidateGateResults(val results: List<GateResult>) {

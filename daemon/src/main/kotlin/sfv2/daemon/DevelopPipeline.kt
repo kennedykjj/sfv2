@@ -278,7 +278,7 @@ class DevelopPipeline(
     private val modelStepUp: ModelStepUp,
     private val configDir: Path,
     private val clock: Clock,
-    private val maxRounds: Int = 3,
+    private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
 ) {
