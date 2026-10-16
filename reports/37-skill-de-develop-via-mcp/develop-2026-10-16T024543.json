@@ -1,0 +1,13 @@
+{
+  "issue": 37,
+  "slug": "skill-de-develop-via-mcp",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer"],
+  "rounds": 0,
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "notes": "Branch recebeu merge de origin/main (#36) para usar StageSkills. Implementação solo (peso standard, camada única daemon)."
+}
