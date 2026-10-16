@@ -55,8 +55,18 @@ fun interface WorktreeHead {
 class GitWorktreeHead(private val timeoutSeconds: Long = 10) : WorktreeHead {
     override fun of(worktree: Path): String? = git(worktree, "rev-parse", "HEAD")
 
-    override fun qaCommit(worktree: Path): String? =
-        git(worktree, "log", "-n", "1", "--format=%H", "--fixed-strings", "--grep=${WorktreeHead.QA_COMMIT_TRAILER}")
+    /** Only the card's own commits count: those on the first-parent chain that the base does not already have. */
+    override fun qaCommit(worktree: Path): String? {
+        val fork = BASES.firstNotNullOfOrNull { base -> git(worktree, "merge-base", "HEAD", base) } ?: return null
+        return git(
+            worktree, "log", "-n", "1", "--first-parent", "--format=%H", "--fixed-strings",
+            "--grep=${WorktreeHead.QA_COMMIT_TRAILER}", "$fork..HEAD",
+        )
+    }
+
+    private companion object {
+        val BASES = listOf("origin/main", "main")
+    }
 
     private fun git(worktree: Path, vararg args: String): String? {
         val output = Files.createTempFile("worktree-head", ".out")
