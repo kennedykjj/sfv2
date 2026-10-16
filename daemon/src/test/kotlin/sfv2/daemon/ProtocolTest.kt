@@ -1,12 +1,16 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
 import java.nio.file.Path
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
@@ -129,6 +133,69 @@ class ProtocolTest {
             assertThat(lines[1]).startsWith("done-1,\"Shipped\",90,")
             assertThat(lines[1].split(",")).hasSameSizeAs(lines[0].split(","))
         }
+    }
+
+    private fun recordCost(store: CardEventStore, card: String, id: String, at: Instant, usd: String) =
+        store.recordChange(
+            card,
+            Card.create(card, Column.CODING),
+            Event(
+                EventId(id), at, Actor.Factory("cost"), EventType.RUN_COST_RECORDED,
+                mapOf("run_id" to id, "status" to "KNOWN", "cost_usd" to usd, "estimate" to "true"),
+            ),
+        )
+
+    private fun costSummary(dir: Path, limits: CostLimits): JsonObject {
+        Database.open(dir.resolve("cost.db")).use { db ->
+            val store = CardEventStore(db)
+            recordCost(store, "a", "e1", Instant.parse("2026-10-16T12:00:00Z"), "6.00")
+            recordCost(store, "b", "e2", Instant.parse("2026-10-16T13:00:00Z"), "2.00")
+            // Outside the requested day: must not count.
+            recordCost(store, "b", "e3", Instant.parse("2026-10-17T03:00:00Z"), "50.00")
+            val request = parseRequest("""{"cmd":"cost.summary","from":"2026-10-16T03:00:00Z","to":"2026-10-17T03:00:00Z"}""")
+            val reply = Json.parseToJsonElement(render(CostSummaryQuery(store, limits).handle(request))).jsonObject
+            assertThat(reply.getValue("ok").jsonPrimitive.boolean).isTrue()
+            return reply.getValue("result").jsonObject
+        }
+    }
+
+    @Test
+    fun `AC-6 cost summary delivers the limits and which totals reached them`(@TempDir dir: Path) {
+        val result = costSummary(dir, CostLimits(perCardUsd = BigDecimal("5.00"), perDayUsd = BigDecimal("8.00")))
+
+        assertThat(BigDecimal(result.getValue("totalUsd").jsonPrimitive.content)).isEqualByComparingTo("8.00")
+        assertThat(result.getValue("status").jsonPrimitive.content).isEqualTo("KNOWN")
+        val limits = result.getValue("limits").jsonObject
+        assertThat(BigDecimal(limits.getValue("perCardUsd").jsonPrimitive.content)).isEqualByComparingTo("5.00")
+        assertThat(BigDecimal(limits.getValue("perDayUsd").jsonPrimitive.content)).isEqualByComparingTo("8.00")
+        // The day total equals its limit: reached, as CostBudget decides.
+        assertThat(result.getValue("dayReached").jsonPrimitive.boolean).isTrue()
+        assertThat(result.getValue("cardsReached").jsonArray.map { it.jsonPrimitive.content }).containsExactly("a")
+        val perCard = result.getValue("cards").jsonArray.associate {
+            it.jsonObject.getValue("card").jsonPrimitive.content to BigDecimal(it.jsonObject.getValue("costUsd").jsonPrimitive.content)
+        }
+        assertThat(perCard.getValue("a")).isEqualByComparingTo("6.00")
+        assertThat(perCard.getValue("b")).isEqualByComparingTo("2.00")
+    }
+
+    @Test
+    fun `AC-6 cost summary without limits reports null limits and nothing reached`(@TempDir dir: Path) {
+        val result = costSummary(dir, CostLimits.NONE)
+
+        val limits = result.getValue("limits").jsonObject
+        assertThat(limits.getValue("perCardUsd")).isEqualTo(JsonNull)
+        assertThat(limits.getValue("perDayUsd")).isEqualTo(JsonNull)
+        assertThat(result.getValue("dayReached").jsonPrimitive.boolean).isFalse()
+        assertThat(result.getValue("cardsReached").jsonArray).isEmpty()
+        assertThat(BigDecimal(result.getValue("totalUsd").jsonPrimitive.content)).isEqualByComparingTo("8.00")
+    }
+
+    @Test
+    fun `AC-6 cost summary request with an invalid instant is rejected`() {
+        assertThat(parseRequest("""{"cmd":"cost.summary","from":"yesterday","to":"2026-10-17T03:00:00Z"}"""))
+            .isInstanceOf(Request.Rejected::class.java)
+        assertThat(parseRequest("""{"cmd":"cost.summary","from":"2026-10-16T03:00:00Z"}"""))
+            .isInstanceOf(Request.Rejected::class.java)
     }
 
     @Test
