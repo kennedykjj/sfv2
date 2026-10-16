@@ -1,0 +1,1 @@
+{"issue": 46, "slug": "entrega-autonoma", "pipeline": "refine", "started_at": "2026-10-16T00:00:00Z", "finished_at": "2026-10-16T00:30:00Z", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 16743, "duration_s": 16}], "rounds": {"3": 1, "6": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false}
