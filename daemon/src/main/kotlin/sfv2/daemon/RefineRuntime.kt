@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import sfv2.adapters.ClaudeRuntime
+import sfv2.adapters.RuntimeProvider
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.SpecStore
@@ -71,13 +72,14 @@ class RefineRuntime private constructor(
             log: DaemonLog = StderrDaemonLog,
             settings: SettingsStore? = null,
         ): RefineRuntime {
+            val provider = RuntimeProvider.fromEnv(env)
             val recorder = commands.recorder
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
             val sessions = McpSessions(clock)
             val endpoint = McpServerFactory(
                 sessions, store, SpecStore(database, dataDir.resolve("specs")), registry, files, recorder, worktrees, clock,
             ).start()
-            val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock)
+            val runtime = ClaudeRuntime(transcriptDir = dataDir.resolve("transcripts"), timeout = SESSION_TIMEOUT, clock = clock, provider = provider)
             val prices = loadPrices(dataDir.resolve(PRICES_FILE))
             val priceTable = (prices as? Prices.Loaded)?.table ?: PriceTable.parse("models: {}")
             if (prices is Prices.Failed) log.log("dispatcher_not_started", mapOf("field" to prices.field))
