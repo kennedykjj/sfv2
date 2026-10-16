@@ -94,7 +94,7 @@ class PhaseFourExitTest {
             ),
         )
 
-        val imported = CardImport(store, recorder, registry, tracker, { _, number -> "https://github.com/acme/alpha/pull/$number" }, proof, clock, silent)
+        val imported = CardImport(store, recorder, registry, tracker, proof, clock, silent)
             .handle(parseRequest("""{"cmd":"card.import","actor":"owner","project":"alpha","id":"7","proof":"$token"}"""))
         val id = (imported as Response.CardsResult).cards.single().id
         val afterImport = tracker.calls.toMap()
