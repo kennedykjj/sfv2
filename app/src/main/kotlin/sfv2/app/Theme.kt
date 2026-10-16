@@ -8,6 +8,7 @@ internal object Tokens {
     val ground = Color(0xFF0A0A0A)
     val panel = Color(0xFF14171B)
     val edge = Color(0xFF2A2F39)
+    val edgeHi = Color(0xFF3D444F)
     val text = Color(0xFFF2F1EE)
     val soft = Color(0xFFD6D8DA)
     val muted = Color(0xFFA3ABB6)
@@ -15,6 +16,7 @@ internal object Tokens {
     val ok = Color(0xFF9FCBAA)
     val warn = Color(0xFFDCB872)
     val sand = Color(0xFFC7B9A6)
+    val bad = Color(0xFFE58F80)
 }
 
 internal val sans = FontFamily.SansSerif
@@ -45,6 +47,31 @@ internal object Texts {
     const val NO_RUNS = "Nenhum run ainda."
     const val EVENTS_TRUNCATED = "Mostrando só os 500 eventos mais recentes."
     const val COST_UNKNOWN_REASON = "falta preço de um modelo"
+
+    const val FEED_TITLE = "Feed do dia"
+    const val TODAY = "Hoje"
+    const val PREVIOUS_DAY = "Dia anterior"
+    const val NEXT_DAY = "Próximo dia"
+    const val CURRENT_DAY = "Este é o dia atual"
+    const val RECONNECTING = "Reconectando…"
+    const val COST_TITLE = "Custo do dia"
+    const val COST_BY_CARD = "Por card"
+    const val COST_TOTAL = "Total do dia"
+    const val ESTIMATE_TAG = "estimativa"
+    const val ESTIMATE_SUFFIX = "est."
+    const val PARTIAL = "parcial"
+    const val UNKNOWN = "desconhecido"
+    const val LIMIT_REACHED = "limite atingido"
+    const val LIMIT_EXCEEDED = "limite ultrapassado"
+    const val LIMIT_OF = "de"
+    const val LOADING = "Lendo o feed…"
+    const val EMPTY_DAY = "Nenhum evento neste dia."
+    const val FEED_ERROR = "Não consegui ler o feed. Tentando de novo."
+    const val PARTIAL_EXPLANATION = "Sem preço ou transcrição completa; o valor real pode ser maior."
+    const val EARLIER_HISTORY_UNAVAILABLE = "Histórico anterior indisponível"
+    const val FAILED = "falhou"
+
+    fun newEvents(count: Int): String = if (count == 1) "1 novo evento" else "$count novos eventos"
 
     fun cardNotFound(id: String) = "Card #$id não encontrado."
 

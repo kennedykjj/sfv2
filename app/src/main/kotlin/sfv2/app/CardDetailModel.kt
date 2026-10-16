@@ -20,7 +20,7 @@ fun interface CardDetailSource {
     fun fetch(id: String): String
 }
 
-enum class CostStatus { KNOWN, PARTIAL, UNKNOWN }
+enum class CostStatus { KNOWN, PARTIAL, UNKNOWN, NONE }
 
 data class SpecView(val status: String, val text: String)
 

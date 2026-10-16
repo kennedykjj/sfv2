@@ -45,8 +45,6 @@ import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 private val DAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
 private const val NARROW_DP = 560
 
