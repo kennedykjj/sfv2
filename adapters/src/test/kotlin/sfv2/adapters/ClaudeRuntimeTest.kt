@@ -275,9 +275,9 @@ class ClaudeRuntimeTest {
         assertThat(withProfile).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1")
             .containsEntry("AWS_REGION", "us-east-1").containsEntry("AWS_PROFILE", "corp")
 
+        // Without a configured profile AWS_PROFILE is inherited from the daemon (#223), so it is not asserted here.
         val noProfile = launchWith(RuntimeProvider.fromEnv(mapOf("SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "eu-west-1")))
         assertThat(noProfile).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1").containsEntry("AWS_REGION", "eu-west-1")
-            .doesNotContainKey("AWS_PROFILE")
     }
 
     @Test
@@ -303,14 +303,19 @@ class ClaudeRuntimeTest {
             .doesNotContainKey("CLAUDE_CODE_USE_BEDROCK").doesNotContainKey("CLAUDE_CODE_USE_VERTEX")
     }
 
+    /** Each call gets its own directory, so one test may probe several daemon environments. */
     private fun probeEnv(daemonEnv: Map<String, String>): Map<String, String> {
-        val (wt, rec, transcripts) = dirs()
-        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(tmp, rec)
+        val base = Files.createTempDirectory(tmp, "probe")
+        val wt = Files.createDirectory(base.resolve("wt"))
+        val rec = Files.createDirectory(base.resolve("rec"))
+        val transcripts = base.resolve("transcripts")
+        val log = base.resolve("probe.log")
+        val binary = ClaudeRuntimeFixtures.anEnvRecordingClaude(base, rec)
         val java = Path.of(System.getProperty("java.home"), "bin", "java").toString()
         val builder = ProcessBuilder(
             java, "-cp", System.getProperty("java.class.path"), "sfv2.adapters.ProviderEnvProbe",
             binary.toString(), transcripts.toString(), wt.toString(),
-        ).redirectErrorStream(true).redirectOutput(tmp.resolve("probe.log").toFile())
+        ).redirectErrorStream(true).redirectOutput(log.toFile())
         builder.environment().also { e ->
             e.keys.removeAll(ClaudeRuntimeFixtures.providerVars.toSet())
             e.keys.removeAll { it.startsWith("SFV2_PROVIDER") }
@@ -318,7 +323,7 @@ class ClaudeRuntimeTest {
         }
         val probe = builder.start()
         assertThat(probe.waitFor(60, TimeUnit.SECONDS)).isTrue()
-        assertThat(probe.exitValue()).`as`(Files.readString(tmp.resolve("probe.log"))).isEqualTo(0)
+        assertThat(probe.exitValue()).`as`(Files.readString(log)).isEqualTo(0)
         return ClaudeRuntimeFixtures.recordedEnv(rec)
     }
 
@@ -339,8 +344,9 @@ class ClaudeRuntimeTest {
         val env = probeEnv(leaked + mapOf("SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "us-east-1"))
 
         assertThat(env).containsEntry("CLAUDE_CODE_USE_BEDROCK", "1").containsEntry("AWS_REGION", "us-east-1")
-        listOf("CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "AWS_PROFILE", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID",
+        listOf("CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID",
             "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL").forEach { assertThat(env).doesNotContainKey(it) }
+        assertThat(env).containsEntry("AWS_PROFILE", "leak-AWS_PROFILE")
     }
 
     @Test
@@ -406,5 +412,63 @@ class ClaudeRuntimeTest {
         }
 
         assertThat(error.message).contains("SFV2_PROVIDER_URL").doesNotContain("hunter2").doesNotContain("svc")
+    }
+
+    // --- bedrock without a profile keeps the daemon AWS_PROFILE (#223) ---
+
+    @Test
+    fun `223 AC-1 bedrock without a profile passes the daemon AWS_PROFILE to the subprocess`() {
+        val env = probeEnv(
+            mapOf(
+                "SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "sa-east-1", "AWS_PROFILE" to "daemon-profile",
+            ),
+        )
+
+        assertThat(env).containsEntry("AWS_PROFILE", "daemon-profile")
+            .containsEntry("CLAUDE_CODE_USE_BEDROCK", "1").containsEntry("AWS_REGION", "sa-east-1")
+    }
+
+    @Test
+    fun `223 AC-2 bedrock with a configured profile overrides the daemon AWS_PROFILE`() {
+        val env = probeEnv(
+            mapOf(
+                "SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "sa-east-1",
+                "SFV2_PROVIDER_PROFILE" to "configured-profile", "AWS_PROFILE" to "daemon-profile",
+            ),
+        )
+
+        assertThat(env).containsEntry("AWS_PROFILE", "configured-profile")
+    }
+
+    @Test
+    fun `223 AC-3 without bedrock the daemon AWS_PROFILE does not reach the subprocess`() {
+        val daemonProfile = mapOf("AWS_PROFILE" to "daemon-profile")
+        val configs = listOf(
+            emptyMap(),
+            mapOf("SFV2_PROVIDER" to "vertex", "SFV2_PROVIDER_REGION" to "us-east5", "SFV2_PROVIDER_PROJECT" to "my-proj"),
+            mapOf("SFV2_PROVIDER" to "proxy", "SFV2_PROVIDER_URL" to "https://llm.corp.example/v1"),
+        )
+
+        configs.forEach { config ->
+            val env = probeEnv(daemonProfile + config)
+
+            assertThat(env).`as`(config.toString()).doesNotContainKey("AWS_PROFILE")
+        }
+    }
+
+    @Test
+    fun `223 AC-4 bedrock without a profile still drops the other provider variables of the daemon`() {
+        val leaked = mapOf(
+            "CLAUDE_CODE_USE_VERTEX" to "1", "ANTHROPIC_BASE_URL" to "https://stale.example", "CLOUD_ML_REGION" to "stale-region",
+            "ANTHROPIC_VERTEX_PROJECT_ID" to "stale-project", "ANTHROPIC_BEDROCK_BASE_URL" to "https://stale-bedrock.example",
+            "ANTHROPIC_VERTEX_BASE_URL" to "https://stale-vertex.example", "AWS_REGION" to "stale-aws-region",
+            "AWS_PROFILE" to "daemon-profile",
+        )
+
+        val env = probeEnv(leaked + mapOf("SFV2_PROVIDER" to "bedrock", "SFV2_PROVIDER_REGION" to "sa-east-1"))
+
+        listOf("CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_BASE_URL", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID",
+            "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL").forEach { assertThat(env).doesNotContainKey(it) }
+        assertThat(env).containsEntry("AWS_REGION", "sa-east-1").containsEntry("AWS_PROFILE", "daemon-profile")
     }
 }
