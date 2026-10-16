@@ -54,7 +54,9 @@ Comandos testados em processo pelo `SocketServer` com `Database` temporário e `
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/SocketServerTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- O ator é declarado pelo cliente e o socket 0600 não distingue o dono de um agente rodando como o mesmo usuário. Aceito só na fase 1, em que nenhum agente fala com o daemon. Antes de qualquer agente ter caminho até o socket (MCP, #28/#29), o issue de follow-up exige que o ator dono venha de prova do dono, não de texto do pedido (ARCHITECTURE, invariante 4).
+- Nunca logar `title` nem payload: só id do card e tipo do comando.
 
 ## Rollback
 n/a
