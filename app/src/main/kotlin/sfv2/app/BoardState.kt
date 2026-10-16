@@ -159,6 +159,28 @@ object ColumnTimeLabel {
     }
 }
 
+private val FLOW_ORDER = listOf(Column.REFINEMENT, Column.SPEC_REVIEW, Column.CODING, Column.VALIDATION, Column.STAGED)
+
+// Internal on purpose: the Compose compiler adds a `$stable` field to public classes, and these carry only their own fields.
+
+/** One stage of the flow bar: the column and the seconds its statistic reports. Numbers only, never card text. */
+internal data class TimeSegment(val column: Column, val seconds: Long)
+
+/** The flow bar ("Onde o tempo vai"): a segment per column with statistics and the share of owner wait. */
+internal data class TimeSplit(val segments: List<TimeSegment>, val waitPercent: Int) {
+    companion object {
+        /** Null when no column has statistics or the total is zero: the bar is then absent, never "0%". */
+        fun of(times: Map<Column, ColumnTime>): TimeSplit? {
+            val segments = FLOW_ORDER.mapNotNull { column -> times[column]?.let { TimeSegment(column, it.seconds) } }
+            val total = segments.sumOf { it.seconds }
+            if (total <= 0L) return null
+            val wait = segments.filter { isWaitingForOwner(it.column) }.sumOf { it.seconds }
+            val percent = (200 * wait + total) / (2 * total)
+            return TimeSplit(segments, percent.toInt())
+        }
+    }
+}
+
 /**
  * The cards of the board in insertion order. Events are absolute (`to`), so applying one twice is harmless;
  * an event whose `seq` is not above [lastSeq] was already seen and is dropped.

@@ -40,6 +40,8 @@ object Texts {
     const val WAITS_FOR_YOU = "Aguarda você"
     const val MEDIAN = "mediana"
     const val MEAN_WAIT = "espera média"
+    const val FLOW_TITLE = "Onde o tempo vai"
+    const val FLOW_PHRASE = "mediana por etapa hoje · "
     const val AGO = "há"
     const val BLOCKED = "bloqueado"
     const val COST_UNKNOWN = "custo desconhecido"
@@ -232,6 +234,14 @@ object Texts {
             to == BoardColumn.READY_FOR_PROD -> "Liberar a entrega"
             else -> "Enviar à refinagem"
         }
+
+    fun flowWait(percent: Int): String = "$percent% é espera por você"
+
+    /** The accessibility reading of the flow bar: every stage with its duration, then the wait phrase. */
+    internal fun flowDescription(split: TimeSplit): String {
+        val stages = split.segments.joinToString(", ") { "${it.column.displayName} ${ColumnTimeLabel.duration(it.seconds)}" }
+        return "$FLOW_TITLE: $stages. $FLOW_PHRASE${flowWait(split.waitPercent)}"
+    }
 
     fun cardNotFound(id: String): String = "Card #$id não encontrado."
 
