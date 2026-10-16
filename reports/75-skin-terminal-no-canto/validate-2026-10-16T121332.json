@@ -1,0 +1,1 @@
+{"issue":75,"slug":"skin-terminal-no-canto","pipeline":"validate","started_at":"2026-10-16T15:11:00Z","finished_at":"2026-10-16T15:13:30Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green app sfv2.app.ModuleTest"],"manual_edit":false,"amendments":[]}
