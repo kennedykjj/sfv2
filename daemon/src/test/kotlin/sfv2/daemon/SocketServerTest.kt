@@ -24,6 +24,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -856,6 +857,101 @@ class SocketServerTest {
         assertThat(missing.getValue("ok").jsonPrimitive.boolean).isFalse()
         assertThat(missing.str("error")).isEqualTo("card not found: nope")
     }
+
+    private fun approve(id: String, proofValue: String? = proof, actor: String = "owner"): JsonObject =
+        reply(withProof("""{"cmd":"card.approve","actor":"$actor","id":"$id"}""", proofValue))
+
+    private fun requestChange(id: String, note: String?, proofValue: String? = proof): JsonObject {
+        val noteField = if (note == null) "" else ""","note":${JsonPrimitive(note)}"""
+        return reply(withProof("""{"cmd":"card.request-change","actor":"owner","id":"$id"$noteField}""", proofValue))
+    }
+
+    @Test
+    fun `AC-1 owner approve moves a Spec Review card to Ready for Dev and records OWNER_APPROVED by the owner`() =
+        withCardServer { store ->
+            seed(store, "spec", Column.SPEC_REVIEW)
+            seed(store, "other", Column.SPEC_REVIEW)
+
+            assertThat(ok(approve("other", proofValue = null))).isFalse()
+            assertThat(ok(approve("other", proofValue = "wrong"))).isFalse()
+            assertThat(ok(approve("other", actor = "agent:dev"))).isFalse()
+            assertThat(store.card("other")?.column).isEqualTo(Column.SPEC_REVIEW)
+            assertThat(store.events("other")).hasSize(1)
+
+            val approved = approve("spec")
+
+            assertThat(ok(approved)).isTrue()
+            assertThat(approved.getValue("result").jsonObject.str("column")).isEqualTo("READY_FOR_DEV")
+            assertThat(store.card("spec")?.column).isEqualTo(Column.READY_FOR_DEV)
+            val last = store.events("spec").last()
+            assertThat(last.type).isEqualTo(EventType.OWNER_APPROVED)
+            assertThat(last.actor).isEqualTo(Actor.Owner)
+            assertThat(last.at).isEqualTo(fixedNow)
+            assertThat(last.payload).containsEntry("from", "SPEC_REVIEW").containsEntry("to", "READY_FOR_DEV")
+        }
+
+    @Test
+    fun `AC-2 request change with a note sends the card back to Ready for Refinement and records the note`() =
+        withCardServer { store ->
+            seed(store, "spec", Column.SPEC_REVIEW)
+
+            val changed = requestChange("spec", "Cover the offline case")
+
+            assertThat(ok(changed)).isTrue()
+            assertThat(changed.getValue("result").jsonObject.str("column")).isEqualTo("READY_FOR_REFINEMENT")
+            assertThat(store.card("spec")?.column).isEqualTo(Column.READY_FOR_REFINEMENT)
+            val last = store.events("spec").last()
+            assertThat(last.type).isEqualTo(EventType.CARD_MOVED)
+            assertThat(last.actor).isEqualTo(Actor.Owner)
+            assertThat(last.payload)
+                .containsEntry("from", "SPEC_REVIEW")
+                .containsEntry("to", "READY_FOR_REFINEMENT")
+                .containsEntry("note", "Cover the offline case")
+        }
+
+    @Test
+    fun `AC-3 request change without a usable note is refused and neither the column nor the events change`() =
+        withCardServer { store ->
+            seed(store, "spec", Column.SPEC_REVIEW)
+            val before = store.card("spec") to store.events("spec")
+            val tooLong = "é".repeat(1025)
+
+            for (note in listOf(null, "", "   ", "\n\t", tooLong)) {
+                val refused = requestChange("spec", note)
+
+                assertThat(ok(refused)).isFalse()
+                assertThat(refused.str("error")).isNotBlank().isNotEqualTo("owner proof missing or invalid")
+            }
+
+            assertThat(store.card("spec") to store.events("spec")).isEqualTo(before)
+            assertThat(ok(requestChange("spec", "é".repeat(1024)))).isTrue()
+        }
+
+    @Test
+    fun `AC-4 approve and request change outside Spec Review or on a missing card fail with the id and change nothing`() =
+        withCardServer { store ->
+            seed(store, "fresh", Column.INBOX)
+            seed(store, "busy", Column.CODING)
+            val before = listOf("fresh", "busy").associateWith { store.card(it) to store.events(it) }
+
+            for ((id, column) in listOf("fresh" to Column.INBOX, "busy" to Column.CODING)) {
+                for (reply in listOf(approve(id), requestChange(id, "Please redo"))) {
+                    assertThat(ok(reply)).isFalse()
+                    assertThat(reply.str("error")).contains(id)
+                    assertThat(reply.str("error")).satisfiesAnyOf(
+                        { assertThat(it).contains(column.name) },
+                        { assertThat(it).contains(column.displayName) },
+                    )
+                }
+            }
+            for (reply in listOf(approve("ghost"), requestChange("ghost", "Please redo"))) {
+                assertThat(ok(reply)).isFalse()
+                assertThat(reply.str("error")).contains("ghost")
+            }
+
+            assertThat(before.keys.associateWith { store.card(it) to store.events(it) }).isEqualTo(before)
+            assertThat(store.card("ghost")).isNull()
+        }
 
     @Test
     fun `AC-7 closing the server removes the socket`() {
