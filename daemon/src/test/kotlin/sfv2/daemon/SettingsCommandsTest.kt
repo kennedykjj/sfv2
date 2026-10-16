@@ -19,7 +19,6 @@ import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.CostSetting
 import sfv2.core.Event
-import sfv2.core.EventType
 import sfv2.core.FactorySettings
 import sfv2.core.NotificationSetting
 import sfv2.core.NotificationType
@@ -92,7 +91,7 @@ class SettingsCommandsTest {
     ): Response = commands.handle(Request.SettingsSave(actor, settings, proof))
 
     private fun savedEvents(): List<StoredEvent> =
-        cards.events(SettingsCommands.SETTINGS_CARD_ID).filter { it.type == EventType.SETTINGS_SAVED }
+        cards.events(SettingsCommands.SETTINGS_CARD_ID).filter { it.type.name == "SETTINGS_SAVED" }
 
     private fun assertRefusedNaming(response: Response, field: String) {
         assertThat(response).isInstanceOf(Response.Error::class.java)
