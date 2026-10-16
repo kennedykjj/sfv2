@@ -15,6 +15,7 @@ _Product Owner_
 - AC-1: Dado um projeto cuja política declara `tracker: jira`, `jira_site` e `jira_project`, quando o dono importa um ticket, então o card nasce com referência `jira`, ator `Actor.Adapter("jira")` e o tracker usado é o `AcliTracker`; sem a chave `tracker`, o padrão continua `github`.
 - AC-2: Dado um card com referência `jira`, quando o fechamento é confirmado e quando um marco é escrito, então o comentário vai para o ticket pelo `AcliTracker`, sem texto vindo do ticket.
 - AC-3: Dado um card Jira, quando o rascunho de fechamento e o marco `pr_opened` montam o link do PR, então o link vem do forge e da referência do repositório, não do sufixo `/issues/<id>` da url do tracker.
+- AC-5: Dado `jira_site` fora de `^[a-z0-9][a-z0-9.-]{0,62}$` ou `jira_project` fora de `^[A-Z][A-Z0-9_]{1,19}$`, quando o projeto é registrado, então a política é recusada nomeando a chave, sem esperar a primeira chamada do tracker falhar; os valores só chegam ao `AcliTracker` depois dessa validação.
 - AC-4: Dado uma política com `tracker` fora de `github|jira`, ou com `tracker: jira` sem `jira_site` ou `jira_project`, quando o projeto é registrado, então é recusada nomeando a chave.
 
 **Fora de escopo:** sincronização contínua com o Jira; outros trackers além de github e jira; mudar o adaptador `AcliTracker`; escolher o tracker por card (é por projeto); migrar cards já existentes.
@@ -30,7 +31,7 @@ _UX/UI Designer_ — n/a
 _Tech Lead_
 
 **Contratos**
-- `core`: `ProjectPolicies` ganha `tracker: TrackerConfig` (sealed: `GitHub`, `Jira(site, project)`), com `provider: String` (`"github"` ou `"jira"`). `from()` lê `tracker`, `jira_site`, `jira_project`; valor fora de `github|jira`, ou `jira` sem `jira_site`/`jira_project`, lança `InvalidPolicyException(field)`. Sem a chave: `GitHub`. `DEFAULT` usa `GitHub`.
+- `core`: `ProjectPolicies` ganha `tracker: TrackerConfig` (sealed: `GitHub`, `Jira(site, project)`), com `provider: String` (`"github"` ou `"jira"`). `from()` lê `tracker`, `jira_site`, `jira_project`; valor fora de `github|jira`, ou `jira` sem `jira_site`/`jira_project`, lança `InvalidPolicyException(field)`, e `jira_site` e `jira_project` são validados pelo formato no próprio `from()` (os mesmos padrões do `AcliTracker`, que continua validando por defesa), nunca guardados crus. Sem a chave: `GitHub`. `DEFAULT` usa `GitHub`.
 - `daemon`: `ProjectRegistry.POLICY_KEYS` inclui as três chaves novas; o erro existente já nomeia o campo.
 - `daemon`: `ProjectDelivery.trackerOf` devolve `AcliTracker(site, project, workDir = repo, tmpDir, timeout)` quando a política é `Jira`, senão o `GhTracker` atual. Novo `ProjectDelivery.pullRequestUrl(project, pr): String?`, montado do slug do origin (o mesmo `originSlug` do forge) como `https://github.com/<slug>/pull/<pr>`; `null` sem origin GitHub.
 - `daemon`: `CardImport`, `CardClosure` e `ExternalMilestones` trocam a constante `PROVIDER = "github"` por `project.policies.tracker.provider` (ator `Actor.Adapter(provider)`; a referência procurada é a do provider do projeto). `TextChangeWarning` recebe o provider por parâmetro.
@@ -49,6 +50,7 @@ _Tech Lead_
 | AC-2 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ExternalMilestonesTest.kt` |
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/CardClosureTest.kt` |
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
+| AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
 
 ## Security
 _Cybersec_ — n/a
