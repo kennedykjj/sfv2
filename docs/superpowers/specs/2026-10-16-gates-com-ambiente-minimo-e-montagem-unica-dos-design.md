@@ -12,7 +12,7 @@ _Product Owner_
 **Audiência.** O desenvolvedor dentro de uma empresa (segredos do daemon não podem vazar para código de agente); também o desenvolvedor sozinho com muitos projetos.
 
 **Critérios de aceitação**
-- AC-1: Dado um gate de camada que executa um processo filho, quando o `ProcessGateRunner` o inicia, então o filho recebe apenas PATH, HOME, JAVA_HOME e variáveis `GRADLE_*`.
+- AC-1: Dado um gate de camada que executa um processo filho, quando o `ProcessGateRunner` o inicia, então o filho recebe apenas PATH, HOME, JAVA_HOME, LANG, `LC_*` e variáveis `GRADLE_*` (sem LANG a JVM cai em ASCII e quebra teste com nome de arquivo acentuado).
 - AC-2: Dado o daemon com uma variável de token ou segredo no ambiente, quando um gate roda, então o filho não enxerga essa variável.
 - AC-3: Dado um gate `./gradlew` com PATH, HOME e JAVA_HOME definidos, quando roda com o ambiente mínimo, então ele executa normalmente (sem regressão).
 - AC-4: Dado Refine, Develop e Validate sem configuração de rodadas, quando cada um decide o limite de rodadas, então os três usam o mesmo valor 3, vindo de uma única definição.
@@ -39,9 +39,9 @@ _Tech Lead_
 
 Camada tocada: `daemon` apenas. Nenhum contrato externo (endpoint, evento, DB) muda; sem migração.
 
-- `daemon/src/main/kotlin/sfv2/daemon/ProcessGateRunner.kt`: antes de `start()`, `ProcessBuilder.environment()` é limpo e repovoado só com `PATH`, `HOME`, `JAVA_HOME` e as chaves que começam com `GRADLE_`, copiadas de `System.getenv()`. A função de filtragem é pura e recebe o mapa de origem (`minimalEnvironment(source: Map<String, String>): Map<String, String>`), para teste sem mexer no ambiente real.
+- `daemon/src/main/kotlin/sfv2/daemon/ProcessGateRunner.kt`: antes de `start()`, `ProcessBuilder.environment()` é limpo e repovoado só com `PATH`, `HOME`, `JAVA_HOME`, `LANG`, as chaves que começam com `LC_` e as que começam com `GRADLE_`, copiadas de `System.getenv()`. A função de filtragem é pura e recebe o mapa de origem (`minimalEnvironment(source: Map<String, String>): Map<String, String>`), para teste sem mexer no ambiente real.
 - `daemon/src/main/kotlin/sfv2/daemon/RefinePipeline.kt`: `PipelineStageLauncher` continua sendo o único launcher; ganha a constante pública `const val DEFAULT_MAX_ROUNDS = 3` (nível de arquivo, única definição) e `RefinePipeline` usa-a como default de `maxRounds`.
-- `daemon/src/main/kotlin/sfv2/daemon/DevelopPipeline.kt` e `ValidatePipeline.kt`: o default de `maxRounds` passa a `DEFAULT_MAX_ROUNDS`.
+- `daemon/src/main/kotlin/sfv2/daemon/DevelopPipeline.kt` e `ValidatePipeline.kt`: o default de `maxRounds` passa a `DEFAULT_MAX_ROUNDS`. O #162 (bloqueia este card) já criou `DEFAULT_VALIDATE_MAX_ROUNDS` em `ValidateGateResults.kt`; este card a apaga e usa só `DEFAULT_MAX_ROUNDS`, para não restar duas constantes do mesmo valor.
 - `daemon/src/main/kotlin/sfv2/daemon/ValidatePipeline.kt`: `ValidateStageLauncher` passa a delegar a `PipelineStageLauncher("validate", ...)`, como Refine e Develop; somem a thread, o `execute` e o `awaitLock` próprios.
 - `daemon/src/main/kotlin/sfv2/daemon/RefineRuntime.kt`: sem mudança de montagem; já tem um só `StageRouter` e um só `pool`.
 - `docs/superpowers/specs/2026-10-16-pipeline-de-develop-design.md`: texto de `maxRounds` (fora de escopo e linha de arquitetura) alinhado à fonte única `DEFAULT_MAX_ROUNDS`.
@@ -77,6 +77,7 @@ _What the pipeline decided on its own; one line each, with the reason._
 - `StageRouter` já é único no `RefineRuntime` e Refine/Develop já usam `PipelineStageLauncher`; só `ValidateStageLauncher` ainda duplica thread/lock, e é o que o AC-6 elimina.
 - Arquivo de teste novo `ProcessGateRunnerTest.kt`: nenhuma suite cobre `ProcessGateRunner` (o `GateExecutorTest` usa runner fake). O teste roda um processo real (`env`) com o mapa de origem injetado, sem `Thread.sleep`.
 - AC-8 é `manual`: verificado na revisão lendo o diff da spec do #40.
+- `LANG` e `LC_*` entram na lista (achado da auditoria): sem eles o `./gradlew` roda em locale POSIX. AC-3 passa a rodar o gate com o `LANG` do ambiente de teste.
 - Lista do ambiente mínimo fixa (PATH, HOME, JAVA_HOME, `GRADLE_*`), como pedido na issue; configurável fica fora de escopo.
 
 ## Open questions
