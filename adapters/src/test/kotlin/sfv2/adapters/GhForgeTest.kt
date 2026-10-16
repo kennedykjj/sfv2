@@ -82,8 +82,14 @@ object GhForgeFixtures {
     fun listJson(number: Int = 7, head: String = HEAD, branch: String = BRANCH) =
         """[{"number":$number,"headRefName":"$branch","headRefOid":"$head"}]"""
 
-    fun viewJson(state: String = "OPEN", head: String = HEAD, mergeable: String = "MERGEABLE", mergeOid: String? = null) =
-        """{"state":"$state","headRefOid":"$head","mergeable":"$mergeable","mergeCommit":${
+    fun viewJson(
+        state: String = "OPEN",
+        head: String = HEAD,
+        mergeable: String = "MERGEABLE",
+        mergeOid: String? = null,
+        mergeState: String = "CLEAN",
+    ) =
+        """{"state":"$state","headRefOid":"$head","mergeable":"$mergeable","mergeStateStatus":"$mergeState","mergeCommit":${
             if (mergeOid == null) "null" else """{"oid":"$mergeOid"}"""
         }}"""
 
@@ -165,6 +171,15 @@ class GhForgeTest {
         h.on("pr-view", GhForgeFixtures.viewJson(state = "CLOSED"))
         assertThat(h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD))
             .isEqualTo(MergeResult.NotOpen(PullRequestState.ClosedUnmerged))
+        assertThat(h.callsTo("pr merge")).isEmpty()
+    }
+
+    @Test
+    fun `AC-2 a branch behind the base is reported as Conflict and nothing is merged`() {
+        val h = harness()
+        h.on("pr-view", GhForgeFixtures.viewJson(mergeState = "BEHIND"))
+
+        assertThat(h.forge().merge(GhForgeFixtures.aRef(), GhForgeFixtures.HEAD)).isEqualTo(MergeResult.Conflict)
         assertThat(h.callsTo("pr merge")).isEmpty()
     }
 
