@@ -1,0 +1,3 @@
+{"issue":34,"slug":"limites-de-custo","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:00:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":55471,"duration_s":122},{"role":"engineer","tokens":15264,"duration_s":18},{"role":"engineer","tokens":38201,"duration_s":49}],
+"rounds":{"qa":0,"implementation":0},"gates_failed":["build (intermediário, após T1: testes de aceitação do daemon ainda vermelhos)"],"flaky":[],"gates_reused":[],"manual_edit":false,"amendments":[]}
