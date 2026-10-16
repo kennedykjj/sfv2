@@ -163,7 +163,8 @@ class GhForge(
         val state = stateOf(view)
         if (state !is PullRequestState.Open) return MergeResult.NotOpen(state)
         if (state.head != expectedHead) return MergeResult.HeadMismatch(state.head)
-        if (view.text("mergeable") == "CONFLICTING") return MergeResult.Conflict
+        // A branch behind the base cannot be merged either (the repository requires it up to date): the same way out as a conflict.
+        if (view.text("mergeable") == "CONFLICTING" || view.text("mergeStateStatus") == "BEHIND") return MergeResult.Conflict
         call(
             "merge",
             subject,
@@ -230,7 +231,7 @@ class GhForge(
         val out = call(
             operation,
             subject,
-            "pr", "view", pr.number.toString(), "--repo", repo, "--json", "state,headRefOid,mergeable,mergeCommit",
+            "pr", "view", pr.number.toString(), "--repo", repo, "--json", "state,headRefOid,mergeable,mergeStateStatus,mergeCommit",
             unknownPrMarker = NOT_FOUND_MARKER,
             unknownPr = pr.number,
         )
