@@ -187,7 +187,7 @@ class McpServerFactory(
         put("id", card.id)
         put("title", untrusted(card.title))
         put("column", card.column.name)
-        card.references.firstOrNull()?.let { put("ticket", it.externalId) }
+        card.references.firstOrNull()?.let { put("ticket", untrusted(UntrustedText("reference_id", it.externalId))) }
         put(
             "references",
             buildJsonArray {
