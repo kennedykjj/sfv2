@@ -29,7 +29,7 @@ _Tech Lead_
 
 **Contratos**
 - Daemon, comando read-only novo `audit.export` com `{"cmd":"audit.export","id":"<card>","format":"json"|"csv"}`; resposta `{"ok":true,"text":"<documento>"}`. Id desconhecido ou `format` inválido → `Response.Error` com o id na mensagem. Não exige `proof` (leitura, como `card.show` e `report.csv`).
-- Colunas (CSV e chaves do JSON, na mesma ordem): `event_id`, `at`, `type`, `actor`, `cost_usd_estimate`, `cost_status`. JSON: `{"card":"<id>","events":[...]}`. Custo só nos eventos `RUN_COST_RECORDED` (lido de `cost_usd` e `status` do payload); nos demais eventos as duas colunas saem vazias; `UNKNOWN` sai com `cost_usd_estimate` vazio. O resto do payload não é exportado (pode carregar texto externo).
+- Colunas (CSV e chaves do JSON, na mesma ordem): `event_id`, `at`, `type`, `actor`, `from`, `to`, `cost_usd_estimate`, `cost_status`. `from` e `to` saem só nos eventos `CARD_MOVED` e `OWNER_APPROVED`, lidos de `payload["from"]`/`payload["to"]` e só quando o valor é o nome de uma coluna do quadro (`Column`); qualquer outro valor sai vazio. Sem eles a trilha não diz o que o dono aprovou (um `CARD_MOVED` sem destino não prova nada). JSON: `{"card":"<id>","events":[...]}`. Custo só nos eventos `RUN_COST_RECORDED` (lido de `cost_usd` e `status` do payload); nos demais eventos as duas colunas saem vazias; `UNKNOWN` sai com `cost_usd_estimate` vazio. O resto do payload não é exportado (pode carregar texto externo): a lista de campos acima é fechada.
 - CLI: `sfv2 audit export <id> --format json|csv` (default `json`) imprime o `text` retornado.
 
 **Camadas e arquivos**
