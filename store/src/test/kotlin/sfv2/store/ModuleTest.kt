@@ -55,8 +55,8 @@ class ModuleTest {
         Database.open(file).close()
 
         assertThat(Files.exists(file)).isTrue()
-        assertThat(Database.SCHEMA_VERSION).isEqualTo(4)
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(Database.SCHEMA_VERSION).isEqualTo(5)
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
         val tables = jdbc(file) { c ->
             c.createStatement().use { s ->
@@ -85,7 +85,7 @@ class ModuleTest {
         assertThat(scalar(file, "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)"))
             .isEqualTo(schemaBefore)
         assertThat(scalar(file, "SELECT note FROM probe")).isEqualTo("kept")
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
     }
 
@@ -330,7 +330,7 @@ class ModuleTest {
                 assertThat(db.queries.schemaQueries.selectSpec("c1").executeAsOne().hash).isEqualTo("abc123")
             }
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -351,7 +351,7 @@ class ModuleTest {
         val v1 = legacyDatabase("m1.db", 1, withSpec = false).also { Database.open(it).close() }
         val v2 = legacyDatabase("m2.db", 2, withSpec = true).also { Database.open(it).close() }
 
-        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("5")
         listOf(v1, v2).forEach { migrated ->
             listOf("card", "event", "spec").forEach { table ->
                 assertThat(columns(migrated, table)).isEqualTo(columns(fresh, table))
@@ -482,8 +482,65 @@ class ModuleTest {
             assertThat(store.card("c1")?.references).isEmpty()
             assertThat(store.events("c1")).containsExactlyElementsOf(legacyEvents)
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
+    }
+
+    @Test
+    fun `AC-2 version 4 database migrates to 5 keeping data and gains the card project link`() {
+        val file = dir.resolve("v4.db")
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.execute("CREATE TABLE card (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, column_name TEXT NOT NULL)")
+                s.execute(
+                    "CREATE TABLE event (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, " +
+                        "card_id TEXT NOT NULL REFERENCES card(id), at TEXT NOT NULL, actor TEXT NOT NULL, " +
+                        "type TEXT NOT NULL, payload_json TEXT NOT NULL)",
+                )
+                s.execute("CREATE INDEX event_card_id ON event(card_id)")
+                s.execute("CREATE TABLE spec (card_id TEXT NOT NULL PRIMARY KEY, path TEXT NOT NULL, hash TEXT NOT NULL)")
+                s.execute(
+                    "CREATE TABLE card_reference (card_id TEXT NOT NULL REFERENCES card(id), position INTEGER NOT NULL, " +
+                        "provider TEXT NOT NULL, external_id TEXT NOT NULL, url TEXT NOT NULL, imported_at TEXT NOT NULL, " +
+                        "text_hash TEXT NOT NULL, PRIMARY KEY (card_id, provider, external_id))",
+                )
+                s.execute("INSERT INTO card (id, title, column_name) VALUES ('c1', 'Write docs', 'INBOX')")
+                s.execute(
+                    "INSERT INTO card_reference VALUES ('c1', 0, 'jira', 'PROJ-1', 'https://tracker.example/PROJ-1', " +
+                        "'2026-10-10T09:30:00Z', '${TextHash.of("text PROJ-1").value}')",
+                )
+                s.execute("PRAGMA user_version = 4")
+            }
+        }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
+
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            assertThat(store.card("c1")).isEqualTo(
+                Card.create("Write docs", Column.INBOX).withReference(ref("jira", "PROJ-1")),
+            )
+            assertThat(store.projectOf("c1")).isNull()
+            store.assignProject("c1", "/repos/alpha")
+            assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
+        }
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("5")
+        val fresh = dir.resolve("fresh-v5.db").also { Database.open(it).close() }
+        assertThat(columns(file, "card_project")).isEqualTo(columns(fresh, "card_project")).isNotEmpty()
+    }
+
+    @Test
+    fun `AC-2 projectOf answers the assigned repo per card and null for an unlinked card`() = withStore { store, _ ->
+        store.recordChange("c1", Card.create("A", Column.INBOX), anEvent("e1"))
+        store.recordChange("c2", Card.create("B", Column.INBOX), anEvent("e2"))
+        store.recordChange("c3", Card.create("C", Column.INBOX), anEvent("e3"))
+
+        store.assignProject("c1", "/repos/alpha")
+        store.assignProject("c2", "/repos/beta")
+
+        assertThat(store.projectOf("c1")).isEqualTo("/repos/alpha")
+        assertThat(store.projectOf("c2")).isEqualTo("/repos/beta")
+        assertThat(store.projectOf("c3")).isNull()
+        assertThat(store.projectOf("ghost")).isNull()
     }
 
     @Test
