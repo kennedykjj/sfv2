@@ -1,0 +1,3 @@
+{"issue":88,"slug":"outbox-com-confirmacao-por-padrao","pipeline":"develop","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:20:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":47004,"duration_s":80},{"role":"engineer:core","tokens":19819,"duration_s":37},{"role":"engineer:daemon","tokens":81181,"duration_s":165}],
+"rounds":{"4":0},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false,"amendments":[]}
