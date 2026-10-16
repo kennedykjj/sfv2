@@ -2,7 +2,9 @@ package sfv2.daemon
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneOffset
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.assertj.core.api.Assertions.tuple
@@ -27,12 +29,16 @@ import sfv2.store.SpecStore
  * API these tests define (the implementation follows it):
  * - `UntrustedText(source: String, text: String)` with `trust == "untrusted"`; sources "card", "spec", "project-file".
  * - `interface ProjectFileSource { fun read(repo: Path, path: String): String? }` (main's version of a file).
- * - `McpSession(repo: String)`: repo is `Project.repo`.
- * - `McpSessions().open(repo: String): String` returns the token; `McpRequestGuard(sessions, port)
+ * - `McpSession(repo: String, role: String, cardId: String)`: repo is `Project.repo`; the session belongs to one card.
+ * - `McpSessions().open(repo, role, cardId): String` returns the token; `McpRequestGuard(sessions, port)
  *   .authorize(host, origin, authorization): McpSession?` returns null for any refusal.
  * - `McpReadTools(session, store, specs, registry, files)` with `cardGet(id): CardView`, `specGet(id): SpecView`,
  *   `reviewCriteriaGet(): CriteriaView`, `policiesGet(): ProjectPolicies`, `layersGet(): List<ProjectLayer>`.
  *   Refusals are RuntimeExceptions whose message names the card id or file name.
+ * - `WorktreeManager.existing(project, cardId): Path?` (null when the directory does not exist; never creates it).
+ * - `McpRequestTools(session, store, recorder, worktrees, registry, clock, log)` with
+ *   `completionReport(cardId, summary): ReportedView(eventId)` and `fileWriteRequest(cardId, path, content): WriteView(path, bytes)`.
+ *   Refusals are McpToolException.
  * - `CardView(id, title: UntrustedText, column: Column, references: List<ReferenceView(provider, externalId, url)>)`,
  *   `SpecView(cardId, spec: UntrustedText)`, `CriteriaView(criteria: UntrustedText)`.
  */
@@ -50,7 +56,7 @@ object McpFixtures {
         override fun read(repo: Path, path: String): String? = files[path]
     }
 
-    fun yaml(name: String) = """
+    fun yaml(name: String, forbidden: List<String> = emptyList()) = """
         project:
           name: $name
         delivery_mode: pr
@@ -61,7 +67,7 @@ object McpFixtures {
             path: core/
           - name: daemon
             path: daemon/
-    """.trimIndent()
+    """.trimIndent() + if (forbidden.isEmpty()) "" else "\nforbidden:\n" + forbidden.joinToString("\n") { "  - $it" }
 
     fun anEvent(id: String) =
         Event(EventId(id), Instant.parse("2026-10-16T10:00:00Z"), Actor.Owner, EventType.CARD_CREATED, mapOf("k" to "v"))
@@ -79,6 +85,11 @@ class McpReadToolsTest {
     private lateinit var beta: Project
     private lateinit var tools: McpReadTools
     private val files = McpFixtures.FakeFileSource()
+    private val clock = Clock.fixed(Instant.parse("2026-10-16T10:00:00Z"), ZoneOffset.UTC)
+    private val requestLog = WorktreeFixtures.RecordingLog()
+    private lateinit var events: EventStream
+    private lateinit var requestTools: McpRequestTools
+    private lateinit var worktrees: WorktreeManager
 
     @BeforeEach
     fun setUp() {
@@ -87,21 +98,56 @@ class McpReadToolsTest {
         specs = SpecStore(database, dir.resolve("specs"))
         val config = McpFixtures.FakeConfigSource()
         val registry = ProjectRegistry(config)
-        alpha = register(registry, config, "alpha")
+        alpha = register(registry, config, "alpha", listOf("internal/private"))
         beta = register(registry, config, "beta")
-        tools = McpReadTools(McpSession(alpha.repo), store, specs, registry, files)
+        tools = McpReadTools(McpSession(alpha.repo, "engineer", "c1"), store, specs, registry, files)
+        events = EventStream(store)
+        worktrees = WorktreeManager(dir.resolve("wt"), WorktreeFixtures.FakeWorktreeGit())
+        requestTools = McpRequestTools(
+            McpSession(alpha.repo, "engineer", OWN),
+            store,
+            EventRecorder(store, events),
+            worktrees,
+            registry,
+            clock,
+            requestLog,
+        )
     }
 
     @AfterEach
     fun tearDown() {
+        events.close()
         database.close()
     }
 
-    private fun register(registry: ProjectRegistry, config: McpFixtures.FakeConfigSource, name: String): Project {
+    private fun register(
+        registry: ProjectRegistry,
+        config: McpFixtures.FakeConfigSource,
+        name: String,
+        forbidden: List<String> = emptyList(),
+    ): Project {
         val repo = Files.createDirectories(dir.resolve(name))
         Files.createDirectories(repo.resolve(".git"))
-        config.files[repo.toRealPath()] = McpFixtures.yaml(name)
+        config.files[repo.toRealPath()] = McpFixtures.yaml(name, forbidden)
         return registry.register(repo)
+    }
+
+    /** Cards [OWN] and [OTHER] of alpha and [FOREIGN] of beta, each with a worktree directory; returns the worktree of [OWN]. */
+    private fun requestFixture(): Path {
+        aCard(OWN, alpha, "Own card")
+        aCard(OTHER, alpha, "Other card")
+        aCard(FOREIGN, beta, "Foreign card")
+        listOf(OTHER to alpha, FOREIGN to beta).forEach { (id, project) ->
+            Files.createDirectories(worktrees.ensure(project, id, id).path)
+        }
+        return Files.createDirectories(worktrees.ensure(alpha, OWN, "Own card").path)
+    }
+
+    private fun filesUnder(root: Path): List<Path> =
+        Files.walk(root).use { stream -> stream.filter { it != root }.toList() }
+
+    private fun agentEvents(cardId: String) = store.events(cardId).filter {
+        it.type.name == REPORTED || it.type.name == WRITE_REQUESTED
     }
 
     private fun aCard(id: String, project: Project, title: String, spec: String? = null, vararg refs: ExternalRef) {
@@ -163,8 +209,8 @@ class McpReadToolsTest {
     @Test
     fun `AC-4 a session token opens the guard only with exact host and no origin`() {
         val sessions = McpSessions()
-        val token = sessions.open(alpha.repo)
-        val otherToken = sessions.open(beta.repo)
+        val token = sessions.open(alpha.repo, "engineer", "c1")
+        val otherToken = sessions.open(beta.repo, "engineer", "c1")
         val guard = McpRequestGuard(sessions, 4711)
         val host = "127.0.0.1:4711"
 
@@ -188,7 +234,7 @@ class McpReadToolsTest {
     fun `AC-3 a card id outside the allowed pattern is refused before any lookup and never logged`() {
         aCard("c1", alpha, "Add login", "# Spec")
         val lines = mutableListOf<Pair<String, Map<String, String>>>()
-        val logged = McpReadTools(McpSession(alpha.repo), store, specs, ProjectRegistry(McpFixtures.FakeConfigSource()), files) { event, fields ->
+        val logged = McpReadTools(McpSession(alpha.repo, "engineer", "c1"), store, specs, ProjectRegistry(McpFixtures.FakeConfigSource()), files) { event, fields ->
             lines.add(event to fields)
         }
         val bad = listOf("../x", "a/b", "a\nb", "a b", "", "a".repeat(65), "açao", "c1\n", "c1/../c1")
@@ -224,5 +270,174 @@ class McpReadToolsTest {
             .isInstanceOf(RuntimeException::class.java)
             .hasMessageContaining("review-criteria.md")
             .message().doesNotContain("bbbbbbbb")
+    }
+
+    @Test
+    fun `AC-3 a write inside the card worktree is accepted, written atomically and recorded without its content`() {
+        val wt = requestFixture()
+        Files.createDirectories(wt.resolve("src"))
+        val content = "secret-body-of-the-file"
+
+        val view = requestTools.fileWriteRequest(OWN, "src/Login.kt", content)
+
+        assertThat(view.path).isEqualTo("src/Login.kt")
+        assertThat(view.bytes).isEqualTo(content.length)
+        assertThat(Files.readString(wt.resolve("src/Login.kt"))).isEqualTo(content)
+        assertThat(filesUnder(wt.resolve("src")).map { it.fileName.toString() }).containsExactly("Login.kt")
+        val event = agentEvents(OWN).single()
+        assertThat(event.type.name).isEqualTo(WRITE_REQUESTED)
+        assertThat(worktrees.existing(alpha, OWN)).isEqualTo(wt)
+        assertThat(event.actor).isEqualTo(Actor.Agent("engineer"))
+        assertThat(event.payload).containsEntry("path", "src/Login.kt").containsEntry("bytes", content.length.toString())
+        assertThat(event.payload.values).noneMatch { it.contains(content) }
+        assertThat(requestLog.lines.flatMap { it.second.values }).noneMatch { it.contains(content) }
+        assertThat(store.card(OWN)?.column).isEqualTo(Column.CODING)
+
+        requestTools.fileWriteRequest(OWN, "src/Login.kt", "replaced")
+        assertThat(Files.readString(wt.resolve("src/Login.kt"))).isEqualTo("replaced")
+        assertThat(filesUnder(wt.resolve("src"))).hasSize(1)
+    }
+
+    @Test
+    fun `AC-4 a write outside the card worktree is refused with a reason and nothing is written`() {
+        val wt = requestFixture()
+        val outside = Files.createDirectories(dir.resolve("outside"))
+        Files.createSymbolicLink(wt.resolve("escape"), outside)
+        val absolute = outside.resolve("x.txt").toString()
+
+        listOf(absolute, "../x.txt", "a/../../x.txt", "escape/x.txt", "escape/../../x.txt").forEach { path ->
+            assertThatThrownBy { requestTools.fileWriteRequest(OWN, path, "payload") }
+                .isInstanceOf(McpToolException::class.java)
+                .message().isNotBlank()
+        }
+
+        assertThat(filesUnder(outside)).isEmpty()
+        assertThat(Files.exists(wt.parent.resolve("x.txt"))).isFalse()
+        assertThat(filesUnder(wt)).containsExactly(wt.resolve("escape"))
+        assertThat(agentEvents(OWN)).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 a request for a card of another project is refused naming the card, with no effect`() {
+        requestFixture()
+        val foreignWorktree = dir.resolve("wt").resolve("beta").resolve(FOREIGN)
+        assertThat(foreignWorktree).isDirectory()
+
+        listOf(
+            { requestTools.completionReport(FOREIGN, "done") },
+            { requestTools.fileWriteRequest(FOREIGN, "a.txt", "payload") },
+        ).forEach { call ->
+            assertThatThrownBy { call() }
+                .isInstanceOf(McpToolException::class.java)
+                .hasMessageContaining(FOREIGN)
+        }
+
+        assertThat(filesUnder(foreignWorktree)).isEmpty()
+        assertThat(agentEvents(FOREIGN)).isEmpty()
+    }
+
+    @Test
+    fun `AC-7 a write to a protected path is refused and nothing is written`() {
+        val wt = requestFixture()
+        val protectedPaths = listOf(
+            ".git/hooks/pre-commit",
+            ".git",
+            "sub/.git/config",
+            ".shipfloor/factory.yml",
+            ".github/workflows/ci.yml",
+            ".claude/settings.json",
+            "CLAUDE.md",
+            "./CLAUDE.md",
+            "internal/private/key.txt",
+        )
+
+        protectedPaths.forEach { path ->
+            assertThatThrownBy { requestTools.fileWriteRequest(OWN, path, "payload") }
+                .isInstanceOf(McpToolException::class.java)
+                .message().isNotBlank()
+        }
+
+        assertThat(filesUnder(wt)).isEmpty()
+        assertThat(agentEvents(OWN)).isEmpty()
+
+        Files.createDirectories(wt.resolve("docs"))
+        assertThat(requestTools.fileWriteRequest(OWN, "docs/CLAUDE.md", "ok").bytes).isEqualTo(2)
+        assertThat(requestTools.fileWriteRequest(OWN, ".gitignore", "ok").bytes).isEqualTo(2)
+    }
+
+    @Test
+    fun `AC-8 content above 256 KiB or a path above 512 characters is refused and the limits themselves pass`() {
+        val wt = requestFixture()
+
+        assertThat(requestTools.fileWriteRequest(OWN, "limit.txt", "a".repeat(McpFixtures.LIMIT)).bytes).isEqualTo(McpFixtures.LIMIT)
+        assertThatThrownBy { requestTools.fileWriteRequest(OWN, "over.txt", "a".repeat(McpFixtures.LIMIT + 1)) }
+            .isInstanceOf(McpToolException::class.java)
+        assertThatThrownBy { requestTools.fileWriteRequest(OWN, "d/".repeat(257) + "f", "x") }
+            .isInstanceOf(McpToolException::class.java)
+
+        assertThat(filesUnder(wt).map { it.fileName.toString() }).containsExactly("limit.txt")
+        assertThat(agentEvents(OWN)).hasSize(1)
+    }
+
+    @Test
+    fun `AC-8 a final file that is a symbolic link is refused without following it`() {
+        val wt = requestFixture()
+        val outside = Files.createDirectories(dir.resolve("outside"))
+        val target = Files.writeString(outside.resolve("target.txt"), "original")
+        val newTarget = outside.resolve("new.txt")
+        Files.createSymbolicLink(wt.resolve("link.txt"), target)
+        Files.createSymbolicLink(wt.resolve("dangling.txt"), newTarget)
+
+        listOf("link.txt", "dangling.txt").forEach { path ->
+            assertThatThrownBy { requestTools.fileWriteRequest(OWN, path, "payload") }
+                .isInstanceOf(McpToolException::class.java)
+        }
+
+        assertThat(Files.readString(target)).isEqualTo("original")
+        assertThat(Files.exists(newTarget)).isFalse()
+        assertThat(Files.isSymbolicLink(wt.resolve("link.txt"))).isTrue()
+        assertThat(agentEvents(OWN)).isEmpty()
+    }
+
+    @Test
+    fun `AC-8 a card without a worktree is refused and the worktree is not created`() {
+        aCard(OWN, alpha, "Own card")
+        val wantedDir = dir.resolve("wt").resolve("alpha").resolve(OWN)
+
+        assertThatThrownBy { requestTools.fileWriteRequest(OWN, "a.txt", "payload") }
+            .isInstanceOf(McpToolException::class.java)
+
+        assertThat(Files.exists(wantedDir)).isFalse()
+        assertThat(worktrees.existing(alpha, OWN)).isNull()
+        assertThat(agentEvents(OWN)).isEmpty()
+    }
+
+    @Test
+    fun `AC-9 a session only acts on its own card, not on another card of the same project`() {
+        val wt = requestFixture()
+        val otherWorktree = dir.resolve("wt").resolve("alpha").resolve(OTHER)
+        assertThat(otherWorktree).isDirectory()
+
+        listOf(
+            { requestTools.completionReport(OTHER, "done") },
+            { requestTools.fileWriteRequest(OTHER, "a.txt", "payload") },
+        ).forEach { call ->
+            assertThatThrownBy { call() }
+                .isInstanceOf(McpToolException::class.java)
+                .hasMessageContaining(OTHER)
+        }
+
+        assertThat(filesUnder(otherWorktree)).isEmpty()
+        assertThat(filesUnder(wt)).isEmpty()
+        assertThat(agentEvents(OTHER)).isEmpty()
+        assertThat(requestTools.completionReport(OWN, "done").eventId.toString()).isNotBlank()
+    }
+
+    private companion object {
+        const val OWN = "r1"
+        const val OTHER = "r2"
+        const val FOREIGN = "r-beta"
+        const val REPORTED = "AGENT_REPORTED"
+        const val WRITE_REQUESTED = "AGENT_WRITE_REQUESTED"
     }
 }
