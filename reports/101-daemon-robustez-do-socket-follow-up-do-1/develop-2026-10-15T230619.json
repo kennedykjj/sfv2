@@ -1,0 +1,15 @@
+{
+  "issue": 101,
+  "pipeline": "develop",
+  "outcome": "validation",
+  "weight": "heavy",
+  "resumed": true,
+  "agents": [],
+  "rounds": 0,
+  "gates_run": ["acceptance-intact", "qa-commit", "build", "green daemon *hardening*", "forbidden", "migration"],
+  "gates_reused": [],
+  "failed_gates": ["qa-amend"],
+  "flaky": [],
+  "amendments": [],
+  "notes": "qa-amend falhou só pela remoção de RedStubs.kt (stub temporário do QA), aceita pelo dono via shipfloor accept; o gate qa-amend não lê accepted.tsv. acceptance-intact passou contra f394dc1 e 9921191."
+}
