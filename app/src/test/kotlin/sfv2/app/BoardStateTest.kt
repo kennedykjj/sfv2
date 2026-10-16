@@ -3,6 +3,7 @@ package sfv2.app
 import java.math.BigDecimal
 import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.serialization.json.Json
 import org.assertj.core.api.Assertions.assertThat
@@ -13,7 +14,9 @@ import sfv2.core.Column
 import sfv2.core.ColumnTime
 import sfv2.core.ColumnTimeKind
 import sfv2.core.EventType
+import sfv2.core.ForecastGap
 import sfv2.core.OWNER_WAIT_COLUMNS
+import sfv2.core.QueueForecast
 
 /**
  * Shape the implementation must follow (pure, in `BoardState.kt` and `BoardSource.kt`):
@@ -35,6 +38,10 @@ import sfv2.core.OWNER_WAIT_COLUMNS
  *   `PulseView.markStale()` keeps the last reading and says it is out of date. Nothing is computed beyond words,
  *   squares (`true` = in use, one per slot) and the meter (`percent` = spent over the day limit, rounded).
  * - `ceiling` is `PulseCeiling.Meter` when the day has a limit, `PulseCeiling.Unlimited` otherwise, null before a reading.
+ *
+ * Forecast cell (pure, in `PulseModel.kt` or a sibling file): `ForecastCells.of(forecast: QueueForecast?, now, zone):
+ * ForecastCell(headline, secondary, description)`; `null` is a daemon that sent no forecast. `Pulse` and `PulseView`
+ * carry the forecast and build the cell with it; `markStale()` keeps it through `copy`.
  *
  * Command palette (pure, in `PaletteModel.kt`):
  *
@@ -283,6 +290,73 @@ class BoardStateTest {
             assertThat(view.ceiling).isNull()
         }
         assertThat(staleBeforeAnyReading.freshness).isEqualTo(PulseFreshness.Stale)
+    }
+
+    @Test
+    fun `AC-5 forecast cell shows the finish time in the local hour`() {
+        val at = Instant.parse("2026-10-16T19:15:00Z")
+
+        val cell = ForecastCells.of(QueueForecast.FinishesAt(at, 0), ForecastFixtures.now, ZoneId.of("America/Sao_Paulo"))
+
+        assertThat(cell.headline).isEqualTo("Fila vazia ~16:15")
+        assertThat(cell.secondary).isNull()
+    }
+
+    @Test
+    fun `AC-5 forecast cell says tomorrow when the finish passes midnight`() {
+        val at = Instant.parse("2026-10-17T02:30:00Z")
+
+        val cell = ForecastCells.of(QueueForecast.FinishesAt(at, 0), ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(cell.headline).startsWith("Fila vazia").contains("amanhã 02:30")
+    }
+
+    @Test
+    fun `AC-5 forecast cell shows how many steps the owner holds, in singular and plural`() {
+        val at = Instant.parse("2026-10-16T16:15:00Z")
+
+        val two = ForecastCells.of(QueueForecast.FinishesAt(at, 2), ForecastFixtures.now, ZoneOffset.UTC)
+        val one = ForecastCells.of(QueueForecast.FinishesAt(at, 1), ForecastFixtures.now, ZoneOffset.UTC)
+        val none = ForecastCells.of(QueueForecast.FinishesAt(at, 0), ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(two.secondary).isEqualTo("O dono segura 2 passos")
+        assertThat(one.secondary).isEqualTo("O dono segura 1 passo")
+        assertThat(none.secondary).isNull()
+    }
+
+    @Test
+    fun `AC-5 forecast cell of an empty queue says so without a time`() {
+        val cell = ForecastCells.of(QueueForecast.Empty, ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(cell.headline).isEqualTo("Fila vazia")
+        assertThat(cell.secondary).isNull()
+    }
+
+    @Test
+    fun `AC-5 forecast cell without a forecast says no forecast with the reason`() {
+        val noPool = ForecastCells.of(QueueForecast.Unknown(ForecastGap.NO_POOL), ForecastFixtures.now, ZoneOffset.UTC)
+        val noHistory = ForecastCells.of(QueueForecast.Unknown(ForecastGap.NO_HISTORY), ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(noPool.headline).isEqualTo("sem previsão")
+        assertThat(noPool.secondary).isEqualTo("sem sessões no pool")
+        assertThat(noHistory.headline).isEqualTo("sem previsão")
+        assertThat(noHistory.secondary).isEqualTo("sem histórico de tempo")
+    }
+
+    @Test
+    fun `AC-5 forecast cell of an old daemon that sent no forecast says no forecast`() {
+        val cell = ForecastCells.of(null, ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(cell.headline).isEqualTo("sem previsão")
+    }
+
+    @Test
+    fun `AC-5 forecast cell reads the full sentence for accessibility`() {
+        val at = Instant.parse("2026-10-16T16:15:00Z")
+
+        val cell = ForecastCells.of(QueueForecast.FinishesAt(at, 2), ForecastFixtures.now, ZoneOffset.UTC)
+
+        assertThat(cell.description).contains("Fila vazia ~16:15").contains("O dono segura 2 passos")
     }
 
     @Test
@@ -808,6 +882,10 @@ object BoardFixtures {
     fun aColumnTime(kind: ColumnTimeKind, seconds: Long, stays: Int = 3) = ColumnTime(kind, seconds, stays)
 
     fun uniformWidths(width: Int): Map<Column, Int> = Column.entries.associateWith { width }
+}
+
+object ForecastFixtures {
+    val now: Instant = Instant.parse("2026-10-16T12:00:00Z")
 }
 
 object PulseFixtures {

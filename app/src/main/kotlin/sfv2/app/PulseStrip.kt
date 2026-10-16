@@ -62,6 +62,7 @@ fun PulseStrip(view: PulseView, modifier: Modifier = Modifier) {
                 { m -> SaysCell(view, m) },
                 { m -> NowCell(view, m) },
                 { m -> CeilingCell(view, m) },
+                { m -> ForecastCellView(view, m) },
             )
             when {
                 maxWidth >= TWO_BY_TWO_BELOW -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -197,6 +198,28 @@ private fun CeilingCell(view: PulseView, modifier: Modifier) {
                     BasicText("${ceiling.percent}%", style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = color, fontFeatureSettings = "tnum"))
                 }
                 Meter(ceiling.percent / 100f, color, PulseTexts.meter(ceiling.percent))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ForecastCellView(view: PulseView, modifier: Modifier) {
+    val forecast = view.forecast
+    Cell(PulseTexts.FORECAST_TITLE, forecast?.description ?: PulseTexts.FORECAST_TITLE, modifier) {
+        if (forecast == null) {
+            BasicText(PulseTexts.LOADING, style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.faint))
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                val noForecast = forecast.headline == PulseTexts.NO_FORECAST
+                BasicText(
+                    forecast.headline,
+                    style = TextStyle(fontFamily = sans, fontSize = 15.sp, color = if (noForecast) Tokens.muted else Tokens.text, fontFeatureSettings = "tnum"),
+                )
+                BasicText(PulseTexts.FORECAST_BASELINE, style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = Tokens.faint))
+            }
+            forecast.secondary?.let {
+                BasicText(it, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
             }
         }
     }

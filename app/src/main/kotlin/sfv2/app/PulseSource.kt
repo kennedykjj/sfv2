@@ -3,6 +3,7 @@ package sfv2.app
 import java.io.IOException
 import java.nio.file.Path
 import java.time.Clock
+import java.time.Instant
 import java.time.ZoneId
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -17,6 +19,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import sfv2.core.AssistantState
+import sfv2.core.ForecastGap
+import sfv2.core.QueueForecast
 
 /** `factory.pulse`: the daemon's reading of the factory. */
 fun interface PulseSource {
@@ -34,7 +38,26 @@ class SocketPulseSource(private val socket: Path) : PulseSource {
             ?: throw IOException("daemon sent a pulse without pool capacity")
         val active = (result["active"] as? JsonArray ?: throw IOException("daemon sent a pulse without active cards"))
             .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-        return Pulse(state, text(result, "phrase") ?: throw IOException("daemon sent a pulse without phrase"), capacity, active)
+        val phrase = text(result, "phrase") ?: throw IOException("daemon sent a pulse without phrase")
+        return Pulse(state, phrase, capacity, active, forecastOf(result["forecast"]))
+    }
+
+    /** An absent or unreadable forecast (an older daemon) is null, never a made-up time. */
+    private fun forecastOf(element: JsonElement?): QueueForecast? {
+        val forecast = element as? JsonObject ?: return null
+        return when (text(forecast, "kind")) {
+            "EMPTY" -> QueueForecast.Empty
+            "FINISHES_AT" -> {
+                val at = text(forecast, "at")?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: return null
+                val steps = (forecast["ownerSteps"] as? JsonPrimitive)?.intOrNull ?: 0
+                QueueForecast.FinishesAt(at, steps)
+            }
+            "UNKNOWN" -> {
+                val gap = ForecastGap.entries.firstOrNull { it.name == text(forecast, "gap") } ?: return null
+                QueueForecast.Unknown(gap)
+            }
+            else -> null
+        }
     }
 }
 
@@ -64,7 +87,7 @@ class PulseMonitor(
             try {
                 val today = clock.instant().atZone(zone).toLocalDate()
                 val cost = costSource.summary(today.atStartOfDay(zone).toInstant(), today.plusDays(1).atStartOfDay(zone).toInstant())
-                PulseView.of(source.pulse(), cost)
+                PulseView.of(source.pulse(), cost, clock.instant(), zone)
             } catch (e: IOException) {
                 null
             }
