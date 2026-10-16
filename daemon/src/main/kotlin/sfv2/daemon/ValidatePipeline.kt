@@ -9,6 +9,7 @@ import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
+import sfv2.core.Milestone
 import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
 import sfv2.store.CardEventStore
@@ -43,6 +44,7 @@ class ValidatePipeline(
     private val runtimeName: String = "claude",
     private val changedPaths: ChangedPaths = GitChangedPaths(),
     private val conflicts: ConflictResolver? = null,
+    private val milestones: ExternalMilestones? = null,
 ) {
     private val outcome = ValidationOutcome(store, recorder, project.layers.map { it.name }.toSet(), clock)
 
@@ -102,7 +104,9 @@ class ValidatePipeline(
 
     private fun deliver(cardId: String, worktree: CardWorktree): CiResult {
         val title = store.card(cardId)?.title ?: cardId
-        return delivery.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path)
+        val result = delivery.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path)
+        if (result is CiResult.Green) milestones?.reached(cardId, Milestone.PR_OPENED, result.pr.toString())
+        return result
     }
 
     private fun layerWithMostChanges(worktree: Path): String {

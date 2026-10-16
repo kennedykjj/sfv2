@@ -74,6 +74,14 @@ class RefineRuntime private constructor(
             val stepUp = ModelStepUp(MODEL_LADDER, store)
             commands.events.addListener(stepUp::onEvent)
             val gateRunner = ProcessGateRunner(log)
+            val milestones = ExternalMilestones(
+                store = store,
+                recorder = recorder,
+                trackerOf = { cardId -> ProjectDelivery.trackerOf(projectOf(cardId, store, registry), dataDir.resolve("tracker")) },
+                policiesOf = { cardId -> projectOf(cardId, store, registry).policies },
+                clock = clock,
+                log = log,
+            )
             val refineLauncher = RefineStageLauncher(
                 pipelineFor = { cardId ->
                     val project = projectOf(cardId, store, registry)
@@ -123,6 +131,7 @@ class RefineRuntime private constructor(
                         configDir = dataDir.resolve("mcp"),
                         clock = clock,
                         log = log,
+                        milestones = milestones,
                     )
                 },
                 pool = pool,
@@ -171,6 +180,7 @@ class RefineRuntime private constructor(
                         delivery = ProjectDelivery.create(project, dataDir.resolve("forge")),
                         changedPaths = changedPaths,
                         conflicts = conflictsOf(project),
+                        milestones = milestones,
                     )
                 },
                 pool = pool,

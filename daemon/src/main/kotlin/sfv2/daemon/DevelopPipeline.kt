@@ -21,6 +21,7 @@ import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.core.InvalidAcceptancePatternException
 import sfv2.core.InvalidGateInputException
+import sfv2.core.Milestone
 import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
 import sfv2.ports.SessionResult
@@ -281,6 +282,7 @@ class DevelopPipeline(
     private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
+    private val milestones: ExternalMilestones? = null,
 ) {
     init {
         require(maxRounds > 0) { "maxRounds must be positive, got $maxRounds" }
@@ -289,7 +291,10 @@ class DevelopPipeline(
     fun run(cardId: String) {
         val card = store.card(cardId) ?: throw GateCardNotFoundException(cardId)
         when (card.column) {
-            Column.READY_FOR_DEV -> move(cardId, Column.CODING)
+            Column.READY_FOR_DEV -> {
+                move(cardId, Column.CODING)
+                milestones?.reached(cardId, Milestone.STARTED)
+            }
             Column.CODING -> Unit
             else -> {
                 log.log("develop_skipped", mapOf("card" to cardId, "column" to card.column.name))

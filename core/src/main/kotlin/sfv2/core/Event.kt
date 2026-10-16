@@ -30,6 +30,8 @@ enum class EventType {
     CLOSURE_CONFIRMED,
     CLOSURE_WRITTEN,
     CLOSURE_FAILED,
+    MILESTONE_WRITTEN,
+    EXTERNAL_TEXT_CHANGED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */

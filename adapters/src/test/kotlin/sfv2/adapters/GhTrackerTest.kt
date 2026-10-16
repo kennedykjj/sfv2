@@ -97,6 +97,19 @@ class GhTrackerTest {
     }
 
     @Test
+    fun `AC-3 a blank search lists the open issues without a search term`() {
+        val h = GhHarness(tmp)
+        h.on("issue-list", "[${GhTrackerFixtures.issue(3, "A")}]")
+        val t = tracker(h)
+
+        val items = t.search("")
+
+        assertThat(items.map { it.id }).containsExactly("3")
+        val call = h.callsTo("issue list").single()
+        assertThat(call).contains("--state open", "--limit 100").doesNotContain("--search", "--state all")
+    }
+
+    @Test
     fun `AC-4 imported text never renders as plain text`() {
         val h = GhHarness(tmp)
         h.on("issue-view", GhTrackerFixtures.issue(title = "TituloSecreto", body = "CorpoSecreto", labels = listOf("LabelSecreta")))
