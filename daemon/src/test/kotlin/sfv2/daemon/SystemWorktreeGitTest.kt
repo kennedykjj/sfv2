@@ -84,6 +84,18 @@ class SystemWorktreeGitTest {
     }
 
     @Test
+    fun `qaCommit ignores a QA trailer that only the base carries and finds none for a card without its own`() {
+        sh(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "squash of another card\n\n" + WorktreeHead.QA_COMMIT_TRAILER)
+        sh(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        val dir = tmp.resolve("wt").resolve("c1")
+        git.addWorktree(repo, dir, "feat/c1-x")
+        Files.writeString(dir.resolve("a.txt"), "impl")
+        SystemWorktreeCommit().commitAll(dir, "feat(daemon): x")
+
+        assertThat(GitWorktreeHead().qaCommit(dir)).isNull()
+    }
+
+    @Test
     fun `qaCommit finds the commit carrying the QA trailer and ignores the ones after it`() {
         val dir = tmp.resolve("wt").resolve("c1")
         git.addWorktree(repo, dir, "feat/c1-x")
