@@ -1,6 +1,7 @@
 package sfv2.daemon
 
 import java.time.Clock
+import java.time.Duration
 import java.util.UUID
 import sfv2.core.Actor
 import sfv2.core.Card
@@ -21,10 +22,11 @@ class CardCommands(
     private val ownerProof: OwnerProof,
     private val log: DaemonLog = StderrDaemonLog,
     subscriberQueueLimit: Int = EventStream.DEFAULT_QUEUE_LIMIT,
+    closeGrace: Duration = EventStream.DEFAULT_CLOSE_GRACE,
 ) {
 
     /** Live feed of every recorded change. */
-    val events: EventStream = EventStream(store, subscriberQueueLimit, log)
+    val events: EventStream = EventStream(store, subscriberQueueLimit, log, clock, closeGrace)
 
     /** Serialized so the read-check-write of a move cannot interleave with another command. */
     @Synchronized
