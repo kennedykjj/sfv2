@@ -183,6 +183,7 @@ class RefineRuntime private constructor(
                         changedPaths = changedPaths,
                         conflicts = conflictsOf(project),
                         milestones = milestones,
+                        files = files,
                     )
                 },
                 pool = pool,
