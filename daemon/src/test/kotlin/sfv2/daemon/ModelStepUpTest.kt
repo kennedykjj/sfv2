@@ -44,6 +44,8 @@ class ModelStepUpTest {
 
     @AfterEach
     fun tearDown() {
+        // The worker thread reads the store: stop and join it before the database and the temp directory go away.
+        stepUp.close()
         stream.close()
         database.close()
     }
