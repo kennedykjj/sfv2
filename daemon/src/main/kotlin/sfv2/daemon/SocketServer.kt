@@ -129,7 +129,7 @@ class SocketServer private constructor(
         is Request.CostSummary -> costSummary?.handle(request) ?: Response.Error("cost summary is not available")
         Request.FactoryPulse -> pulse?.handle(request) ?: Response.Error("factory pulse is not available")
         Request.MilestoneList, is Request.MilestoneConfirm -> milestones?.handle(request) ?: Response.Error("milestone commands are not available")
-        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardRequestChange, Request.CardList, is Request.CardShow, is Request.CardDetail, Request.ReportCsv, is Request.EventsRecent, is Request.AuditExport, is Request.ColumnTimes ->
+        is Request.Subscribe, is Request.CardCreate, is Request.CardMove, is Request.CardApprove, is Request.CardUnblock, is Request.CardRequestChange, Request.CardList, is Request.CardShow, is Request.CardDetail, Request.ReportCsv, is Request.EventsRecent, is Request.AuditExport, is Request.ColumnTimes ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 

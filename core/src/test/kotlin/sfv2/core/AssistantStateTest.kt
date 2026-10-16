@@ -99,6 +99,32 @@ class AssistantStateTest {
         assertThat(derive(f.aCard(Column.CODING, moved, f.blocked(100)))).isEqualTo(AssistantState.BLOCKED)
     }
 
+    private fun unblocked(minutes: Long, actor: Actor): Event {
+        val type = EventType.entries.firstOrNull { it.name == "CARD_UNBLOCKED" }
+        assertThat(type).describedAs("EventType.CARD_UNBLOCKED exists").isNotNull()
+        return f.anEvent(requireNotNull(type) { "CARD_UNBLOCKED missing" }, f.minutesAgo(minutes), actor)
+    }
+
+    @Test
+    fun `AC-1 an owner CARD_UNBLOCKED after the block closes it and the state is no longer blocked`() {
+        val card = f.aCard(Column.CODING, f.blocked(120), unblocked(100, Actor.Owner))
+        assertThat(derive(card)).isEqualTo(AssistantState.WORKING)
+    }
+
+    @Test
+    fun `AC-1 a CARD_UNBLOCKED by a factory or an agent actor does not close the block`() {
+        val byFactory = f.aCard(Column.CODING, f.blocked(120), unblocked(100, Actor.Factory("daemon")))
+        val byAgent = f.aCard(Column.CODING, f.blocked(120), unblocked(100, Actor.Agent("engineer")))
+        assertThat(derive(byFactory)).isEqualTo(AssistantState.BLOCKED)
+        assertThat(derive(byAgent)).isEqualTo(AssistantState.BLOCKED)
+    }
+
+    @Test
+    fun `AC-1 an owner CARD_UNBLOCKED before the latest block does not close it`() {
+        val card = f.aCard(Column.CODING, unblocked(200, Actor.Owner), f.blocked(100))
+        assertThat(derive(card)).isEqualTo(AssistantState.BLOCKED)
+    }
+
     @Test
     fun `AC-5 inside the night window is night and outside never is`() {
         val at2330 = Instant.parse("2026-10-16T23:30:00Z")

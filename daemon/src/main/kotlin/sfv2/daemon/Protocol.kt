@@ -36,6 +36,11 @@ sealed interface Request {
         override fun toString(): String = "CardApprove(actor=$actor, id=$id, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Owner release of a card with an open block; the column does not change. */
+    data class CardUnblock(val actor: Actor, val id: String, val proof: String? = null) : Request {
+        override fun toString(): String = "CardUnblock(actor=$actor, id=$id, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data class CardRequestChange(val actor: Actor, val id: String, val note: String? = null, val proof: String? = null) : Request {
         override fun toString(): String =
             "CardRequestChange(actor=$actor, id=$id, note=${if (note == null) "null" else "***"}, proof=${if (proof == null) "null" else "***"})"
@@ -138,7 +143,7 @@ sealed interface Request {
 }
 
 /** A card as the client sees it. */
-data class CardView(val id: String, val title: String, val column: Column)
+data class CardView(val id: String, val title: String, val column: Column, val blocked: Boolean = false)
 
 /** One line of the V0 board: the issue number and the V0 column name. */
 data class BoardRow(val id: String, val column: String)
@@ -233,6 +238,11 @@ fun parseRequest(line: String): Request {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardApprove(actor, id, stringField(obj, "proof"))
+        }
+        "card.unblock" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardUnblock(actor, id, stringField(obj, "proof"))
         }
         "card.request-change" -> {
             val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
@@ -383,6 +393,7 @@ private fun cardJson(card: CardView): JsonObject = buildJsonObject {
     put("id", card.id)
     put("title", card.title)
     put("column", card.column.name)
+    put("blocked", card.blocked)
 }
 
 private fun projectJson(project: Project): JsonObject = buildJsonObject {

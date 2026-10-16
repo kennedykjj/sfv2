@@ -229,6 +229,47 @@ class MainTest {
     }
 
     @Test
+    fun `AC-6 unblock sends card unblock with the owner proof and prints the card, a daemon refusal exits 1`() {
+        Files.createDirectories(socketDir())
+        Files.writeString(tokenPath(), "secret-token\n")
+        fakeDaemon { line ->
+            if (line.contains("\"fresh\"")) {
+                listOf("""{"ok":false,"error":"card fresh is not blocked"}""")
+            } else {
+                listOf("""{"ok":true,"result":{"id":"c1","title":"One","column":"CODING","blocked":false}}""")
+            }
+        }
+
+        assertThat(run("card", "unblock", "c1")).isZero()
+
+        assertThat(out.toString().trim()).isEqualTo("c1  CODING  One")
+        assertThat(requests.single()).contains("\"card.unblock\"").contains("\"c1\"")
+            .containsPattern("\"proof\"\\s*:\\s*\"secret-token\"").containsPattern("\"actor\"\\s*:\\s*\"owner\"")
+
+        out.clear()
+        assertThat(run("card", "unblock", "fresh")).isEqualTo(1)
+        assertThat(err.toString()).contains("card fresh is not blocked")
+        assertThat(out).isEmpty()
+    }
+
+    @Test
+    fun `AC-7 card list marks only the blocked cards with BLOQUEADO at the end of the line`() {
+        fakeDaemon {
+            listOf(
+                """{"ok":true,"result":[""" +
+                    """{"id":"c1","title":"One","column":"INBOX","blocked":false},""" +
+                    """{"id":"c2","title":"Two","column":"CODING","blocked":true},""" +
+                    """{"id":"c3","title":"Three","column":"DONE"}]}""",
+            )
+        }
+
+        assertThat(run("card", "list")).isZero()
+
+        assertThat(out.toString().lines().filter { it.isNotBlank() })
+            .containsExactly("c1  INBOX  One", "c2  CODING  Two  BLOQUEADO", "c3  DONE  Three")
+    }
+
+    @Test
     fun `card rebuild sends the owner request with the project and prints one line per card`() {
         Files.createDirectories(socketDir())
         Files.writeString(tokenPath(), "secret-token\n")

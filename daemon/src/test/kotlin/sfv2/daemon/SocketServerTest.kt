@@ -1252,6 +1252,96 @@ class SocketServerTest {
             assertThat(store.card("ghost")).isNull()
         }
 
+    private fun seedBlocked(store: CardEventStore, id: String, column: Column = Column.CODING) {
+        seed(store, id, column)
+        val event = Event(
+            EventId("block-$id"),
+            fixedNow,
+            Actor.Factory("cost"),
+            EventType.CARD_BLOCKED,
+            mapOf("reason" to "card_cost_limit"),
+        )
+        store.recordChange(id, Card.create("Seeded", column), event)
+    }
+
+    private fun unblock(id: String, proofValue: String? = proof, actor: String = "owner"): JsonObject =
+        reply(withProof("""{"cmd":"card.unblock","actor":"$actor","id":"$id"}""", proofValue))
+
+    @Test
+    fun `AC-2 unblock records CARD_UNBLOCKED by the owner, keeps the column and answers with the card`() =
+        withCardServer { store ->
+            seedBlocked(store, "stuck", Column.CODING)
+
+            val unblocked = unblock("stuck")
+
+            assertThat(ok(unblocked)).isTrue()
+            val result = unblocked.getValue("result").jsonObject
+            assertThat(result.str("id")).isEqualTo("stuck")
+            assertThat(result.str("column")).isEqualTo("CODING")
+            assertThat(store.card("stuck")?.column).isEqualTo(Column.CODING)
+            val last = store.events("stuck").last()
+            assertThat(last.type.name).isEqualTo("CARD_UNBLOCKED")
+            assertThat(last.actor).isEqualTo(Actor.Owner)
+            assertThat(last.at).isEqualTo(fixedNow)
+        }
+
+    @Test
+    fun `AC-3 unblock refuses a card that is not blocked, a missing id, an agent and a bad or missing proof, writing nothing`() =
+        withCardServer { store ->
+            seed(store, "fresh", Column.CODING)
+            seedBlocked(store, "stuck")
+            val before = listOf("fresh", "stuck").associateWith { store.card(it) to store.events(it) }
+
+            val notBlocked = unblock("fresh")
+            val missing = unblock("ghost")
+            val byAgent = unblock("stuck", actor = "agent:dev")
+            val noProof = unblock("stuck", proofValue = null)
+            val badProof = unblock("stuck", proofValue = "wrong")
+
+            listOf(notBlocked to "fresh", missing to "ghost", byAgent to "stuck", noProof to "stuck", badProof to "stuck")
+                .forEach { (refused, id) ->
+                    assertThat(ok(refused)).describedAs(id).isFalse()
+                    assertThat(refused.str("error")).isNotBlank().contains(id)
+                }
+            assertThat(before.keys.associateWith { store.card(it) to store.events(it) }).isEqualTo(before)
+            assertThat(store.card("ghost")).isNull()
+        }
+
+    @Test
+    fun `AC-3 unblocking twice refuses the second time because the block is no longer open`() = withCardServer { store ->
+        seedBlocked(store, "stuck")
+        assertThat(ok(unblock("stuck"))).isTrue()
+        val eventsAfterFirst = store.events("stuck")
+
+        val second = unblock("stuck")
+
+        assertThat(ok(second)).isFalse()
+        assertThat(second.str("error")).contains("stuck")
+        assertThat(store.events("stuck")).isEqualTo(eventsAfterFirst)
+    }
+
+    @Test
+    fun `AC-5 card list and show carry blocked true only while a block is open and keep the earlier fields`() =
+        withCardServer { store ->
+            seed(store, "fresh", Column.INBOX)
+            seedBlocked(store, "stuck", Column.CODING)
+
+            val listed = reply("""{"cmd":"card.list"}""").getValue("result").jsonArray.map { it.jsonObject }
+            val byId = listed.associateBy { it.str("id") }
+            assertThat(byId.getValue("stuck").getValue("blocked").jsonPrimitive.boolean).isTrue()
+            assertThat(byId.getValue("fresh").getValue("blocked").jsonPrimitive.boolean).isFalse()
+            assertThat(byId.getValue("stuck").str("column")).isEqualTo("CODING")
+            assertThat(byId.getValue("stuck").str("title")).isEqualTo("Seeded")
+            val shownBlocked = reply("""{"cmd":"card.show","id":"stuck"}""").getValue("result").jsonObject
+            assertThat(shownBlocked.getValue("blocked").jsonPrimitive.boolean).isTrue()
+
+            unblock("stuck")
+
+            val shownAfter = reply("""{"cmd":"card.show","id":"stuck"}""").getValue("result").jsonObject
+            assertThat(shownAfter.getValue("blocked").jsonPrimitive.boolean).isFalse()
+            assertThat(shownAfter.str("column")).isEqualTo("CODING")
+        }
+
     @Test
     fun `AC-7 closing the server removes the socket`() {
         val server = startServer()

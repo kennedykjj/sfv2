@@ -390,6 +390,41 @@ class RunCostTest {
         assertThat(budget.isBlocked("c1")).isFalse()
     }
 
+    private fun unblock(cardId: String, actor: Actor, id: String) {
+        val type = EventType.entries.firstOrNull { it.name == "CARD_UNBLOCKED" }
+        assertThat(type).describedAs("EventType.CARD_UNBLOCKED exists").isNotNull()
+        val event = Event(EventId(id), now, actor, requireNotNull(type) { "CARD_UNBLOCKED missing" }, emptyMap())
+        store.recordChange(cardId, Card.create("Seeded", Column.CODING), event)
+    }
+
+    @Test
+    fun `AC-4 an owner CARD_UNBLOCKED after a cost block lets the budget release the card again`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        costEvent("c1", "run-1", "2.00")
+        budget.onRunFinished("c1")
+        assertThat(budget.isBlocked("c1")).isTrue()
+
+        unblock("c1", Actor.Factory("scheduler"), "factory-unblock")
+        unblock("c1", Actor.Agent("engineer"), "agent-unblock")
+        assertThat(budget.isBlocked("c1")).isTrue()
+
+        unblock("c1", Actor.Owner, "owner-unblock")
+        assertThat(budget.isBlocked("c1")).isFalse()
+    }
+
+    @Test
+    fun `AC-4 a block after the owner CARD_UNBLOCKED blocks the card again`() {
+        val budget = budget(CostLimits(perCardUsd = BigDecimal("1"), perDayUsd = null))
+        costEvent("c1", "run-1", "2.00")
+        budget.onRunFinished("c1")
+        unblock("c1", Actor.Owner, "owner-unblock")
+        assertThat(budget.isBlocked("c1")).isFalse()
+
+        budget.onRunFinished("c1")
+
+        assertThat(budget.isBlocked("c1")).isTrue()
+    }
+
     @Test
     fun `AC-4 the day limit counts only costs inside today in the budget zone, fractions and boundaries included`() {
         costEvent("c1", "run-yesterday", "100", Instant.parse("2026-10-15T23:59:59.9Z"))
