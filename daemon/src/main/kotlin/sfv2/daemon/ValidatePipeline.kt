@@ -42,6 +42,7 @@ class ValidatePipeline(
     private val log: DaemonLog = StderrDaemonLog,
     private val runtimeName: String = "claude",
     private val changedPaths: ChangedPaths = GitChangedPaths(),
+    private val conflicts: ConflictResolver? = null,
 ) {
     private val outcome = ValidationOutcome(store, recorder, project.layers.map { it.name }.toSet(), clock)
 
@@ -58,7 +59,7 @@ class ValidatePipeline(
         val worktree = worktrees.ensure(project, cardId, card.title)
         when (branchSync.mergeMain(worktree.path)) {
             MergeResult.Merged -> Unit
-            MergeResult.Conflict -> return block(cardId, "merge_conflict")
+            MergeResult.Conflict -> resolveConflict(cardId, worktree.path)?.let { return block(cardId, it) }
             MergeResult.Failed -> return block(cardId, "git_failed")
         }
         for (round in 1..maxRounds) {
@@ -78,6 +79,17 @@ class ValidatePipeline(
             }
         }
         block(cardId, "review_malformed")
+    }
+
+    /** Null when the conflict is resolved and the gates may run; otherwise the reason that blocks the card. */
+    private fun resolveConflict(cardId: String, worktree: Path): String? {
+        val resolver = conflicts ?: return "merge_conflict"
+        return when (resolver.resolve(cardId, worktree)) {
+            is ConflictOutcome.Resolved -> null
+            ConflictOutcome.OverLimit, ConflictOutcome.Failed -> "merge_conflict"
+            ConflictOutcome.RoundsExhausted ->
+                "conflict_rounds_exhausted rounds=" + store.events(cardId).count { ConflictResolution.isRound(it) }
+        }
     }
 
     private fun decide(cardId: String, worktree: CardWorktree, report: String, gates: GatesState): ValidationDecision =

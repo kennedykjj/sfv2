@@ -74,6 +74,19 @@ class ValidateSkillTest {
     }
 
     @Test
+    fun `the conflict skill cites only registered tools and carries the three security rules`(@TempDir dir: Path) {
+        val conflict = StageSkills.load("conflict")
+        val refine = StageSkills.load("refine")
+
+        assertThat(citedTools(conflict)).isNotEmpty()
+        assertThat(registeredTools(dir)).containsAll(citedTools(conflict))
+        assertThat(ruleText(conflict, "untrusted-data")).isNotBlank().contains("untrusted")
+        assertThat(ruleText(conflict, "no-shell")).isNotBlank().contains("gh", "git", "board.sh")
+            .isEqualTo(ruleText(refine, "no-shell"))
+        assertThat(ruleText(conflict, "write-scope")).isNotBlank().contains("conflitantes")
+    }
+
+    @Test
     fun `AC-7 the validate skill carries the three security rules and the APPROVED-needs-green-gates rule`() {
         val validate = skill
         val refine = StageSkills.load("refine")
