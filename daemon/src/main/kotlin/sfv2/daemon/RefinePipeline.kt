@@ -148,7 +148,7 @@ class RefinePipeline(
         val worktree = worktrees.ensure(project, cardId, card.title)
         var failed: List<GateResult> = emptyList()
         for (round in 1..maxRounds) {
-            runSession(cardId, worktree.path)
+            runSession(cardId, worktree.path, feedbackOf(failed))
             failed = gates.evaluate(cardId, worktree.path).filter { !it.passed }
             log.log("refine_round", mapOf("card" to cardId, "round" to round.toString(), "failed" to failed.size.toString()))
             if (failed.isEmpty()) {
@@ -168,11 +168,16 @@ class RefinePipeline(
         if (!commit.commitAll(worktree, message)) log.log("refine_commit_failed", mapOf("card" to cardId))
     }
 
-    private fun runSession(cardId: String, worktree: Path) {
+    /** What the gates said about the previous round, so the agent corrects it instead of guessing; null on the first round. */
+    private fun feedbackOf(failed: List<GateResult>): String? =
+        failed.take(MAX_FEEDBACK_GATES).joinToString("\n") { "${it.name}: ${it.reason.orEmpty().take(MAX_FEEDBACK_CHARS)}" }
+            .takeIf { it.isNotBlank() }
+
+    private fun runSession(cardId: String, worktree: Path, feedback: String?) {
         val token = sessions.open(project.repo, "refine", cardId)
         val config = writeConfig(token)
         try {
-            val result = runtime.launch(SessionRequest("refine", worktree, model, config, StagePrompt.of("refine", cardId)))
+            val result = runtime.launch(SessionRequest("refine", worktree, model, config, StagePrompt.of("refine", cardId, feedback = feedback)))
             recordCost(cardId, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }

@@ -302,8 +302,8 @@ private const val REPAIR_AFTER_GREEN_FAILURES = 2
 private const val QA_REPAIR_ROLE = "QA (reparo dos testes): a implementação já existe e os gates verdes falharam mais de uma vez. " +
     "Se a causa é um defeito do próprio teste (preparação, fixture, diretório temporário repetido, id duplicado), " +
     "corrija só o teste, sem enfraquecer nem remover asserção; se a causa é a implementação, não mude nada"
-private const val MAX_FEEDBACK_GATES = 3
-private const val MAX_FEEDBACK_CHARS = 1500
+internal const val MAX_FEEDBACK_GATES = 3
+internal const val MAX_FEEDBACK_CHARS = 1500
 private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
 
 class DevelopPipeline(
