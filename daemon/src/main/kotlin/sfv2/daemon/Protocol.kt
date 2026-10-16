@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
 import sfv2.core.Column
+import sfv2.store.StoredEvent
 
 /** A parsed client message. */
 sealed interface Request {
@@ -18,6 +19,9 @@ sealed interface Request {
     data class CardMove(val actor: Actor, val id: String, val to: Column) : Request
     data object CardList : Request
     data class CardShow(val id: String) : Request
+
+    /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
+    data class Subscribe(val after: Long?) : Request
 
     /** The line is not a valid request; [message] is safe to send back (never echoes the input). */
     data class Rejected(val message: String) : Request
@@ -68,8 +72,17 @@ fun parseRequest(line: String): Request {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardShow(id)
         }
+        "events.subscribe" -> parseSubscribe(obj)
         else -> Request.Rejected("unknown cmd")
     }
+}
+
+private fun parseSubscribe(obj: JsonObject): Request {
+    val element = obj["after"] ?: return Request.Subscribe(null)
+    val primitive = element as? JsonPrimitive
+    val after = if (primitive == null || primitive.isString) null else primitive.content.toLongOrNull()
+    if (after == null || after < 0) return Request.Rejected("invalid after")
+    return Request.Subscribe(after)
 }
 
 private fun stringField(obj: JsonObject, key: String): String? {
@@ -99,6 +112,32 @@ private fun cardJson(card: CardView): JsonObject = buildJsonObject {
     put("title", card.title)
     put("column", card.column.name)
 }
+
+private fun actorText(actor: Actor): String = when (actor) {
+    Actor.Owner -> "owner"
+    is Actor.Agent -> "agent:${actor.role}"
+    is Actor.Adapter -> "adapter:${actor.provider}"
+    is Actor.Factory -> "factory:${actor.component}"
+}
+
+/** Renders a stream event as a single JSON line (without the newline). Pure: no IO. */
+fun renderEvent(stored: StoredEvent): String = buildJsonObject {
+    put(
+        "event",
+        buildJsonObject {
+            put("seq", stored.seq)
+            put("card", stored.cardId)
+            put("id", stored.event.id.value)
+            put("at", stored.event.at.toString())
+            put("actor", actorText(stored.event.actor))
+            put("type", stored.event.type.name)
+            put("payload", JsonObject(stored.event.payload.mapValues { JsonPrimitive(it.value) }))
+        },
+    )
+}.toString()
+
+/** Renders the line that ends a stream abnormally. Pure: no IO. */
+fun renderStreamError(message: String): String = buildJsonObject { put("error", message) }.toString()
 
 /** Renders a response as a single JSON line (without the newline). Pure: no IO. */
 fun render(response: Response): String = when (response) {

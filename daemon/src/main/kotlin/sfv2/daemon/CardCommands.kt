@@ -11,13 +11,18 @@ import sfv2.core.EventType
 import sfv2.core.MoveDecision
 import sfv2.core.MoveRules
 import sfv2.store.CardEventStore
+import sfv2.store.StoredEvent
 
 /** Applies the core rules to card commands and writes through the store. A refusal writes nothing. */
 class CardCommands(
     private val store: CardEventStore,
     private val clock: Clock,
     private val log: DaemonLog = StderrDaemonLog,
+    subscriberQueueLimit: Int = EventStream.DEFAULT_QUEUE_LIMIT,
 ) {
+
+    /** Live feed of every recorded change. */
+    val events: EventStream = EventStream(store, subscriberQueueLimit, log)
 
     /** Serialized so the read-check-write of a move cannot interleave with another command. */
     @Synchronized
@@ -26,7 +31,7 @@ class CardCommands(
         is Request.CardMove -> move(request)
         Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
-        Request.Ping, is Request.Rejected -> Response.Error("not a card command")
+        Request.Ping, is Request.Rejected, is Request.Subscribe -> Response.Error("not a card command")
     }
 
     private fun create(request: Request.CardCreate): Response {
@@ -43,7 +48,7 @@ class CardCommands(
             type = EventType.CARD_CREATED,
             payload = mapOf("title" to card.title),
         )
-        store.recordChange(id, card, event)
+        events.publish(StoredEvent(store.recordChange(id, card, event), id, event))
         log.log("card_command", mapOf("cmd" to "card.create", "card" to id))
         return Response.CardResult(CardView(id, card.title, card.column))
     }
@@ -65,7 +70,7 @@ class CardCommands(
             type = EventType.CARD_MOVED,
             payload = mapOf("from" to current.column.name, "to" to request.to.name),
         )
-        store.recordChange(request.id, moved, event)
+        events.publish(StoredEvent(store.recordChange(request.id, moved, event), request.id, event))
         log.log("card_command", mapOf("cmd" to "card.move", "card" to request.id))
         return Response.CardResult(CardView(request.id, moved.title, moved.column))
     }

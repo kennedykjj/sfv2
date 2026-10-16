@@ -27,6 +27,20 @@ class ProtocolTest {
     }
 
     @Test
+    fun `subscribe parses an optional non-negative numeric after`() {
+        assertThat(parseRequest("""{"cmd":"events.subscribe"}""")).isEqualTo(Request.Subscribe(null))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":7}""")).isEqualTo(Request.Subscribe(7))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":"7"}""")).isEqualTo(Request.Rejected("invalid after"))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":-1}""")).isEqualTo(Request.Rejected("invalid after"))
+        assertThat(parseRequest("""{"cmd":"events.subscribe","after":1.5}""")).isEqualTo(Request.Rejected("invalid after"))
+    }
+
+    @Test
+    fun `stream error is a line with only the error`() {
+        assertThat(renderStreamError("subscriber too slow")).isEqualTo("""{"error":"subscriber too slow"}""")
+    }
+
+    @Test
     fun `invalid json is rejected without echoing the input`() {
         val request = parseRequest("secret-not-json")
 
