@@ -1,0 +1,20 @@
+{
+  "issue": 13,
+  "slug": "card-e-evento-na-mesma-transacao",
+  "pipeline": "validate",
+  "outcome": "staged",
+  "pr": 113,
+  "staged_head": "5c5b28a75d86f8e46b6ca79d8e6e2e4a171e77dd",
+  "agents": [],
+  "rounds": 0,
+  "gates": ["qa-commit", "forbidden", "migration", "acceptance-intact", "build", "green store sfv2.store.ModuleTest (reused)"],
+  "gates_reused": ["green store sfv2.store.ModuleTest"],
+  "failed_gates": [],
+  "flaky": [],
+  "amendments": [],
+  "findings": {"red": 0, "yellow": 0, "white": 3},
+  "ci": {"build": "pass", "guard": "pass"},
+  "brief": "build attempted; exit status not reported by brief.sh",
+  "tokens": null,
+  "duration": null
+}
