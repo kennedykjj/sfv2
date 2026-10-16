@@ -1,12 +1,64 @@
 package sfv2.app
 
+import java.math.BigDecimal
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import sfv2.core.Column
 import sfv2.core.ColumnTime
 import sfv2.core.ColumnTimeKind
 import sfv2.core.EventType
 import sfv2.core.OWNER_WAIT_COLUMNS
 
-data class BoardCard(val id: String, val title: String, val column: Column)
+/** The total cost of a card as `card.list` reports it; [costUsd] is present only for KNOWN and PARTIAL. */
+data class CardCost(val status: CostStatus, val costUsd: BigDecimal? = null)
+
+/** A card of the board. [enteredAt] and [cost] are null when the daemon does not send them (an older daemon). */
+data class BoardCard(
+    val id: String,
+    val title: String,
+    val column: Column,
+    val blocked: Boolean = false,
+    val enteredAt: Instant? = null,
+    val cost: CardCost? = null,
+)
+
+/** What a board card says about itself: texts built only from the column, numbers and ids, never from the title. */
+data class CardFace(
+    val stage: String,
+    val age: String?,
+    val cost: String,
+    val costNote: String?,
+    val blocked: Boolean,
+    val blockedLabel: String?,
+    val description: String,
+) {
+    companion object {
+        fun of(card: BoardCard, clock: Clock): CardFace {
+            val stage = card.column.displayName
+            val age = card.enteredAt?.let { "${Texts.AGO} ${ColumnTimeLabel.duration(Duration.between(it, clock.instant()).seconds)}" }
+            val usd = card.cost?.takeIf { it.status == CostStatus.KNOWN || it.status == CostStatus.PARTIAL }?.costUsd
+            val cost = if (usd == null) Texts.COST_UNKNOWN else formatCost(usd)
+            val costNote = if (usd != null && card.cost?.status == CostStatus.PARTIAL) Texts.PARTIAL else null
+            val blockedLabel = if (card.blocked) Texts.BLOCKED else null
+            val description = listOfNotNull(card.title, card.id, stage, age, cost, costNote, blockedLabel).joinToString(", ")
+            return CardFace(stage, age, cost, costNote, card.blocked, blockedLabel, description)
+        }
+    }
+}
+
+enum class StageHue { REFINE, DEVELOP, VALIDATE, OK, ACCENT, NEUTRAL }
+
+/** The hue of a column's stage (DESIGN.md, "Color by stage"); queues and Inbox stay neutral. */
+fun stageHue(column: Column): StageHue =
+    when (column) {
+        Column.REFINEMENT -> StageHue.REFINE
+        Column.CODING -> StageHue.DEVELOP
+        Column.VALIDATION -> StageHue.VALIDATE
+        Column.READY_FOR_PROD, Column.DONE -> StageHue.OK
+        Column.SPEC_REVIEW, Column.STAGED -> StageHue.ACCENT
+        Column.INBOX, Column.READY_FOR_REFINEMENT, Column.READY_FOR_DEV -> StageHue.NEUTRAL
+    }
 
 /** Columns whose cards wait for a decision of the owner: the owner-only moves in `MoveRules` start here (PRODUCT.md). */
 val OWNER_DECISION_COLUMNS: Set<Column> = OWNER_WAIT_COLUMNS
@@ -26,7 +78,7 @@ object ColumnTimeLabel {
         return "$name ${duration(time.seconds)}"
     }
 
-    private fun duration(seconds: Long): String {
+    fun duration(seconds: Long): String {
         val minutes = seconds / SECONDS_PER_MINUTE
         return when {
             minutes < 1 -> "< 1 min"
