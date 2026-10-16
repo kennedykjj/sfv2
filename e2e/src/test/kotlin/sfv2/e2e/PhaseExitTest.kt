@@ -22,6 +22,10 @@ import sfv2.core.EventType
 import sfv2.core.ProjectPolicies
 import sfv2.daemon.BranchSync
 import sfv2.daemon.CardCommands
+import sfv2.daemon.CiPause
+import sfv2.daemon.PullRequestDelivery
+import sfv2.daemon.PushResult
+import sfv2.daemon.WorktreeHead
 import sfv2.daemon.DaemonLog
 import sfv2.daemon.DevelopGates
 import sfv2.daemon.DevelopPipeline
@@ -43,6 +47,8 @@ import sfv2.daemon.ValidatePipeline
 import sfv2.daemon.WorktreeGit
 import sfv2.daemon.WorktreeManager
 import sfv2.daemon.resolveSocketPath
+import sfv2.ports.ChecksState
+import sfv2.ports.FakeForge
 import sfv2.ports.FakeRuntime
 import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
@@ -128,6 +134,12 @@ class PhaseExitTest {
         override fun deleteBranch(repo: Path, branch: String) = Unit
     }
 
+    private fun greenDelivery(): PullRequestDelivery {
+        val forge = FakeForge()
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+        return PullRequestDelivery(forge, { _, _ -> PushResult.Pushed }, WorktreeHead { "sha-1" }, CiPause { })
+    }
+
     /** The fake runtime plus what a real session leaves behind: a priced transcript and, for validate, the review report. */
     private inner class RecordingRuntime(private val inner: Runtime, private val cardId: () -> String) : Runtime {
         private var sessions = 0
@@ -179,7 +191,7 @@ class PhaseExitTest {
         )
         val validate = ValidatePipeline(
             project, store, commands.recorder, worktrees, sessions, 4317, runtime, costs,
-            BranchSync { MergeResult.Merged }, validateGates, configDir, clock, model, log = silent,
+            BranchSync { MergeResult.Merged }, validateGates, configDir, clock, model, delivery = greenDelivery(), log = silent,
         )
 
         cardId = cli("card", "create", "Ship the phase").trim().substringBefore(" ")
