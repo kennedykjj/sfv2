@@ -95,8 +95,11 @@ fun BoardScreen(
     connected: Boolean,
     controller: OwnerMoveController? = null,
     onOpenSettings: (() -> Unit)? = null,
+    onReload: (suspend () -> ResyncResult)? = null,
 ) {
     val scope = rememberCoroutineScope()
+    var reloading by remember { mutableStateOf(false) }
+    var reloadFailed by remember { mutableStateOf(false) }
     val laneBounds = remember { mutableStateMapOf<BoardColumn, Rect>() }
     val move by (controller?.state ?: remember { MutableStateFlow(OwnerMoveState()) }).collectAsState()
     val scrollState = rememberScrollState()
@@ -106,8 +109,41 @@ fun BoardScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!connected) StaleBanner()
-        if (connected && onOpenSettings != null) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { SettingsButton(onOpenSettings) }
+        if (connected && (onOpenSettings != null || onReload != null)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                if (onReload != null) {
+                    ReloadButton(reloading) {
+                        if (!reloading) {
+                            reloading = true
+                            reloadFailed = false
+                            scope.launch {
+                                try {
+                                    reloadFailed = onReload() == ResyncResult.Failed
+                                } finally {
+                                    reloading = false
+                                }
+                            }
+                        }
+                    }
+                }
+                if (onOpenSettings != null) SettingsButton(onOpenSettings)
+            }
+        }
+        if (reloadFailed) {
+            Row(
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                BasicText(Texts.RELOAD_FAILED, style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.warn))
+                BasicText(
+                    Texts.DISMISS,
+                    modifier = Modifier.clickable { reloadFailed = false },
+                    style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.soft),
+                )
+            }
         }
         move.status?.let { StatusLine(it) }
         move.notice?.let { notice -> NoticeLine(notice) { controller?.dismissNotice() } }
@@ -257,6 +293,19 @@ private fun StatusLine(text: String) {
         text,
         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted),
+    )
+}
+
+@Composable
+private fun ReloadButton(reloading: Boolean, onClick: () -> Unit) {
+    BasicText(
+        if (reloading) Texts.RELOADING else Texts.RELOAD,
+        modifier = Modifier
+            .alpha(if (reloading) 0.6f else 1f)
+            .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
+            .clickable(enabled = !reloading, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.text),
     )
 }
 

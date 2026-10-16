@@ -135,6 +135,9 @@ object Texts {
         }
 
     const val OPEN_SETTINGS = "Configurações"
+    const val RELOAD = "Recarregar"
+    const val RELOADING = "Recarregando…"
+    const val RELOAD_FAILED = "Não foi possível ler o quadro do daemon. Confira se o daemon está ativo e tente de novo."
     const val SETTINGS_TITLE = "Configurações"
     const val SETTINGS_LOADING = "Lendo as configurações…"
     const val SETTINGS_SAVING = "Salvando…"
