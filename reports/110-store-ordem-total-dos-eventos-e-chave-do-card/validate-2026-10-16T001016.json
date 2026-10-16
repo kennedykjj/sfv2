@@ -1,0 +1,1 @@
+{"issue":110,"slug":"store-ordem-total-dos-eventos-e-chave-do-card","pipeline":"validate","started_at":"2026-10-16T03:08:00Z","finished_at":"2026-10-16T03:11:00Z","outcome":"ok","agents":[],"rounds":{"gates":0,"review":0},"gates_failed":[],"flaky":[],"gates_reused":["green store sfv2.store.ModuleTest (primeira passada, antes do merge com main)"],"manual_edit":false}
