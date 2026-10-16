@@ -1,0 +1,1 @@
+{"issue":56,"slug":"rascunho-e-confirmacao-do-fechamento","pipeline":"refine","started_at":"2026-10-16T10:00:00Z","finished_at":"2026-10-16T10:25:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":16492,"duration_s":22}],"rounds":{"po":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
