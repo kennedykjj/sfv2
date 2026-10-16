@@ -2,6 +2,7 @@ package sfv2.daemon
 
 import java.time.Clock
 import java.util.UUID
+import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.CardValidationException
 import sfv2.core.Column
@@ -16,6 +17,7 @@ import sfv2.store.CardEventStore
 class CardCommands(
     private val store: CardEventStore,
     private val clock: Clock,
+    private val ownerProof: OwnerProof,
     private val log: DaemonLog = StderrDaemonLog,
 ) {
 
@@ -30,6 +32,10 @@ class CardCommands(
     }
 
     private fun create(request: Request.CardCreate): Response {
+        if (request.actor == Actor.Owner && !ownerProof.matches(request.proof)) {
+            log.log("card_command_refused", mapOf("cmd" to "card.create"))
+            return Response.Error(OWNER_PROOF_ERROR)
+        }
         val card = try {
             Card.create(request.title, Column.INBOX)
         } catch (e: CardValidationException) {
@@ -49,6 +55,10 @@ class CardCommands(
     }
 
     private fun move(request: Request.CardMove): Response {
+        if (request.actor == Actor.Owner && !ownerProof.matches(request.proof)) {
+            log.log("card_command_refused", mapOf("cmd" to "card.move", "card" to request.id))
+            return Response.Error(OWNER_PROOF_ERROR)
+        }
         val current = store.card(request.id) ?: return notFound(request.id)
         when (val decision = MoveRules.check(current.column, request.to, request.actor)) {
             is MoveDecision.Refused -> {
@@ -76,4 +86,8 @@ class CardCommands(
     }
 
     private fun notFound(id: String): Response = Response.Error("card not found: $id")
+
+    private companion object {
+        const val OWNER_PROOF_ERROR = "owner proof missing or invalid"
+    }
 }
