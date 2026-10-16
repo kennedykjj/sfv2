@@ -19,6 +19,7 @@ import sfv2.ports.FailedCheck
 import sfv2.ports.Forge
 import sfv2.ports.ForgeException
 import sfv2.ports.MergeResult
+import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
@@ -49,6 +50,32 @@ class GhForge(
         return parse("findOpenPullRequest", subject) {
             JSON.parseToJsonElement(out).jsonArray.firstOrNull()?.let { toRef(it.jsonObject) }
         }
+    }
+
+    override fun findMergedPullRequest(branch: String): MergedPullRequest? {
+        val subject = "branch=$branch"
+        requireValid("findMergedPullRequest", validRepo() && validBranch(branch))
+        val out = call(
+            "findMergedPullRequest",
+            subject,
+            "pr", "list", "--repo", repo, "--head", branch, "--state", "merged",
+            "--json", "number,mergeCommit,headRefOid,mergedBy",
+        )
+        return parse("findMergedPullRequest", subject) {
+            JSON.parseToJsonElement(out).jsonArray.firstOrNull()?.jsonObject?.let { toMerged(it, subject) }
+        }
+    }
+
+    private fun toMerged(obj: JsonObject, subject: String): MergedPullRequest {
+        val oid = obj["mergeCommit"]?.asObject()?.text("oid")
+        if (oid.isNullOrEmpty()) throw ForgeException("findMergedPullRequest falhou ($subject): merge commit ausente")
+        val login = obj["mergedBy"]?.asObject()?.text("login")?.takeIf { LOGIN.matches(it) }
+        return MergedPullRequest(
+            number = requireNotNull(obj["number"]?.jsonPrimitive?.intOrNull) { "number ausente" },
+            mergeCommit = oid,
+            head = obj.text("headRefOid").orEmpty(),
+            mergedBy = login,
+        )
     }
 
     override fun openPullRequest(request: PullRequestRequest): PullRequestRef {
@@ -245,6 +272,7 @@ class GhForge(
         val JSON = Json { ignoreUnknownKeys = true }
         val SHA = Regex("^[0-9a-f]{40}$")
         val REPO = Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+        val LOGIN = Regex("^[A-Za-z0-9-]{1,39}$")
         val PASSED_CONCLUSIONS = setOf("success", "neutral", "skipped")
         val FAILED_CONCLUSIONS = setOf("failure", "cancelled", "timed_out", "action_required", "stale")
         const val SUMMARY_MAX_BYTES = 2048

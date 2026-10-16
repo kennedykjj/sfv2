@@ -145,6 +145,37 @@ class ForgeTest {
     }
 
     @Test
+    fun `findMergedPullRequest finds a PR merged outside by branch with merge commit and head`() {
+        val forge = FakeForge()
+        val ref = forge.openPullRequest(ForgeFixtures.aRequest(branch = "feat/m"))
+        forge.mergedOutside(ref)
+
+        assertThat(forge.findMergedPullRequest("feat/m"))
+            .isEqualTo(MergedPullRequest(ref.number, "merge-${ref.number}", ref.head, null))
+    }
+
+    @Test
+    fun `findMergedPullRequest returns null for open, closed and unknown branches`() {
+        val forge = FakeForge()
+        forge.openPullRequest(ForgeFixtures.aRequest(branch = "feat/open"))
+        val closed = forge.openPullRequest(ForgeFixtures.aRequest(branch = "feat/closed"))
+        forge.closeOutside(closed)
+
+        assertThat(forge.findMergedPullRequest("feat/open")).isNull()
+        assertThat(forge.findMergedPullRequest("feat/closed")).isNull()
+        assertThat(forge.findMergedPullRequest("feat/none")).isNull()
+    }
+
+    @Test
+    fun `failNext findMergedPullRequest throws ForgeException once`() {
+        val forge = FakeForge()
+        forge.failNext("findMergedPullRequest")
+
+        assertThrows<ForgeException> { forge.findMergedPullRequest("feat/m") }
+        assertThat(forge.findMergedPullRequest("feat/m")).isNull()
+    }
+
+    @Test
     fun `AC-9 failNext makes the next call throw ForgeException naming operation and PR number without the body`() {
         val forge = FakeForge()
         val ref = forge.openPullRequest(ForgeFixtures.aRequest(body = "secret-body-text"))
