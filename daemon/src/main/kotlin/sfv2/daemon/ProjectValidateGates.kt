@@ -26,55 +26,39 @@ class ProjectValidateGates(
     private val baseRevision: String = "origin/main",
 ) : ValidateGates {
 
-    override fun evaluate(cardId: String, worktree: Path): List<GateResult> {
+    override fun evaluate(cardId: String, worktree: Path): ValidateGateResults {
         val changed = (changedPaths.between(worktree, baseRevision) + changedPaths.untracked(worktree)).distinct()
         val touched = project.layers.filter { layer -> changed.any { it.startsWith(layer.path) } }
         val dir = runDir.resolve(cardId)
-        val results = touched.flatMap { layer -> listOf("build", "test").map { task -> layerGate(cardId, worktree, dir, layer, task) } } +
+        val layerResults = touched.flatMap { layer -> listOf("build", "test").map { task -> layerGate(cardId, worktree, dir, layer, task) } }
+        return ValidateGateResults(layerResults.flatMap { it.results }) +
             scopeGate(cardId, changed, touched.map { it.name }.toSet()) +
             specGates(cardId, worktree, changed)
-        return results
     }
 
-    private fun layerGate(cardId: String, worktree: Path, dir: Path, layer: ProjectLayer, task: String): GateResult {
+    private fun layerGate(cardId: String, worktree: Path, dir: Path, layer: ProjectLayer, task: String): ValidateGateResults {
         val name = "$task-${layer.name}"
         val spec = GateSpec(name, listOf("./gradlew", ":${layer.name}:$task", "--console=plain"), worktree, TIMEOUT)
-        return when (val verdict = executor.execute(cardId, spec, dir)) {
-            GateVerdict.Pass -> GateResult(name, true, null)
-            is GateVerdict.Fail -> GateResult(name, false, verdict.reason)
-        }
+        return ValidateGateResults.fromExecutor(name, executor.execute(cardId, spec, dir))
     }
 
-    private fun scopeGate(cardId: String, changed: List<String>, layers: Set<String>): GateResult {
-        val result = when (val verdict = ScopeGate.check(project, changed, layers)) {
-            ScopeVerdict.Pass -> GateResult("scope", true, null)
-            is ScopeVerdict.Violations ->
-                GateResult("scope", false, "forbidden=${verdict.forbidden.size} outside=${verdict.outsideLayers.size}")
-        }
-        return result.also { record(cardId, it) }
-    }
+    private fun scopeGate(cardId: String, changed: List<String>, layers: Set<String>): ValidateGateResults =
+        ValidateGateResults.fromScope(ScopeGate.check(project, changed, layers)).also { record(cardId, it) }
 
-    private fun specGates(cardId: String, worktree: Path, changed: List<String>): List<GateResult> {
+    private fun specGates(cardId: String, worktree: Path, changed: List<String>): ValidateGateResults {
         val specPath = changed.filter { it.startsWith(SPEC_DIR) && it.endsWith("-design.md") }
             .filter { Files.exists(worktree.resolve(it)) }
             .maxOrNull()
         val results = if (specPath == null) {
-            listOf(GateResult("test-plan", false, "no spec file under $SPEC_DIR"))
+            ValidateGateResults(listOf(GateResult("test-plan", false, "no spec file under $SPEC_DIR")))
         } else {
             val layers = project.layers.map { SpecLayer(it.name, it.path, listOf("${it.path.trimEnd('/')}/**")) }
-            val check = SpecGates.check(Files.readString(worktree.resolve(specPath)), layers)
-            SpecGate.entries.map { gate ->
-                val findings = check.findings.filter { it.gate == gate }
-                GateResult(
-                    gate.name.lowercase().replace('_', '-'),
-                    findings.isEmpty(),
-                    findings.takeIf { it.isNotEmpty() }?.joinToString("; ") { it.message },
-                )
-            }
+            ValidateGateResults.fromSpec(SpecGates.check(Files.readString(worktree.resolve(specPath)), layers))
         }
-        results.forEach { record(cardId, it) }
-        return results
+        return results.also { record(cardId, it) }
     }
+
+    private fun record(cardId: String, results: ValidateGateResults) = results.results.forEach { record(cardId, it) }
 
     private fun record(cardId: String, result: GateResult) {
         val card = store.card(cardId) ?: throw GateCardNotFoundException(cardId)
