@@ -1,0 +1,1 @@
+{"issue": 101, "slug": "daemon-robustez-do-socket-follow-up-do-1", "pipeline": "validate", "started_at": "2026-10-16T02:15:00Z", "finished_at": "2026-10-16T02:30:00Z", "outcome": "ok", "agents": [], "rounds": {}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": false, "amendments": []}
