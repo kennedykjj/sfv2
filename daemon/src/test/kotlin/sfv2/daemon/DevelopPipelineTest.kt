@@ -409,6 +409,26 @@ class DevelopPipelineTest {
     }
 
     @Test
+    fun `AC-4 after two failed green rounds a QA repair session runs before the engineers, and its tests are committed as QA tests`() {
+        card("c1")
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.red, DevelopFixtures.red, DevelopFixtures.green))
+        val commits = CopyOnWriteArrayList<String>()
+        val runtime = succeeding(rounds(3) + 1)
+
+        pipeline(runtime, gates, WorktreeCommit { _, message -> commits.add(message) }, maxRounds = 3).run("c1")
+
+        val roles = runtime.launched.map { it.prompt }.map { prompt ->
+            when {
+                prompt.contains("QA (reparo dos testes)") -> "repair"
+                prompt.contains("QA (passo vermelho)") -> "qa"
+                else -> "engineer"
+            }
+        }
+        assertThat(roles).containsExactly("qa", "engineer", "engineer", "engineer", "engineer", "repair", "engineer", "engineer")
+        assertThat(commits.count { it.startsWith("test(tests)") }).isEqualTo(2)
+    }
+
+    @Test
     fun `AC-5 red gates after the last round block the card naming the failed gates and start no new run`() {
         card("c1")
         val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.red))
@@ -416,7 +436,7 @@ class DevelopPipelineTest {
 
         pipeline(runtime, gates, maxRounds = 3).run("c1")
 
-        assertThat(runtime.launched).hasSize(rounds(1) + 2 * DevelopFixtures.project.layers.size)
+        assertThat(runtime.launched).hasSize(rounds(1) + 2 * DevelopFixtures.project.layers.size + 1)
         val blocked = store.events("c1").single { it.type == EventType.CARD_BLOCKED }
         assertThat(blocked.actor).isEqualTo(Actor.Factory("develop"))
         val reason = requireNotNull(blocked.payload["reason"])

@@ -155,7 +155,7 @@ class RealDevelopGates(
         execute(cardId, GateSpec(gateName(layer, "build"), command, worktree.resolve(layer.path), BUILD_TIMEOUT))
 
     private fun acceptanceEdit(cardId: String, layer: ProjectLayer, worktree: Path, plan: TestPlan): GateResult {
-        val qaCommit = qaCommits[cardId] ?: head.qaCommit(worktree) ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
+        val qaCommit = head.qaCommit(worktree) ?: qaCommits[cardId] ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
         val files = plan.filesOf(layer)
         val verdict = try {
             AcceptanceEditGate(executor, runner).check(cardId, worktree, qaCommit, files, keepAssertions, runDir.resolve(cardId))
@@ -278,6 +278,10 @@ class RealDevelopGates(
 
 /** One pass of the develop stage: QA writes red tests, engineers implement per layer, gates move the card. */
 @Suppress("LongParameterList")
+private const val REPAIR_AFTER_GREEN_FAILURES = 2
+private const val QA_REPAIR_ROLE = "QA (reparo dos testes): a implementação já existe e os gates verdes falharam mais de uma vez. " +
+    "Se a causa é um defeito do próprio teste (preparação, fixture, diretório temporário repetido, id duplicado), " +
+    "corrija só o teste, sem enfraquecer nem remover asserção; se a causa é a implementação, não mude nada"
 private const val MAX_FEEDBACK_GATES = 3
 private const val MAX_FEEDBACK_CHARS = 1500
 private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
@@ -321,8 +325,10 @@ class DevelopPipeline(
         val worktree = worktrees.ensure(project, cardId, card.title)
         var failed: List<GateResult> = reworkReason(cardId)
         var redPassed = redProvenSinceSpec(cardId)
+        var greenFailures = 0
         for (round in 1..maxRounds) {
-            val outcome = playRound(cardId, worktree.path, redPassed, failed)
+            val outcome = playRound(cardId, worktree.path, redPassed, failed, qaRepair = greenFailures >= REPAIR_AFTER_GREEN_FAILURES)
+            greenFailures = if (outcome.redPassed && outcome.failed.isNotEmpty()) greenFailures + 1 else 0
             redPassed = outcome.redPassed
             failed = outcome.failed
             log.log("develop_round", mapOf("card" to cardId, "round" to round.toString(), "failed" to failed.size.toString()))
@@ -368,7 +374,7 @@ class DevelopPipeline(
      * replaying the QA and the red gate over code that already implements the tests could never be red again.
      * The agents of the next round get the output of the gates that failed in the previous one.
      */
-    private fun playRound(cardId: String, worktree: Path, redPassed: Boolean, previous: List<GateResult>): Round {
+    private fun playRound(cardId: String, worktree: Path, redPassed: Boolean, previous: List<GateResult>, qaRepair: Boolean): Round {
         val model = modelStepUp.modelFor(cardId)
         val feedback = feedbackOf(previous)
         if (!redPassed) {
@@ -376,6 +382,11 @@ class DevelopPipeline(
             commitSession(cardId, worktree, "test", "tests")
             val red = gates.red(cardId, worktree).filter { !it.passed }
             if (red.isNotEmpty()) return Round(false, red)
+        }
+        if (redPassed && qaRepair) {
+            // Engineers cannot touch the QA tests: when the green gates failed twice, the test itself may be the defect.
+            runSession(cardId, worktree, model, QA_REPAIR_ROLE, feedback)
+            commitSession(cardId, worktree, "test", "tests")
         }
         val layers = gates.layers(worktree)
         layers.forEach { layer ->
