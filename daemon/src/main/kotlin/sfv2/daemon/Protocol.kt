@@ -278,7 +278,8 @@ fun parseRequest(line: String): Request {
             Request.ProjectAdd(actor, path, stringField(obj, "proof"))
         }
         "project.docs.draft" -> {
-            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            // An actor that is not even parseable is still not the owner: same refusal, before anything is read.
+            val actor = parseActor(obj) ?: return Request.Rejected(ProjectDocsDraft.OWNER_ONLY)
             Request.ProjectDocsDraft(actor, stringField(obj, "project"), stringField(obj, "proof"))
         }
         "card.rebuild" -> {

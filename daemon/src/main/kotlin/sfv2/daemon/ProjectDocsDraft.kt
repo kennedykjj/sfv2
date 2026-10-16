@@ -34,6 +34,7 @@ class ProjectDocsDraft(
 
     fun handle(request: Request): Response = when (request) {
         is Request.ProjectDocsDraft -> draft(request)
+        is Request.Rejected -> Response.Error(request.message)
         else -> Response.Error("not a docs draft command")
     }
 
@@ -41,7 +42,7 @@ class ProjectDocsDraft(
         // The proof is checked before any file is read or any session is opened.
         if (request.actor != Actor.Owner || !ownerProof.matches(request.proof)) {
             log.log("docs_draft_refused", mapOf("cmd" to CMD))
-            return Response.Error("only the owner, with a valid proof, asks for document drafts")
+            return Response.Error(OWNER_ONLY)
         }
         val project = findProject(request.project) ?: return Response.Error("project is not registered or not unique")
         val missing = DOCS.filter { !existsOnMain(project, it) }
@@ -175,6 +176,7 @@ class ProjectDocsDraft(
     companion object {
         const val ROLE = "docs-draft"
         const val DRAFT_DIR = "docs-draft"
+        const val OWNER_ONLY = "only the owner, with a valid proof, asks for document drafts"
         val DOCS = listOf("PRODUCT.md", "ARCHITECTURE.md", "DESIGN.md")
         private const val CMD = "project.docs.draft"
         private const val DRAFTED = "drafted"
