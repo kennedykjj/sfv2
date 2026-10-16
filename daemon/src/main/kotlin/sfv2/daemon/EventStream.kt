@@ -8,6 +8,7 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -29,6 +30,8 @@ class EventStream(
 
     /** Subscribers removed for being slow whose connection is still open, waiting for [sweep] to close it. */
     private val slowDropped = ConcurrentHashMap.newKeySet<Subscriber>()
+
+    private val listeners = CopyOnWriteArrayList<(StoredEvent) -> Unit>()
 
     @Volatile private var closed = false
 
@@ -64,6 +67,18 @@ class EventStream(
     /** Hands [event] to every subscriber without blocking. A subscriber whose queue is full is dropped. */
     fun publish(event: StoredEvent) {
         subscribers.forEach { it.offer(event) }
+        listeners.forEach {
+            try {
+                it(event)
+            } catch (e: RuntimeException) {
+                log.log("stream_listener_failed", mapOf("error" to e.javaClass.simpleName))
+            }
+        }
+    }
+
+    /** Registers an in-process [listener] called on every published event. It must not block. */
+    fun addListener(listener: (StoredEvent) -> Unit) {
+        listeners.add(listener)
     }
 
     /**
