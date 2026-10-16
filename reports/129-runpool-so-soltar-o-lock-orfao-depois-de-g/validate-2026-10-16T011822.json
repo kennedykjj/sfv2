@@ -1,0 +1,1 @@
+{"issue":129,"slug":"runpool-so-soltar-o-lock-orfao-depois-de-g","pipeline":"validate","started_at":"2026-10-16T04:10:00Z","finished_at":"2026-10-16T04:25:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green daemon sfv2.daemon.RunPoolTest"],"amendments":[],"manual_edit":null}
