@@ -8,7 +8,7 @@ class AcceptanceRulesTest {
     private val keep = Regex("assertThat|assertEquals")
 
     @Test
-    fun `AC-3 an edit that adds or removes an assertion line is reported`() {
+    fun `AC-3 an edit that removes or replaces an assertion line is reported, once through the line it removed`() {
         val diff = sequenceOf(
             "diff --git a/FooTest.kt b/FooTest.kt",
             "--- a/FooTest.kt",
@@ -22,9 +22,23 @@ class AcceptanceRulesTest {
 
         val touched = AcceptanceRules.assertionEdit(diff, keep)
 
-        assertThat(touched).hasSize(2)
-        assertThat(touched.filter { it.contains("isEqualTo(1)") }).hasSize(1)
-        assertThat(touched.filter { it.contains("isEqualTo(2)") }).hasSize(1)
+        assertThat(touched).hasSize(1)
+        assertThat(touched.single()).contains("isEqualTo(1)")
+    }
+
+    @Test
+    fun `AC-3 an assertion that is only added is not an edit, but a disabling marker is`() {
+        val diff = sequenceOf(
+            "--- a/FooTest.kt",
+            "+++ b/FooTest.kt",
+            "+    assertThat(y).isEqualTo(2)",
+            "+    @Disabled",
+            "+    assumeTrue(flag)",
+        )
+
+        val touched = AcceptanceRules.assertionEdit(diff, keep)
+
+        assertThat(touched).containsExactly("+    @Disabled", "+    assumeTrue(flag)")
     }
 
     @Test
