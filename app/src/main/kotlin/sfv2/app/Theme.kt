@@ -32,11 +32,14 @@ internal object Texts {
     const val CONNECTED = "Conectado ao daemon"
     const val DISCONNECTED = "Desconectado do daemon"
     const val BOARD = "Esteira"
+    const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
     const val STALE_BOARD = "Desconectado do daemon. Mostrando o último estado conhecido; pode estar desatualizado."
+
+    fun goToColumn(column: BoardColumn, count: Int): String = "Ir para ${column.displayName}, ${cardCount(count)}"
 
     const val SPEC = "Spec"
     const val TIMELINE = "Linha do tempo"
