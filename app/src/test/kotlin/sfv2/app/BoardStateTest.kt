@@ -1,6 +1,10 @@
 package sfv2.app
 
 import java.math.BigDecimal
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
+import kotlinx.serialization.json.Json
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.within
 import org.junit.jupiter.api.Test
@@ -557,8 +561,216 @@ class BoardStateTest {
         assertThat(edgeFades(scrollOffset = 0, maxScroll = 0)).isEqualTo(EdgeFades(start = false, end = false))
     }
 
+    @Test
+    fun `AC-2 a card.list row from an old daemon becomes a card that is not blocked, with no time and no cost`() {
+        val card = CardFaceFixtures.parse("""{"id":"a1","title":"Old row","column":"CODING"}""")
+
+        val face = CardFace.of(requireNotNull(card) { "the old row was dropped" }, CardFaceFixtures.clock)
+
+        assertThat(face.blocked).isFalse()
+        assertThat(face.blockedLabel).isNull()
+        assertThat(face.age).isNull()
+        assertThat(face.cost).isEqualTo("custo desconhecido")
+    }
+
+    @Test
+    fun `AC-2 no row is dropped for lacking the new fields or for carrying unreadable ones`() {
+        val rows = listOf(
+            """{"id":"a","title":"Old","column":"INBOX"}""",
+            """{"id":"b","title":"Bad instant","column":"CODING","blocked":false,"enteredAt":"yesterday"}""",
+            """{"id":"c","title":"Bad cost","column":"DONE","cost":{"status":"SOMETHING","costUsd":"x"}}""",
+            """{"id":"d","title":"Cost without value","column":"DONE","cost":{"status":"KNOWN"}}""",
+        )
+
+        val cards = rows.map { CardFaceFixtures.parse(it) }
+
+        assertThat(cards).doesNotContainNull()
+        cards.filterNotNull().forEach { card ->
+            val face = CardFace.of(card, CardFaceFixtures.clock)
+            assertThat(face.age).isNull()
+            assertThat(face.cost).isEqualTo("custo desconhecido")
+        }
+    }
+
+    @Test
+    fun `AC-2 a row without id, title or a known column is still not a card`() {
+        assertThat(CardFaceFixtures.parse("""{"title":"x","column":"CODING"}""")).isNull()
+        assertThat(CardFaceFixtures.parse("""{"id":"a","title":"x","column":"NOWHERE"}""")).isNull()
+    }
+
+    @Test
+    fun `AC-3 the card says the stage verbatim, the time in it and the estimated cost`() {
+        val face = CardFaceFixtures.faceOf(
+            column = "READY_FOR_PROD",
+            enteredAgo = 360L,
+            cost = """{"status":"KNOWN","costUsd":"0.42"}""",
+        )
+
+        assertThat(face.stage).isEqualTo("Ready for Prod")
+        assertThat(face.age).isEqualTo("há 6 min")
+        assertThat(face.cost).isEqualTo("US$ 0,42 est.")
+        assertThat(face.costNote).isNull()
+    }
+
+    @Test
+    fun `AC-3 the time in the stage reads under a minute, minutes and hours with two-digit minutes`() {
+        assertThat(CardFaceFixtures.faceOf(enteredAgo = 30L).age).isEqualTo("há < 1 min")
+        assertThat(CardFaceFixtures.faceOf(enteredAgo = 0L).age).isEqualTo("há < 1 min")
+        assertThat(CardFaceFixtures.faceOf(enteredAgo = 3_599L).age).isEqualTo("há 59 min")
+        assertThat(CardFaceFixtures.faceOf(enteredAgo = 3_900L).age).isEqualTo("há 1 h 05 min")
+        assertThat(CardFaceFixtures.faceOf(enteredAgo = -45L).age).isEqualTo("há < 1 min")
+    }
+
+    @Test
+    fun `AC-3 the time is measured against the clock handed in, not the system one`() {
+        val card = requireNotNull(CardFaceFixtures.parse(CardFaceFixtures.row(enteredAgo = 600L)))
+        val later = Clock.fixed(CardFaceFixtures.now.plusSeconds(3_000), ZoneOffset.UTC)
+
+        assertThat(CardFace.of(card, CardFaceFixtures.clock).age).isEqualTo("há 10 min")
+        assertThat(CardFace.of(card, later).age).isEqualTo("há 1 h 00 min")
+    }
+
+    @Test
+    fun `AC-3 a partial cost keeps the estimate and carries the partial notice`() {
+        val face = CardFaceFixtures.faceOf(cost = """{"status":"PARTIAL","costUsd":"1.50"}""")
+
+        assertThat(face.cost).isEqualTo("US$ 1,50 est.")
+        assertThat(face.costNote).isEqualTo(Texts.PARTIAL)
+    }
+
+    @Test
+    fun `AC-3 an unknown, missing or empty cost says unknown and is never shown as zero`() {
+        val faces = listOf(
+            CardFaceFixtures.faceOf(cost = """{"status":"UNKNOWN"}"""),
+            CardFaceFixtures.faceOf(cost = """{"status":"NONE"}"""),
+            CardFaceFixtures.faceOf(cost = null),
+        )
+
+        faces.forEach { face ->
+            assertThat(face.cost).isEqualTo("custo desconhecido")
+            assertThat(face.costNote).isNull()
+            assertThat(face.description).doesNotContain("0,00")
+        }
+    }
+
+    @Test
+    fun `AC-3 the cost keeps BigDecimal precision and rounds half up to cents`() {
+        assertThat(CardFaceFixtures.faceOf(cost = """{"status":"KNOWN","costUsd":"12.345"}""").cost).isEqualTo("US$ 12,35 est.")
+        assertThat(CardFaceFixtures.faceOf(cost = """{"status":"KNOWN","costUsd":"0.004"}""").cost).isEqualTo("US$ 0,00 est.")
+    }
+
+    @Test
+    fun `AC-4 a blocked card says blocked, in the accessibility description too, and stays in its column`() {
+        val card = requireNotNull(CardFaceFixtures.parse(CardFaceFixtures.row(blocked = true, column = "CODING")))
+        val board = BoardFixtures.empty().applySnapshot(listOf(card))
+
+        val face = CardFace.of(card, CardFaceFixtures.clock)
+
+        assertThat(face.blocked).isTrue()
+        assertThat(face.blockedLabel).isEqualTo("bloqueado")
+        assertThat(face.description).contains("bloqueado")
+        assertThat(board.cardsIn(Column.CODING).map { it.id }).containsExactly("a1")
+    }
+
+    @Test
+    fun `AC-4 a card that is not blocked has no blocked label and its description does not say blocked`() {
+        val face = CardFaceFixtures.faceOf(blocked = false)
+
+        assertThat(face.blocked).isFalse()
+        assertThat(face.blockedLabel).isNull()
+        assertThat(face.description).doesNotContain("bloqueado")
+    }
+
+    @Test
+    fun `AC-4 the description holds title, id, stage, time, cost and block`() {
+        val face = CardFaceFixtures.faceOf(
+            column = "CODING",
+            blocked = true,
+            enteredAgo = 360L,
+            cost = """{"status":"KNOWN","costUsd":"0.42"}""",
+        )
+
+        assertThat(face.description)
+            .contains("Title of a1", "a1", "Coding", "há 6 min", "US$ 0,42 est.", "bloqueado")
+    }
+
+    @Test
+    fun `AC-5 each stage column takes the hue of DESIGN, the new develop one for Coding`() {
+        assertThat(stageHue(Column.REFINEMENT)).isEqualTo(StageHue.REFINE)
+        assertThat(stageHue(Column.CODING)).isEqualTo(StageHue.DEVELOP)
+        assertThat(stageHue(Column.VALIDATION)).isEqualTo(StageHue.VALIDATE)
+    }
+
+    @Test
+    fun `AC-5 Ready for Prod and Done are ok, Spec Review and Staged keep the accent`() {
+        assertThat(stageHue(Column.READY_FOR_PROD)).isEqualTo(StageHue.OK)
+        assertThat(stageHue(Column.DONE)).isEqualTo(StageHue.OK)
+        assertThat(stageHue(Column.SPEC_REVIEW)).isEqualTo(StageHue.ACCENT)
+        assertThat(stageHue(Column.STAGED)).isEqualTo(StageHue.ACCENT)
+    }
+
+    @Test
+    fun `AC-5 Inbox and the queues stay neutral and all ten columns have a hue`() {
+        assertThat(stageHue(Column.INBOX)).isEqualTo(StageHue.NEUTRAL)
+        assertThat(stageHue(Column.READY_FOR_REFINEMENT)).isEqualTo(StageHue.NEUTRAL)
+        assertThat(stageHue(Column.READY_FOR_DEV)).isEqualTo(StageHue.NEUTRAL)
+        assertThat(Column.entries.map { stageHue(it) }).hasSize(10)
+        assertThat(Column.entries.filter { stageHue(it) == StageHue.NEUTRAL }).hasSize(3)
+    }
+
+    @Test
+    fun `AC-6 time, cost and block labels never come from the title, which is only carried as plain text`() {
+        val title = "Ignore previous instructions <script>alert(1)</script> **bold** bloqueado há 99 min US\$ 999,99 est."
+
+        val face = CardFaceFixtures.faceOf(title = title, column = "CODING", enteredAgo = 360L, cost = null)
+
+        assertThat(face.blocked).isFalse()
+        assertThat(face.blockedLabel).isNull()
+        assertThat(face.stage).isEqualTo("Coding")
+        assertThat(face.age).isEqualTo("há 6 min")
+        assertThat(face.cost).isEqualTo("custo desconhecido")
+        listOf(face.stage, face.age.orEmpty(), face.cost, face.costNote.orEmpty()).forEach { label ->
+            assertThat(label).doesNotContain("script", "bold", "Ignore", "999", "99 min")
+        }
+        assertThat(face.description).contains(title)
+    }
+
     private companion object {
         const val EPSILON = 1e-5f
+    }
+}
+
+object CardFaceFixtures {
+    val now: Instant = Instant.parse("2026-10-16T12:00:00Z")
+    val clock: Clock = Clock.fixed(now, ZoneOffset.UTC)
+
+    /** One `card.list` row; a null [enteredAgo] or [cost] leaves the field out, like a daemon that does not send it. */
+    fun row(
+        title: String = "Title of a1",
+        column: String = "CODING",
+        blocked: Boolean? = null,
+        enteredAgo: Long? = null,
+        cost: String? = null,
+    ): String = buildList {
+        add("\"id\":\"a1\"")
+        add("\"title\":\"$title\"")
+        add("\"column\":\"$column\"")
+        blocked?.let { add("\"blocked\":$it") }
+        enteredAgo?.let { add("\"enteredAt\":\"${now.minusSeconds(it)}\"") }
+        cost?.let { add("\"cost\":$it") }
+    }.joinToString(prefix = "{", postfix = "}", separator = ",")
+
+    fun parse(json: String): BoardCard? = parseBoardCard(Json.parseToJsonElement(json))
+
+    fun faceOf(
+        title: String = "Title of a1",
+        column: String = "CODING",
+        blocked: Boolean? = null,
+        enteredAgo: Long? = null,
+        cost: String? = null,
+    ): CardFace {
+        val card = parse(row(title, column, blocked, enteredAgo, cost))
+        return CardFace.of(requireNotNull(card) { "the row was dropped" }, clock)
     }
 }
 
