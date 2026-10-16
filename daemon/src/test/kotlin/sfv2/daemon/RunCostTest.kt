@@ -391,7 +391,9 @@ class RunCostTest {
     }
 
     private fun unblock(cardId: String, actor: Actor, id: String) {
-        val event = Event(EventId(id), now, actor, EventType.valueOf("CARD_UNBLOCKED"), emptyMap())
+        val type = EventType.entries.firstOrNull { it.name == "CARD_UNBLOCKED" }
+        assertThat(type).describedAs("EventType.CARD_UNBLOCKED exists").isNotNull()
+        val event = Event(EventId(id), now, actor, requireNotNull(type) { "CARD_UNBLOCKED missing" }, emptyMap())
         store.recordChange(cardId, Card.create("Seeded", Column.CODING), event)
     }
 

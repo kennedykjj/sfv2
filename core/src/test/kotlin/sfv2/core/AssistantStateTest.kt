@@ -99,8 +99,11 @@ class AssistantStateTest {
         assertThat(derive(f.aCard(Column.CODING, moved, f.blocked(100)))).isEqualTo(AssistantState.BLOCKED)
     }
 
-    private fun unblocked(minutes: Long, actor: Actor): Event =
-        f.anEvent(EventType.valueOf("CARD_UNBLOCKED"), f.minutesAgo(minutes), actor)
+    private fun unblocked(minutes: Long, actor: Actor): Event {
+        val type = EventType.entries.firstOrNull { it.name == "CARD_UNBLOCKED" }
+        assertThat(type).describedAs("EventType.CARD_UNBLOCKED exists").isNotNull()
+        return f.anEvent(requireNotNull(type) { "CARD_UNBLOCKED missing" }, f.minutesAgo(minutes), actor)
+    }
 
     @Test
     fun `AC-1 an owner CARD_UNBLOCKED after the block closes it and the state is no longer blocked`() {
