@@ -65,6 +65,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                     { project -> ProjectDelivery.trackerOf(project, dataDir.resolve("tracker")) },
                     ownerProof, clock, StderrDaemonLog,
                 ),
+                milestones = refine.milestones,
                 onClose = {
                     runCatching { refine.close() }
                     database.close()

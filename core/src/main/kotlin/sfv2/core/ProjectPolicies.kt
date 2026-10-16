@@ -21,7 +21,19 @@ enum class Milestone(val key: String) {
     PR_OPENED("pr_opened"),
 }
 
-data class Conventions(val commitFormat: String, val branchFormat: String)
+enum class DorField(val key: String) {
+    TITLE("title"),
+    BODY("body"),
+    ACCEPTANCE_CRITERIA("acceptance_criteria"),
+    LABEL("label"),
+}
+
+data class Conventions(
+    val commitFormat: String,
+    val branchFormat: String,
+    val prTemplate: String = ProjectPolicies.DEFAULT_PR_TEMPLATE,
+    val language: String = ProjectPolicies.DEFAULT_LANGUAGE,
+)
 
 class InvalidPolicyException(val field: String, message: String) : RuntimeException(message)
 
@@ -30,12 +42,16 @@ data class ProjectPolicies(
     val signers: Map<ExternalEffect, Signer>,
     val conventions: Conventions,
     val milestones: Set<Milestone> = emptySet(),
+    val dor: Set<DorField> = emptySet(),
 ) {
     companion object {
         private const val DEFAULT_COMMIT_FORMAT = "{type}({scope}): {subject}"
         private const val DEFAULT_BRANCH_FORMAT = "feat/{id}-{slug}"
         private val PLACEHOLDER = Regex("\\{([^{}]*)}")
-        private val COMMIT_PLACEHOLDERS = setOf("type", "scope", "subject", "id")
+        const val DEFAULT_PR_TEMPLATE = ".github/pull_request_template.md"
+        const val DEFAULT_LANGUAGE = "en"
+        private val LANGUAGES = setOf("en", "pt-BR")
+        private val COMMIT_PLACEHOLDERS = setOf("type", "scope", "subject", "id", "ticket")
         private val BRANCH_PLACEHOLDERS = setOf("id", "slug")
 
         val DEFAULT = ProjectPolicies(
@@ -59,9 +75,20 @@ data class ProjectPolicies(
                     branchFormat = format(
                         conventions, "branch_format", DEFAULT_BRANCH_FORMAT, BRANCH_PLACEHOLDERS, "id",
                     ),
+                    prTemplate = text(conventions, "pr_template", DEFAULT_PR_TEMPLATE, null),
+                    language = text(conventions, "language", DEFAULT_LANGUAGE, LANGUAGES),
                 ),
                 milestones = readMilestones(raw["milestones"]),
+                dor = readDor(raw["dor"]),
             )
+        }
+
+        private fun readDor(raw: Any?): Set<DorField> {
+            if (raw == null) return emptySet()
+            if (raw !is List<*>) invalid("dor", raw)
+            return raw.map { item ->
+                DorField.entries.firstOrNull { it.key == item } ?: invalid("dor", item)
+            }.toSet()
         }
 
         private fun readMilestones(raw: Any?): Set<Milestone> {
@@ -83,6 +110,14 @@ data class ProjectPolicies(
                     Signer.entries.firstOrNull { it.key == value } ?: invalid(field, value)
                 } ?: Signer.OWNER
             }
+        }
+
+        private fun text(raw: Map<*, *>?, key: String, default: String, allowed: Set<String>?): String {
+            val value = raw?.get(key) ?: return default
+            val field = "conventions.$key"
+            if (value !is String || value.isBlank()) invalid(field, value)
+            if (allowed != null && value !in allowed) invalid(field, value)
+            return value
         }
 
         private fun format(

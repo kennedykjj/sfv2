@@ -187,6 +187,7 @@ class McpServerFactory(
         put("id", card.id)
         put("title", untrusted(card.title))
         put("column", card.column.name)
+        card.references.firstOrNull()?.let { put("ticket", untrusted(UntrustedText("reference_id", it.externalId))) }
         put(
             "references",
             buildJsonArray {
@@ -199,10 +200,13 @@ class McpServerFactory(
 
     private fun policiesJson(policies: ProjectPolicies): JsonObject = buildJsonObject {
         put("deliveryMode", policies.deliveryMode.key)
+        putJsonArray("dor") { policies.dor.forEach { add(JsonPrimitive(it.key)) } }
         putJsonObject("signers") { policies.signers.forEach { (effect, signer) -> put(effect.key, signer.key) } }
         putJsonObject("conventions") {
             put("commitFormat", policies.conventions.commitFormat)
             put("branchFormat", policies.conventions.branchFormat)
+            put("prTemplate", policies.conventions.prTemplate)
+            put("language", policies.conventions.language)
         }
     }
 

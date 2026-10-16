@@ -45,6 +45,7 @@ class ValidatePipeline(
     private val changedPaths: ChangedPaths = GitChangedPaths(),
     private val conflicts: ConflictResolver? = null,
     private val milestones: ExternalMilestones? = null,
+    private val files: ProjectFileSource = NoProjectFiles,
 ) {
     private val outcome = ValidationOutcome(store, recorder, project.layers.map { it.name }.toSet(), clock)
 
@@ -103,10 +104,25 @@ class ValidatePipeline(
         )
 
     private fun deliver(cardId: String, worktree: CardWorktree): CiResult {
-        val title = store.card(cardId)?.title ?: cardId
-        val result = delivery.deliver(cardId, worktree.branch, title, "Card $cardId", worktree.path)
+        val card = store.card(cardId)
+        val subject = card?.title ?: cardId
+        val ticket = card?.let { ConventionText.ticketOf(it.references) }
+        val conventions = project.policies.conventions
+        val scope = project.layers.firstOrNull()?.name ?: ""
+        val title = ConventionText.pullRequestTitle(conventions.commitFormat, scope, subject, cardId, ticket)
+        val body = ConventionText.pullRequestBody(prTemplate(cardId, conventions.prTemplate), conventions.language, cardId, ticket)
+        val result = delivery.deliver(cardId, worktree.branch, title, body, worktree.path)
         if (result is CiResult.Green) milestones?.reached(cardId, Milestone.PR_OPENED, result.pr.toString())
         return result
+    }
+
+    /** The template as committed on main; null (minimal body) when it is absent or cannot be read. */
+    @Suppress("TooGenericExceptionCaught")
+    private fun prTemplate(cardId: String, path: String): String? = try {
+        files.read(Path.of(project.repo), path)
+    } catch (e: RuntimeException) {
+        log.log("pr_template_unreadable", mapOf("card" to cardId, "reason" to e.javaClass.simpleName))
+        null
     }
 
     private fun layerWithMostChanges(worktree: Path): String {

@@ -25,6 +25,9 @@ import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
+import sfv2.core.ExternalRef
+import sfv2.core.ProjectPolicies
+import sfv2.core.TextHash
 import sfv2.ports.ChecksState
 import sfv2.ports.FailedCheck
 import sfv2.ports.FakeForge
@@ -75,9 +78,13 @@ class ValidatePipelineTest {
         database.close()
     }
 
-    private fun card(id: String) {
+    private fun card(id: String, ticket: String? = null) {
         val event = Event(EventId("seed-$id"), clock.instant(), Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Validate $id"))
-        store.recordChange(id, Card.create("Validate $id", Column.VALIDATION), event)
+        val created = Card.create("Validate $id", Column.VALIDATION)
+        val withTicket = ticket?.let {
+            created.withReference(ExternalRef("jira", it, "https://tracker.invalid/$it", clock.instant(), TextHash.of(it)))
+        } ?: created
+        store.recordChange(id, withTicket, event)
     }
 
     private fun report(cardId: String, summary: String, at: Instant) {
@@ -722,6 +729,7 @@ class ValidatePipelineTest {
                 type == PullRequestDelivery::class.java -> null
                 type == ConflictResolver::class.java -> null
                 type == ExternalMilestones::class.java -> null
+                type == ProjectFileSource::class.java -> StubFiles()
                 type.isPrimitive -> 4317
                 else -> values.first { type.isInstance(it) }
             }
@@ -735,6 +743,83 @@ class ValidatePipelineTest {
     }
 
     private fun runtime(): Runtime = FakeRuntime(emptyList())
+
+    // Issue #90 (convencoes corporativas). The pipeline gets a ProjectFileSource constructor parameter (default: no
+    // files) from which the deliver step reads `conventions.pr_template` as committed on main. The constructor is
+    // filled by parameter type so these tests compile before that parameter exists and fail by assertion instead.
+
+    private class StubFiles(private val files: Map<String, String> = emptyMap(), private val failure: RuntimeException? = null) :
+        ProjectFileSource {
+        val requested = mutableListOf<Pair<Path, String>>()
+
+        override fun read(repo: Path, path: String): String? {
+            requested.add(repo to path)
+            failure?.let { throw it }
+            return files[path]
+        }
+    }
+
+    private fun conventionPolicies(vararg conventions: Pair<String, String>) =
+        ProjectPolicies.from(mapOf("conventions" to mapOf(*conventions)))
+
+    private fun deliveryOf(conventionProject: Project, files: ProjectFileSource): ValidatePipeline {
+        val constructor = ValidatePipeline::class.java.declaredConstructors.single { !it.isSynthetic && Modifier.isPublic(it.modifiers) }
+        assertThat(constructor.parameterTypes).describedAs("ValidatePipeline takes a ProjectFileSource").contains(ProjectFileSource::class.java)
+        val values = listOf<Any>(
+            conventionProject, store, recorder, worktrees, sessions, reviewing(approved), RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log),
+            sync(MergeResult.Merged), gates(green), configDir, clock, log, GitChangedPaths(), "model-a", greenDelivery(), files,
+        )
+        val arguments = constructor.parameterTypes.map { type ->
+            when {
+                type == ConflictResolver::class.java -> null
+                type == ExternalMilestones::class.java -> null
+                type.isPrimitive -> 3
+                else -> values.first { type.isInstance(it) }
+            }
+        }.toTypedArray()
+        return constructor.newInstance(*arguments) as ValidatePipeline
+    }
+
+    private val template = "## Summary\n\n## How to test\n"
+
+    @Test
+    fun `AC-3 the PR body follows the template read from main at the configured path and carries the ticket line`() {
+        card("c1", ticket = "PROJ-123")
+        val files = StubFiles(mapOf("docs/pr.md" to template))
+        val configured = project.copy(
+            policies = conventionPolicies("pr_template" to "docs/pr.md", "commit_format" to "[{ticket}] {subject}"),
+        )
+
+        deliveryOf(configured, files).run("c1")
+
+        assertThat(files.requested).contains(Path.of(project.repo) to "docs/pr.md")
+        val opened = forge.opened.single()
+        assertThat(opened.body).contains(template).contains("Ticket: PROJ-123")
+        assertThat(opened.title).isEqualTo("[PROJ-123] Validate c1")
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+    }
+
+    @Test
+    fun `AC-4 with language pt-BR the body labels come in Portuguese`() {
+        card("c1", ticket = "PROJ-123")
+        val configured = project.copy(policies = conventionPolicies("language" to "pt-BR"))
+
+        deliveryOf(configured, StubFiles(mapOf(".github/pull_request_template.md" to template))).run("c1")
+
+        assertThat(forge.opened.single().body).contains(template).contains("Chamado: PROJ-123").doesNotContain("Ticket:")
+    }
+
+    @Test
+    fun `AC-5 a template that cannot be read falls back to the minimal body and the card still reaches Staged`() {
+        card("c1", ticket = "PROJ-123")
+        val broken = StubFiles(failure = InvalidProjectConfigException("pull_request_template.md", "exceeds the byte limit"))
+
+        deliveryOf(project, broken).run("c1")
+
+        assertThat(forge.opened.single().body).contains("Card c1").doesNotContain("Ticket: {")
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+        assertThat(events(EventType.CARD_BLOCKED)).isEmpty()
+    }
 
     @Test
     fun `AC-2 an approval with no CI result from the delivery never stages`() {
