@@ -73,6 +73,10 @@ class McpReadTools(
             ?: throw McpToolException("project ${session.repo} is not registered")
 
     private fun requireOwnCard(tool: String, cardId: String) {
+        if (!CARD_ID.matches(cardId)) {
+            log.log("mcp_refused", mapOf("tool" to tool, "reason" to "invalid_card_id"))
+            throw McpToolException("argument cardId is invalid")
+        }
         if (store.projectOf(cardId) != session.repo) {
             log.log("mcp_refused", mapOf("tool" to tool, "card" to cardId))
             throw McpToolException("card $cardId does not belong to project ${project().name}")
@@ -80,6 +84,7 @@ class McpReadTools(
     }
 
     private companion object {
+        val CARD_ID = Regex("[A-Za-z0-9-]{1,64}")
         const val CRITERIA_PATH = ".shipfloor/review-criteria.md"
         const val CRITERIA_FILE = "review-criteria.md"
         const val MAX_BYTES = ProjectFileSource.MAX_BYTES
