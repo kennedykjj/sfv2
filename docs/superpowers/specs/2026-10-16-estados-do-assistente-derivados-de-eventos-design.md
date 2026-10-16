@@ -12,9 +12,9 @@ _Product Owner_
 
 **Critérios de aceitação** (função pura no `core`, sobre `List<Event>` de `Event.kt`; instante atual, janela de noite e limiares entram por parâmetro; sem IO nem relógio do sistema):
 - AC-1 (ocioso): Dado um log sem card em andamento, aguardando o dono nem bloqueado, e fora da noite, quando o estado é derivado, então é `OCIOSO`.
-- AC-2 (trabalhando): Dado um log com ao menos um card numa coluna de agente (Refinement, Coding, Validation) e nenhum bloqueio em aberto nele, quando o estado é derivado, então é `TRABALHANDO`.
-- AC-3 (esperando o dono): Dado um log com card em Spec Review ou Ready for Prod sem decisão do dono posterior (`OWNER_APPROVED`), quando o estado é derivado, então é `ESPERANDO_DONO`.
-- AC-4 (bloqueado): Dado um log com `CARD_BLOCKED` sem movimento posterior do mesmo card, quando o estado é derivado, então é `BLOQUEADO`.
+- AC-2 (trabalhando): Dado ao menos um card numa coluna de trabalho da fábrica (Refinement, Coding, Validation ou Ready for Prod, que a fábrica entrega ou espera o merge e o dono já agiu) e nenhum bloqueio em aberto nele, quando o estado é derivado, então é `TRABALHANDO`.
+- AC-3 (esperando o dono): Dado um card em Spec Review ou em Staged (as duas colunas em que a decisão é só do dono), quando o estado é derivado, então é `ESPERANDO_DONO`.
+- AC-4 (bloqueado): Dado um log com `CARD_BLOCKED` sem movimento posterior do dono no mesmo card (`CARD_MOVED` com ator dono ou `OWNER_APPROVED`, a mesma regra do `CostBudget.isBlocked`; um movimento da fábrica não desbloqueia), quando o estado é derivado, então é `BLOQUEADO`.
 - AC-5 (noite): Dado o instante atual dentro da janela noturna recebida por parâmetro (hora inicial e final, podendo cruzar a meia-noite, no fuso recebido), quando o estado é derivado, então é `NOITE`, e fora da janela nunca é `NOITE`.
 - AC-6 (cansado): Dado ao menos N eventos de falha (`CARD_BLOCKED` ou `GATE_FINISHED` com resultado falho) nos últimos W minutos antes do instante atual, quando o estado é derivado, então é `CANSADO`; falhas mais antigas que W não contam.
 - AC-7 (precedência): Dado um log que satisfaz vários estados, quando o estado é derivado, então vale a ordem `NOITE` > `CANSADO` > `BLOQUEADO` > `ESPERANDO_DONO` > `TRABALHANDO` > `OCIOSO`, com um teste por par adjacente.
@@ -39,8 +39,8 @@ _Tech Lead_
   - `enum class AssistantState { IDLE, WORKING, WAITING_OWNER, BLOCKED, NIGHT, TIRED }` (os nomes em português da spec são os rótulos de produto; o código segue o inglês).
   - `data class AssistantStateRules(val nightStart: LocalTime = 22:00, val nightEnd: LocalTime = 07:00, val zone: ZoneId, val tiredFailures: Int = 3, val tiredWindow: Duration = 60 min)`.
   - `object AssistantStates { fun derive(cardEvents: Map<String, List<Event>>, now: Instant, rules: AssistantStateRules): AssistantState }`.
-- Entrada por card (`cardId` → eventos), porque `Event` não carrega o id do card. A função ordena cada lista por `at` (desempate pela posição original) antes de ler.
-- Regras por card: coluna = `to` do último `CARD_MOVED` (sem movimento: `INBOX`). Trabalhando = coluna `REFINEMENT`, `CODING` ou `VALIDATION` e sem bloqueio em aberto. Esperando = coluna `SPEC_REVIEW` ou `READY_FOR_PROD` sem `OWNER_APPROVED` depois do último movimento. Bloqueio em aberto = `CARD_BLOCKED` sem `CARD_MOVED` posterior no mesmo card.
+- Entrada por card: `AssistantCard(column: Column, events: List<Event>)` (o `cardId` fica fora, `Event` não o carrega), com a coluna lida do card guardado e não deduzida dos eventos: cards nascidos direto numa coluna (importados da V0, reconstruídos do forge) têm só `CARD_CREATED` sem coluna, e a aprovação do dono em Spec Review grava `OWNER_APPROVED` e não `CARD_MOVED`, então deduzir pelo último `CARD_MOVED` erraria a coluna. `derive(cards: List<AssistantCard>, now, rules)`. A função ordena cada lista de eventos por `at` (desempate pela posição original) antes de ler.
+- Regras por card: trabalhando = coluna `REFINEMENT`, `CODING`, `VALIDATION` ou `READY_FOR_PROD` e sem bloqueio em aberto. Esperando = coluna `SPEC_REVIEW` ou `STAGED`. Bloqueio em aberto = `CARD_BLOCKED` sem `CARD_MOVED` de ator dono nem `OWNER_APPROVED` depois dele no mesmo card.
 - Falha (para cansado) = `CARD_BLOCKED`, ou `GATE_FINISHED` com `payload["verdict"] == "FAIL"` (chave gravada hoje por `DevelopPipeline.recordScope`), com `at` em `(now - tiredWindow, now]`, somando todos os cards.
 - Precedência: `NIGHT > TIRED > BLOCKED > WAITING_OWNER > WORKING > IDLE`. Janela noturna usa `now` no `zone`, com `nightStart > nightEnd` cruzando a meia-noite; início inclusivo, fim exclusivo.
 
