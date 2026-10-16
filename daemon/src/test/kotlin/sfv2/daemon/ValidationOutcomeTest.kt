@@ -12,6 +12,8 @@ import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
 import sfv2.core.EventType
+import sfv2.core.ExternalRef
+import sfv2.core.TextHash
 import sfv2.ports.FakeRuntime
 import sfv2.ports.SessionRequest
 import sfv2.ports.SessionResult
@@ -30,6 +32,7 @@ class ValidationOutcomeTest {
         report: String,
         gates: GatesState,
         ci: () -> CiResult = { error("ci must only run for an approval with green gates") },
+        reference: ExternalRef? = null,
         check: (CardEventStore, ValidationDecision) -> Unit,
     ) {
         Files.createDirectories(dir)
@@ -43,7 +46,8 @@ class ValidationOutcomeTest {
             Files.createDirectories(repo.resolve(".git"))
             config.files[repo.toRealPath()] = McpFixtures.yaml("alpha")
             val project = registry.register(repo)
-            store.recordChange("c38", Card.create("Skill de validate", Column.VALIDATION), McpFixtures.anEvent("e-c38"))
+            val card = Card.create("Skill de validate", Column.VALIDATION).let { base -> reference?.let { base.withReference(it) } ?: base }
+            store.recordChange("c38", card, McpFixtures.anEvent("e-c38"))
             store.assignProject("c38", project.repo)
             val worktrees = WorktreeManager(dir.resolve("wt"), WorktreeFixtures.FakeWorktreeGit())
             val worktree = Files.createDirectories(worktrees.ensure(project, "c38", "Skill de validate").path)
@@ -92,6 +96,20 @@ class ValidationOutcomeTest {
             assertThat(decision).isEqualTo(ValidationDecision.Held)
             assertThat(store.card("c38")?.column).isEqualTo(Column.VALIDATION)
             assertThat(moves(store)).isEmpty()
+        }
+    }
+
+    @Test
+    fun `AC-5 a staged or returned card keeps its external reference`(@TempDir dir: Path) {
+        val ref = ExternalRef("github", "12", "https://github.com/o/r/issues/12", Instant.parse("2026-10-16T09:00:00Z"), TextHash("a".repeat(64)))
+
+        validate(dir.resolve("staged"), "VERDICT: APPROVED\nsem achados", GatesState.GREEN, { CiResult.Green(7) }, ref) { store, _ ->
+            assertThat(store.card("c38")?.column).isEqualTo(Column.STAGED)
+            assertThat(store.card("c38")?.references).containsExactly(ref)
+        }
+        validate(dir.resolve("returned"), "VERDICT: BLOCKED layer=daemon\nfalta teste", GatesState.GREEN, reference = ref) { store, _ ->
+            assertThat(store.card("c38")?.column).isEqualTo(Column.CODING)
+            assertThat(store.card("c38")?.references).containsExactly(ref)
         }
     }
 

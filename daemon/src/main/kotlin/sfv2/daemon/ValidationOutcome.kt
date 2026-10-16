@@ -110,7 +110,7 @@ class ValidationOutcome(
             type = EventType.CARD_MOVED,
             payload = mapOf("from" to card.column.name, "to" to to.name) + extra,
         )
-        recorder.record(cardId, Card.create(card.title, to), event)
+        recorder.record(cardId, card.movedTo(to), event)
         return true
     }
 
