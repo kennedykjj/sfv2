@@ -40,7 +40,8 @@ object DispatcherFixtures {
         }
     }
 
-    class FakeLauncher : StageLauncher {
+    /** Starts "runs" that stay alive in [probe] until the test lets them die. */
+    class FakeLauncher(private val probe: RunPoolFixtures.FakeProbe? = null) : StageLauncher {
         val launched = mutableListOf<Pair<DispatchStage, String>>()
         val failing = mutableSetOf<String>()
         val attempts = mutableListOf<String>()
@@ -51,7 +52,9 @@ object DispatcherFixtures {
             attempts.add(cardId)
             if (cardId in failing) throw IllegalStateException("binary missing secret-detail")
             launched.add(stage to cardId)
-            return LaunchedRun(nextPid++, processStart)
+            val pid = nextPid++
+            probe?.alive?.add(pid)
+            return LaunchedRun(pid, processStart)
         }
     }
 
@@ -86,11 +89,11 @@ class DispatcherTest {
     private lateinit var stream: EventStream
     private lateinit var recorder: EventRecorder
     private val clock = DispatcherFixtures.MutableClock()
-    private val launcher = DispatcherFixtures.FakeLauncher()
     private val pause = DispatcherFixtures.FakePause()
     private val schedule = DispatcherFixtures.FakeSchedule()
     private val log = DispatcherFixtures.RecordingLog()
     private val probe = RunPoolFixtures.FakeProbe()
+    private val launcher = DispatcherFixtures.FakeLauncher(probe)
     private val toClose = mutableListOf<AutoCloseable>()
 
     @BeforeEach
@@ -140,6 +143,27 @@ class DispatcherTest {
     private fun moved(cardId: String, column: Column) {
         val event = Event(EventId("move-$cardId-$column"), clock.instant(), Actor.Owner, EventType.CARD_MOVED, mapOf("to" to column.name))
         recorder.record(cardId, Card.create("Card $cardId", column), event)
+    }
+
+    @Test
+    fun `a run that ended frees its slot on the next cycle even while paused, and the next card starts`() {
+        card("a", Column.READY_FOR_DEV)
+        card("b", Column.READY_FOR_DEV)
+        val pool = pool(capacity = 1)
+        val dispatcher = dispatcher(pool)
+        assertThat(dispatcher.runCycle().map { it.cardId }).containsExactly("a")
+        assertThat(dispatcher.runCycle()).isEmpty()
+        assertThat(pool.active().map { it.cardId }).containsExactly("a")
+
+        moved("a", Column.CODING)
+        probe.alive.clear()
+        pause.paused = true
+        assertThat(dispatcher.runCycle()).isEmpty()
+        assertThat(pool.active()).isEmpty()
+        pause.paused = false
+
+        assertThat(dispatcher.runCycle().map { it.cardId }).containsExactly("b")
+        assertThat(store.events("a").map { it.type.name }).contains("LOCK_RELEASED")
     }
 
     @Test
@@ -222,6 +246,7 @@ class DispatcherTest {
         card("b", Column.READY_FOR_DEV)
         val pool = pool(capacity = 2)
         val held = (pool.tryStart("a", 77, DispatcherFixtures.start) as StartDecision.Started).lock
+        probe.alive.add(77)
         val dispatcher = dispatcher(pool)
 
         val started = dispatcher.runCycle()
