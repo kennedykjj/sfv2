@@ -344,6 +344,14 @@ class RefinePipelineTest {
         return Triple(daemon, alpha, beta)
     }
 
+    /** The refine run reached its end (moved on, blocked or failed), so nothing writes under the temp dir any more. */
+    private fun refineEnded(daemon: ComposedDaemon, cardId: String) =
+        RefineFixtures.await {
+            listOf("refine_moved", "refine_blocked", "refine_failed").any { name ->
+                daemon.log.events(name).any { it.second["card"] == cardId && (name != "refine_moved" || it.second["to"] != Column.REFINEMENT.name) }
+            }
+        }
+
     private fun refineFailed(daemon: ComposedDaemon, cardId: String) =
         RefineFixtures.await { daemon.log.events("refine_failed").any { it.second["card"] == cardId } }
 
@@ -385,6 +393,7 @@ class RefinePipelineTest {
 
             assertThat(daemon.cycle()).containsExactly(DispatchedRun(DispatchStage.REFINE, "c3"))
 
+            assertThat(refineEnded(daemon, "c3")).isTrue()
             assertThat(RefineFixtures.await { daemon.store.card("c3")?.column == Column.REFINEMENT }).isTrue()
             assertThat(daemon.store.projectOf("c3")).isEqualTo(alpha.toString())
         }

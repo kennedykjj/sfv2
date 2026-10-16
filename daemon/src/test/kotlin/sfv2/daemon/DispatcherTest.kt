@@ -591,12 +591,23 @@ class DispatcherTest {
             "dispatcher:\n  enabled: true\ncost:\n  per_card_usd: abc\n  per_day_usd: 20\n",
             "dispatcher:\n  enabled: \"yes\"\n" + ComposedDaemon.LIMITS,
             "dispatcher:\n  enabled: true\nwork_hours:\n  start: \"09:00\"\n  end: \"18:00\"\n  timezone: Mars/Base\n" + ComposedDaemon.LIMITS,
-            "dispatcher: [broken\n",
         ).forEach { extra ->
             val daemon = composed(extra)
 
             assertThat(daemon.cycle()).`as`(extra).isEmpty()
         }
+    }
+
+    @Test
+    fun `AC-2 a malformed factory yml after registration fails closed`() {
+        val daemon = ComposedDaemon(dir.resolve("composed-${System.nanoTime()}").also { Files.createDirectories(it) })
+        toClose.add(daemon)
+        val repo = daemon.repo("alpha", ComposedDaemon.ENABLED + ComposedDaemon.LIMITS)
+        daemon.prices()
+        daemon.card("c1")
+        daemon.setConfig(repo, "dispatcher: [broken\n")
+
+        assertThat(daemon.cycle()).isEmpty()
     }
 
     @Test
