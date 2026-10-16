@@ -30,6 +30,7 @@ class SocketServer private constructor(
     private val log: DaemonLog,
     private val pause: (Long) -> Unit,
     private val commands: CardCommands?,
+    private val projects: ProjectCommands?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
 
@@ -92,6 +93,8 @@ class SocketServer private constructor(
     private fun dispatch(request: Request): Response = when (request) {
         Request.Ping -> Response.Pong
         is Request.Rejected -> Response.Error(request.message)
+        is Request.ProjectAdd, Request.ProjectList ->
+            projects?.handle(request) ?: Response.Error("project commands are not available")
         is Request.Subscribe, is Request.CardCreate, is Request.CardMove, Request.CardList, is Request.CardShow ->
             commands?.handle(request) ?: Response.Error("card commands are not available")
     }
@@ -149,6 +152,7 @@ class SocketServer private constructor(
             log: DaemonLog = StderrDaemonLog,
             pause: (Long) -> Unit = Thread::sleep,
             commands: CardCommands? = null,
+            projects: ProjectCommands? = null,
             onClose: () -> Unit = {},
         ): SocketServer {
             prepareDirectory(path)
@@ -171,7 +175,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {
