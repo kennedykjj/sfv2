@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -49,7 +54,12 @@ private val DAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/y
 private const val NARROW_DP = 560
 
 @Composable
-fun FeedScreen(state: FeedState, today: LocalDate, onSelectDay: (LocalDate) -> Unit) {
+fun FeedScreen(
+    state: FeedState,
+    today: LocalDate,
+    onSelectDay: (LocalDate) -> Unit,
+    onSelectStage: (String?) -> Unit = {},
+) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Tokens.ground)) {
         val compact = maxWidth < NARROW_DP.dp
         Column(
@@ -58,9 +68,49 @@ fun FeedScreen(state: FeedState, today: LocalDate, onSelectDay: (LocalDate) -> U
         ) {
             Header(state, today, onSelectDay)
             CostPanel(state.cost, compact)
-            Body(state)
+            StageChips(state, onSelectStage)
+            Body(state, compact)
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StageChips(state: FeedState, onSelect: (String?) -> Unit) {
+    if (state.stages.size <= 1) return
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        state.stages.forEach { chip ->
+            val label = "${chip.stage?.replaceFirstChar { it.uppercase() } ?: Texts.ALL_STAGES} ${chip.count}"
+            StageChipButton(label, selected = chip.stage == state.stage) { onSelect(chip.stage) }
+        }
+    }
+}
+
+/** A chip of at least 32dp; the selected one changes border and weight, not only color. */
+@Composable
+private fun StageChipButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(6.dp)
+    BasicText(
+        label,
+        modifier = Modifier
+            .heightIn(min = 32.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .border(2.dp, if (focused) Tokens.sand else Color.Transparent, shape)
+            .border(1.dp, if (selected) Tokens.edgeHi else Tokens.edge, shape)
+            .selectable(selected = selected, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        style = TextStyle(
+            fontFamily = sans,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) Tokens.text else Tokens.soft,
+        ),
+    )
 }
 
 @Composable
@@ -111,7 +161,7 @@ private fun FocusableText(text: String, description: String, enabled: Boolean, o
 }
 
 @Composable
-private fun Body(state: FeedState) {
+private fun Body(state: FeedState, compact: Boolean) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (state.earlierHistoryUnavailable) {
             BasicText(Texts.EARLIER_HISTORY_UNAVAILABLE, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
@@ -119,8 +169,8 @@ private fun Body(state: FeedState) {
         when {
             state.loading -> Note(Texts.LOADING)
             state.failed -> Note(Texts.FEED_ERROR)
-            state.rows.isEmpty() -> Note(Texts.EMPTY_DAY)
-            else -> EventList(state.rows)
+            state.rows.isEmpty() -> Note(if (state.stage != null) Texts.EMPTY_STAGE else Texts.EMPTY_DAY)
+            else -> EventList(state.rows, compact)
         }
     }
 }
@@ -131,7 +181,7 @@ private fun Note(text: String) {
 }
 
 @Composable
-private fun EventList(rows: List<FeedRow>) {
+private fun EventList(rows: List<FeedRow>, compact: Boolean) {
     val listState = rememberLazyListState()
     val atEnd by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= rows.lastIndex } ?: true } }
     var seen by remember { mutableStateOf(rows.size) }
@@ -142,7 +192,7 @@ private fun EventList(rows: List<FeedRow>) {
     val unseen = rows.size - seen
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-            items(rows, key = { it.seq }) { EventRow(it) }
+            items(rows, key = { it.seq }) { EventRow(it, compact) }
         }
         if (unseen > 0) {
             Box(Modifier.align(Alignment.BottomCenter).background(Tokens.panel, RoundedCornerShape(8.dp))) {
@@ -156,17 +206,63 @@ private fun EventList(rows: List<FeedRow>) {
 }
 
 @Composable
-private fun EventRow(row: FeedRow) {
+private fun EventRow(row: FeedRow, compact: Boolean) {
+    val actorText = listOfNotNull(row.actorKind, row.actorDetail).joinToString(" · ")
+    if (compact) {
+        Column(Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(vertical = 2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                EventHead(row)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ActorLabel(actorText)
+                CostLabel(row)
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            EventHead(row)
+            ActorLabel(actorText)
+            Box(Modifier.weight(1f))
+            CostLabel(row)
+        }
+    }
+}
+
+@Composable
+private fun EventHead(row: FeedRow) {
+    BasicText(row.time, style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = Tokens.muted))
+    Mark(row.outcome)
+    BasicText(row.type, style = TextStyle(fontFamily = sans, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text))
+    BasicText(row.card, style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft))
+}
+
+@Composable
+private fun ActorLabel(text: String) {
+    BasicText(text, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
+}
+
+/** The event's own estimate (mono, tabular); a partial or unknown cost also carries its tag and a screen-reader text. */
+@Composable
+private fun CostLabel(row: FeedRow) {
+    val cost = row.cost ?: return
+    val tag = when (row.costTag) {
+        CostTag.Partial -> Texts.PARTIAL
+        CostTag.Unknown -> Texts.UNKNOWN
+        null -> null
+    }
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.semantics { contentDescription = listOfNotNull(cost, tag).joinToString(", ") },
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        BasicText(row.time, style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = Tokens.muted))
-        Mark(row.outcome)
-        BasicText(row.type, style = TextStyle(fontFamily = sans, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text))
-        BasicText(row.card, style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.soft))
-        BasicText(row.actor, style = TextStyle(fontFamily = sans, fontSize = 13.sp, color = Tokens.muted))
+        BasicText(
+            cost,
+            style = TextStyle(fontFamily = mono, fontSize = 12.sp, color = Tokens.muted, fontFeatureSettings = "tnum", textAlign = TextAlign.End),
+        )
+        if (tag != null) BasicText(tag, style = TextStyle(fontFamily = sans, fontSize = 12.sp, color = Tokens.warn))
     }
 }
 

@@ -285,9 +285,12 @@ fun main() {
                     feed != null && feedAvailable && showFeed -> ScreenWithTabs(showFeed = true, onSelect = { showFeed = it }) {
                         val feedState by feed.client.state.collectAsState()
                         val scope = rememberCoroutineScope()
-                        FeedScreen(feedState, LocalDate.now(feed.clock.withZone(feed.zone))) { day ->
-                            scope.launch(Dispatchers.IO) { feed.client.selectDay(day) }
-                        }
+                        FeedScreen(
+                            feedState,
+                            LocalDate.now(feed.clock.withZone(feed.zone)),
+                            onSelectDay = { day -> scope.launch(Dispatchers.IO) { feed.client.selectDay(day) } },
+                            onSelectStage = { stage -> scope.launch(Dispatchers.IO) { feed.client.selectStage(stage) } },
+                        )
                     }
                     // The belt stays on screen (dimmed) once it has been drawn; before that, the connection screen.
                     view != null -> ScreenWithTabs(showFeed = false, onSelect = { showFeed = it }, tabs = feedAvailable) {
