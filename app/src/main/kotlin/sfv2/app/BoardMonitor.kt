@@ -26,6 +26,8 @@ class BoardMonitor(
     private val source: BoardSource,
     private val connection: StateFlow<ConnectionState>,
     private val io: CoroutineDispatcher,
+    private val observer: (BoardEvent, BoardCard?) -> Unit = { _, _ -> },
+    private val snapshotObserver: (List<BoardCard>) -> Unit = {},
 ) : BoardEdits {
     private val mutableView = MutableStateFlow<BoardView?>(null)
     val view: StateFlow<BoardView?> = mutableView
@@ -90,6 +92,7 @@ class BoardMonitor(
             board = board.applySnapshot(cards)
             hasSnapshot = true
         }
+        snapshotObserver(cards)
         drainWaiting()
         return true
     }
@@ -121,6 +124,7 @@ class BoardMonitor(
             board = board.applyEvent(event, fetched)
             publish()
         }
+        observer(event, fetched)
     }
 
     private fun fetchOrNull(id: String): BoardCard? =

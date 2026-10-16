@@ -44,6 +44,7 @@ class CardCommands(
         is Request.CardShow -> show(request.id)
         is Request.CardDetail -> detail(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(visibleCards()) { store.events(it) }))
+        is Request.AuditExport -> auditExport(request)
         is Request.EventsRecent -> recent(request.limit)
         Request.SettingsGet, is Request.SettingsSave, Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm, is Request.CostSummary -> Response.Error("not a card command")
     }
@@ -182,6 +183,13 @@ class CardCommands(
     private fun show(id: String): Response {
         val card = store.card(id) ?: return notFound(id)
         return Response.CardResult(CardView(id, card.title, card.column))
+    }
+
+    private fun auditExport(request: Request.AuditExport): Response {
+        val format = AuditFormat.parse(request.format)
+            ?: return Response.Error("invalid audit format for card ${request.id}: use json or csv")
+        store.card(request.id) ?: return notFound(request.id)
+        return Response.AuditResult(AuditExport.render(request.id, store.events(request.id), format))
     }
 
     private fun detail(id: String): Response {

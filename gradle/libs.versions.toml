@@ -10,6 +10,7 @@ mcp-sdk = "0.15.0"
 ktor = "3.5.1"
 compose-multiplatform = "1.12.1"
 kotlinx-coroutines = "1.10.2"
+dbus-java = "5.1.1"
 
 [libraries]
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -27,6 +28,8 @@ mcp-kotlin-sdk-server = { module = "io.modelcontextprotocol:kotlin-sdk-server", 
 ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+dbus-java-core = { module = "com.github.hypfvieh:dbus-java-core", version.ref = "dbus-java" }
+dbus-java-transport-native-unixsocket = { module = "com.github.hypfvieh:dbus-java-transport-native-unixsocket", version.ref = "dbus-java" }
 
 [plugins]
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }

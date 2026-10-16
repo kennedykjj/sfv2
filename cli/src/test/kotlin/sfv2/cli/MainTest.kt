@@ -273,6 +273,38 @@ class MainTest {
     }
 
     @Test
+    fun `AC-6 audit export prints the document, defaults to json and needs no token`() {
+        fakeDaemon { listOf("""{"ok":true,"text":"event_id,at\ne1,2026-10-16T10:00:00Z\n"}""") }
+
+        assertThat(run("audit", "export", "c1", "--format", "csv")).isZero()
+        assertThat(out.toString().trim()).isEqualTo("event_id,at\ne1,2026-10-16T10:00:00Z")
+        assertThat(requests[0]).contains("\"audit.export\"").contains("\"c1\"").containsPattern("\"format\"\\s*:\\s*\"csv\"")
+
+        assertThat(run("audit", "export", "c1")).isZero()
+        assertThat(requests[1]).containsPattern("\"format\"\\s*:\\s*\"json\"").doesNotContain("proof")
+    }
+
+    @Test
+    fun `AC-6 audit export of an unknown card or with an invalid format fails with a message and no output`() {
+        fakeDaemon { line ->
+            if (line.contains("\"zz\"")) {
+                listOf("""{"ok":false,"error":"card not found: zz"}""")
+            } else {
+                listOf("""{"ok":false,"error":"invalid format: xml"}""")
+            }
+        }
+
+        assertThat(run("audit", "export", "zz", "--format", "json")).isNotZero()
+        assertThat(err.toString()).contains("card not found: zz")
+        assertThat(out).isEmpty()
+
+        err.clear()
+        assertThat(run("audit", "export", "c1", "--format", "xml")).isNotZero()
+        assertThat(err.toString()).contains("xml")
+        assertThat(out).isEmpty()
+    }
+
+    @Test
     fun `AC-2 a stopped daemon is reported with how to start it and exit 1`() {
         // No socket at all.
         assertThat(run("card", "list")).isEqualTo(1)
@@ -478,6 +510,73 @@ class MainTest {
         )
 
     private fun doctorLines(): List<String> = out.toString().lines().filter { it.isNotBlank() }
+
+    private fun runDoctorOnDesktop(desktop: String?, runCommand: (List<String>) -> String?): Int =
+        runCli(
+            listOf("doctor"),
+            "1.2.3",
+            { out.appendLine(it) },
+            { err.appendLine(it) },
+            env = buildMap {
+                put("XDG_RUNTIME_DIR", runtimeDir.toString())
+                put("XDG_DATA_HOME", dataHome().toString())
+                put("XDG_CONFIG_HOME", configHome().toString())
+                put("HOME", runtimeDir.resolve("home").toString())
+                put("PATH", binDir().toString())
+                if (desktop != null) put("XDG_CURRENT_DESKTOP", desktop)
+            },
+            runCommand = runCommand,
+        )
+
+    private fun extensions(enabled: String, installed: String = enabled): (List<String>) -> String? = { command ->
+        if (command.contains("--enabled")) enabled else installed
+    }
+
+    @Test
+    fun `AC-6 doctor warns that the tray will not appear when the GNOME AppIndicator extension is off`() {
+        healthyMachine()
+
+        val exit = runDoctorOnDesktop("ubuntu:GNOME", extensions(enabled = "other@example.org\n", installed = "other@example.org\n"))
+
+        assertThat(doctorLines().filter { it.startsWith("AVISO") }).hasSize(1)
+        val warning = doctorLines().single { it.startsWith("AVISO") }
+        assertThat(warning).contains("A bandeja não vai aparecer")
+        assertThat(warning).contains("gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com")
+        assertThat(exit).isZero()
+        assertThat(doctorLines().filter { it.startsWith("OK") || it.startsWith("FAIL") }).hasSize(checkNames.size)
+    }
+
+    @Test
+    fun `AC-6 the warning names the installed AppIndicator uuid when there is one`() {
+        healthyMachine()
+
+        runDoctorOnDesktop("GNOME", extensions(enabled = "", installed = "appindicatorsupport@ubuntu.com\nother@example.org\n"))
+
+        assertThat(doctorLines().filter { it.startsWith("AVISO") }).hasSize(1)
+        assertThat(doctorLines().single { it.startsWith("AVISO") }).contains("gnome-extensions enable appindicatorsupport@ubuntu.com")
+    }
+
+    @Test
+    fun `AC-6 no warning when the extension is on, outside GNOME, or without gnome-extensions`() {
+        healthyMachine()
+
+        runDoctorOnDesktop("GNOME", extensions(enabled = "appindicatorsupport@rgcjonas.gmail.com\n"))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(out.toString()).doesNotContain("AVISO").doesNotContain("appindicator")
+
+        out.clear()
+        runDoctorOnDesktop("KDE", extensions(enabled = ""))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+
+        out.clear()
+        runDoctorOnDesktop(null, extensions(enabled = ""))
+        assertThat(doctorLines()).hasSize(checkNames.size)
+
+        out.clear()
+        val exit = runDoctorOnDesktop("GNOME") { null }
+        assertThat(doctorLines()).hasSize(checkNames.size)
+        assertThat(exit).isZero()
+    }
 
     private fun checkLine(name: String): String =
         doctorLines().singleOrNull { it.startsWith("OK $name") || it.startsWith("FAIL $name") }
