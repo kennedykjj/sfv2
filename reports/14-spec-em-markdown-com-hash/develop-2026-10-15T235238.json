@@ -1,0 +1,12 @@
+{
+  "issue": 14,
+  "slug": "spec-em-markdown-com-hash",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": [{"name": "qa-engineer", "tokens": 25615, "duration_s": 34}],
+  "rounds": 0,
+  "failed_gates": [{"gate": "build", "reason": "upsert não suportado pelo dialeto SQLite 3.18; trocado por INSERT OR REPLACE"}],
+  "amendments": [],
+  "flaky": [],
+  "gates_reused": []
+}
