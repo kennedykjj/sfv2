@@ -1,0 +1,10 @@
+CREATE TABLE card_reference (
+    card_id TEXT NOT NULL REFERENCES card(id),
+    position INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    PRIMARY KEY (card_id, provider, external_id)
+);
