@@ -111,7 +111,7 @@ class RefinePipelineTest {
         store.recordChange(id, Card.create("Pipeline $id", column), event)
     }
 
-    private fun pipeline(runtime: Runtime, gates: RefineGates, maxRounds: Int = 3) = RefinePipeline(
+    private fun pipeline(runtime: Runtime, gates: RefineGates, maxRounds: Int = 3, commit: WorktreeCommit = WorktreeCommit.None) = RefinePipeline(
         project = project,
         store = store,
         recorder = recorder,
@@ -126,6 +126,7 @@ class RefinePipelineTest {
         model = "model-a",
         maxRounds = maxRounds,
         log = log,
+        commit = commit,
     )
 
     private fun column(id: String): Column = requireNotNull(store.card(id)).column
@@ -157,6 +158,32 @@ class RefinePipelineTest {
 
         assertThat(column("c1")).isEqualTo(Column.SPEC_REVIEW)
         assertThat(gates.evaluated).hasSize(1)
+    }
+
+    @Test
+    fun `AC-1 the refine session prompt carries the skill, the card and the spec template`() {
+        card("c1")
+        val runtime = succeeding(1)
+
+        pipeline(runtime, RefineFixtures.ScriptedGates(listOf(RefineFixtures.green))).run("c1")
+
+        val prompt = runtime.launched.single().prompt
+        assertThat(prompt).startsWith(StageSkills.load("refine").trimEnd()).contains("`c1`")
+        assertThat(prompt).contains("## Modelo da spec").contains("- **AC-1** —").contains("| AC | Layer | Test file |")
+    }
+
+    @Test
+    fun `AC-2 the spec is committed once the gates are green and not while one is red`() {
+        card("green")
+        card("red")
+        val commits = CopyOnWriteArrayList<String>()
+        val commit = WorktreeCommit { _, message -> commits.add(message) }
+
+        pipeline(succeeding(1), RefineFixtures.ScriptedGates(listOf(RefineFixtures.green)), commit = commit).run("green")
+        pipeline(succeeding(1), RefineFixtures.ScriptedGates(listOf(RefineFixtures.red)), maxRounds = 1, commit = commit).run("red")
+
+        assertThat(commits).hasSize(1)
+        assertThat(commits.single()).startsWith("docs(spec):")
     }
 
     @Test

@@ -68,12 +68,12 @@ object DevelopFixtures {
         override fun red(cardId: String, worktree: Path): List<GateResult> {
             hold?.await(10, TimeUnit.SECONDS)
             calls.add("red")
-            round++
             return listOf(GateResult("acceptance-red", true, null))
         }
 
         override fun green(cardId: String, layer: ProjectLayer, worktree: Path): List<GateResult> {
             calls.add("green:${layer.name}")
+            if (layer.name == "daemon") round++
             if (layer.name != "daemon") return listOf(GateResult("${layer.name}-tests", true, null))
             val result = rounds[minOf(round - 1, rounds.size - 1)]
             val failed = result.filter { !it.passed }
@@ -144,7 +144,7 @@ class DevelopPipelineTest {
         store.recordChange(id, Card.create("Develop $id", column), event)
     }
 
-    private fun pipeline(runtime: Runtime, gates: DevelopGates, maxRounds: Int = 3) = DevelopPipeline(
+    private fun pipeline(runtime: Runtime, gates: DevelopGates, commit: WorktreeCommit = WorktreeCommit.None, maxRounds: Int = 3) = DevelopPipeline(
         project = project,
         store = store,
         recorder = recorder,
@@ -159,6 +159,7 @@ class DevelopPipelineTest {
         clock = clock,
         maxRounds = maxRounds,
         log = log,
+        commit = commit,
     )
 
     private fun column(id: String): Column = requireNotNull(store.card(id)).column
@@ -202,6 +203,38 @@ class DevelopPipelineTest {
     }
 
     @Test
+    fun `AC-1 every session prompt carries the develop skill, the card and its role, QA first and then one engineer per layer`() {
+        card("c1")
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val runtime = succeeding(rounds(1))
+
+        pipeline(runtime, gates).run("c1")
+
+        val prompts = runtime.launched.map { it.prompt }
+        assertThat(prompts).allSatisfy { assertThat(it).startsWith(StageSkills.load("develop").trimEnd()).contains("`c1`") }
+        assertThat(prompts.first()).contains("QA (passo vermelho)")
+        assertThat(prompts.drop(1)).allSatisfy { assertThat(it).contains("engenheiro da camada") }
+        assertThat(prompts.drop(1).map { it.substringAfter("camada `").substringBefore("`") })
+            .containsExactlyInAnyOrderElementsOf(DevelopFixtures.project.layers.map { it.name })
+    }
+
+    @Test
+    fun `AC-1 what each session wrote is committed, the QA tests before the red gate and each layer after its engineer`() {
+        card("c1")
+        val calls = CopyOnWriteArrayList<String>()
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val commits = CopyOnWriteArrayList<String>()
+        val commit = WorktreeCommit { _, message -> commits.add(message).also { calls.add("commit") } }
+        val runtime = DevelopFixtures.ProbingRuntime(succeeding(rounds(1)), calls)
+
+        pipeline(runtime, RecordingGates(gates, calls), commit).run("c1")
+
+        assertThat(calls.take(3)).containsExactly("session", "commit", "red")
+        assertThat(commits).hasSize(1 + DevelopFixtures.project.layers.size)
+        assertThat(commits.first()).startsWith("test(tests)")
+    }
+
+    @Test
     fun `AC-2 a finished run with every gate green moves the card to Validation`() {
         card("c1")
         val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
@@ -240,11 +273,36 @@ class DevelopPipelineTest {
         pipeline(runtime, gates, maxRounds = 3).run("c1")
 
         assertThat(runtime.launched.map { it.model }).containsExactly(
-            "model-a", "model-a", "model-a", "model-b", "model-b", "model-b",
+            "model-a", "model-a", "model-a", "model-b", "model-b",
         )
         assertThat(column("c1")).isEqualTo(Column.VALIDATION)
         val reasons = store.events("c1").filter { it.type == EventType.GATE_FINISHED }.map { it.payload["reason"] }
         assertThat(reasons).contains("tests_failed")
+    }
+
+    @Test
+    fun `AC-4 a round after a failed green gate reruns only the engineers, with the failure in their prompt, and never replays the red gate`() {
+        card("c1")
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.red, DevelopFixtures.green)) { cardId, failed ->
+            failed.forEach { gate ->
+                val payload = mapOf("gate" to gate.name, "verdict" to "FAIL", "reason" to requireNotNull(gate.reason), "summary" to "failed")
+                val event = Event(EventId("gate-${gate.name}"), clock.instant(), Actor.Factory("gate"), EventType.GATE_FINISHED, payload)
+                recorder.record(cardId, requireNotNull(store.card(cardId)), event)
+            }
+            assertThat(DevelopFixtures.await { stepUp.modelFor(cardId) == "model-b" }).isTrue()
+        }
+        val runtime = succeeding(rounds(2))
+
+        pipeline(runtime, gates, maxRounds = 3).run("c1")
+
+        assertThat(gates.calls.count { it == "red" }).isEqualTo(1)
+        val prompts = runtime.launched.map { it.prompt }
+        assertThat(prompts.take(3).filterNot { it.contains("Gates que falharam") }).hasSize(3)
+        assertThat(prompts.drop(3)).hasSize(DevelopFixtures.project.layers.size)
+        assertThat(prompts.drop(3)).allSatisfy {
+            assertThat(it).contains("engenheiro da camada").contains("Gates que falharam na rodada anterior").contains("daemon-tests")
+        }
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
     }
 
     @Test
@@ -255,7 +313,7 @@ class DevelopPipelineTest {
 
         pipeline(runtime, gates, maxRounds = 3).run("c1")
 
-        assertThat(runtime.launched).hasSize(rounds(3))
+        assertThat(runtime.launched).hasSize(rounds(1) + 2 * DevelopFixtures.project.layers.size)
         val blocked = store.events("c1").single { it.type == EventType.CARD_BLOCKED }
         assertThat(blocked.actor).isEqualTo(Actor.Factory("develop"))
         val reason = requireNotNull(blocked.payload["reason"])

@@ -39,7 +39,7 @@ object CodexRuntimeFixtures {
         worktree: Path,
         stage: String = "implement",
         model: String = "gpt-test",
-    ) = SessionRequest(stage = stage, worktree = worktree, model = model, mcpConfig = mcpConfig)
+    ) = SessionRequest(stage = stage, worktree = worktree, model = model, mcpConfig = mcpConfig, prompt = "prompt")
 }
 
 class RecordingProcessRunner(private val outcome: ProcessOutcome) : ProcessRunner {
