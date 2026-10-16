@@ -19,6 +19,7 @@ _Product Owner_
 - AC-5: Dado um valor de custo exposto ao dono, quando é apresentado, então vem rotulado como estimativa.
 - AC-6: Dado uma transcrição ausente, vazia ou malformada, quando o custo é calculado, então o resultado é desconhecido com o motivo, sem derrubar o fim do run.
 - AC-7: Dado o texto do agente afirmando um custo, quando o evento é gerado, então esse relato é ignorado; só tokens da transcrição contam.
+- AC-8: Dado uma transcrição com mais de 64 MiB ou com uma linha de mais de 1 MiB, quando o custo é calculado, então a leitura é em streaming (linha a linha, sem carregar o arquivo inteiro), a linha acima do limite é ignorada e o arquivo acima do limite total vira `UNKNOWN` com `reason`, sem estourar a memória do daemon e sem derrubar o fim do run.
 
 **Fora de escopo:** exibição do custo na UI/CLI, orçamento ou limites de gasto, busca automática de preços na internet, runtimes além de claude e codex, custo agregado por projeto.
 
@@ -37,7 +38,7 @@ _Tech Lead_
 - `daemon`, `PriceTable`: `PriceTable.parse(yaml: String): PriceTable` (snakeyaml-engine, já no módulo) e `priceOf(model): ModelPrice?`; preços em `BigDecimal` por milhão de tokens, kinds `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h` (ausente = 0, como no `prices.yml` da V0).
 - `daemon`, `TranscriptParsers`: `parse(runtime, transcript: Path, fallbackModel: String): Usage` com `Usage = Map<model, TokenCounts>`. Claude: linhas `assistant` com `message.usage`, deduplicadas por `message.id`, cache write por `cache_creation.ephemeral_*`. Codex (`codex exec --json`): soma de `turn.completed.usage`, `cached_input_tokens` sai de `input`; o modelo não vem no stream, usa `fallbackModel`. Ignora qualquer campo de custo relatado pelo CLI ou agente (AC-7).
 - `daemon`, `RunCostCalculator.cost(usage, prices): RunCost` sealed: `Known(usd)`, `Partial(usd, unpricedModels)`, `Unknown(reason)`.
-- `daemon`, `RunCostRecorder.record(cardId, runId, runtime, stage, model, result: SessionResult)`: parseia, calcula, grava o evento via `CardEventStore.recordChange` e publica no `EventStream` (mesmo padrão do `GateExecutor`). Transcrição ausente/vazia/malformada vira `UNKNOWN` com `reason`; nunca lança. Log `key=value` só com ids.
+- `daemon`, `RunCostRecorder.record(cardId, runId, runtime, stage, model, result: SessionResult)`: parseia, calcula, grava e publica o evento pelo `EventRecorder` do #134 (o único ponto de escrita de eventos do daemon; nunca `store.recordChange` e `events.publish` diretos). Transcrição ausente/vazia/malformada vira `UNKNOWN` com `reason`; nunca lança. Log `key=value` só com ids.
 
 **Camadas e módulos:** `core` (1 enum) e `daemon` (arquivos novos para tabela de preços, parsers, calculadora e recorder, mais fixtures em `daemon/src/test/resources/transcripts/` copiadas da V0). Sem mudança em `store`, `ports` nem `adapters`.
 
@@ -58,9 +59,14 @@ _Tech Lead_
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
 | AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
+| AC-8 | daemon | `daemon/src/test/kotlin/sfv2/daemon/RunCostTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **A transcrição é texto não confiável** (traz conversa do agente, issue, código): só os números de uso e o nome do modelo são lidos; nenhum texto dela entra em evento, log ou resumo (AC-7). Leitura em streaming com limite de linha e de tamanho total (AC-8).
+- **Fixtures mínimas:** as transcrições de teste são copiadas da V0 já reduzidas às linhas de uso (`usage`, `model`, `id`), com todo o texto de conversa, caminhos e conteúdo de arquivo removido; nada de segredo, issue ou código de outros projetos no repositório.
+- **Dinheiro em `BigDecimal`**, nunca `Double` (CLAUDE.md), e o valor sempre rotulado como estimativa (AC-5).
+- **O evento de custo usa o `EventRecorder` do #134**, então este card depende dele.
 
 ## Rollback
 n/a
