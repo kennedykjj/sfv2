@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
+import sfv2.core.AcceptancePatterns
 import sfv2.core.Actor
 import sfv2.core.Card
 import sfv2.core.Column
@@ -156,5 +157,150 @@ class GateExecutorTest {
             assertThat(runDir).doesNotExist()
             assertThat(gateEvents()).isEmpty()
         }
+    }
+
+    private val patterns = AcceptancePatterns(
+        ran = Regex("tests completed"),
+        assertions = Regex("ASSERT_FAIL"),
+        setupErrors = Regex("SETUP_BROKEN"),
+    )
+
+    private fun redSpec() = spec("red-core").copy(check = GateCheck.Red(patterns))
+
+    private fun greenSpec() = spec("green-core").copy(check = GateCheck.Green(patterns))
+
+    private fun runRed(output: String, exitCode: Int): Pair<GateVerdict, Event> {
+        val verdict = executor(FakeRunner(output, GateRun(exitCode, false))).execute("card-1", redSpec(), runDir)
+        return verdict to gateEvents().single()
+    }
+
+    private fun runGreen(output: String, exitCode: Int): Pair<GateVerdict, Event> {
+        val verdict = executor(FakeRunner(output, GateRun(exitCode, false))).execute("card-1", greenSpec(), runDir)
+        return verdict to gateEvents().single()
+    }
+
+    @Test
+    fun `AC-1 red gate passes only when the test failed by assertion`() {
+        val (verdict, event) = runRed("1 tests completed, 1 failed\nASSERT_FAIL expected 1 but was 2\n", 1)
+
+        assertThat(verdict).isEqualTo(GateVerdict.Pass)
+        assertThat(event.payload["verdict"]).isEqualTo("PASS")
+    }
+
+    @Test
+    fun `AC-1 red gate fails with tests_passed_before_impl when the test passed`() {
+        val passed = runRed("1 tests completed\n", 0)
+        assertThat(passed.first).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(passed.second.payload["reason"]).isEqualTo("tests_passed_before_impl")
+        assertThat(passed.second.payload["verdict"]).isEqualTo("FAIL")
+    }
+
+    @Test
+    fun `AC-1 red gate fails with setup_error when the output shows a setup error`() {
+        val setup = runRed("SETUP_BROKEN cannot compile\n", 1)
+        assertThat(setup.first).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(setup.second.payload["reason"]).isEqualTo("setup_error")
+    }
+
+    @Test
+    fun `AC-1 red gate fails with no_assertion_failure when the output has no assertion line`() {
+        val (verdict, event) = runRed("1 tests completed, 1 failed\nsomething exploded\n", 1)
+
+        assertThat(verdict).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(event.payload["reason"]).isEqualTo("no_assertion_failure")
+    }
+
+    @Test
+    fun `AC-2 green gate passes when the test passed and the output matches the ran pattern`() {
+        val (verdict, event) = runGreen("3 tests completed\n", 0)
+
+        assertThat(verdict).isEqualTo(GateVerdict.Pass)
+        assertThat(event.payload["verdict"]).isEqualTo("PASS")
+    }
+
+    @Test
+    fun `AC-2 green gate fails with tests_failed when the test fails`() {
+        val (verdict, event) = runGreen("3 tests completed, 1 failed\nASSERT_FAIL\n", 1)
+
+        assertThat(verdict).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(event.payload["reason"]).isEqualTo("tests_failed")
+    }
+
+    @Test
+    fun `AC-2 green gate fails with no_test_ran when it passes without matching the ran pattern`() {
+        val (verdict, event) = runGreen("BUILD SUCCESSFUL, nothing selected\n", 0)
+
+        assertThat(verdict).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(event.payload["reason"]).isEqualTo("no_test_ran")
+    }
+
+    @Test
+    fun `AC-2 timeout takes precedence over the acceptance check`() {
+        val runner = FakeRunner("3 tests completed\n", GateRun(exitCode = null, timedOut = true))
+
+        val verdict = executor(runner).execute("card-1", greenSpec(), runDir)
+
+        assertThat(verdict).isInstanceOf(GateVerdict.Fail::class.java)
+        assertThat(gateEvents().single().payload["reason"]).isEqualTo("timeout")
+    }
+
+    /** Records the command it was asked to run and writes a fixed diff as output. */
+    private class RecordingRunner : GateRunner {
+        var calls = 0
+        var command: List<String> = emptyList()
+
+        override fun run(spec: GateSpec, outputFile: Path): GateRun {
+            calls++
+            command = spec.command
+            Files.writeString(outputFile, "")
+            return GateRun(0, false)
+        }
+    }
+
+    private val keep = Regex("assertThat")
+
+    @Test
+    fun `AC-4 acceptance edit gate refuses an invalid qaCommit naming the field, with no process`() {
+        listOf("", "abc12", "--output=x", "ABCDEF1", "g123456", "a".repeat(41), "abc1234; rm").forEach { bad ->
+            val runner = RecordingRunner()
+            val gate = AcceptanceEditGate(executor(runner), runner)
+
+            val error = assertThrows<RuntimeException> {
+                gate.check("card-1", dir, bad, listOf("a/FooTest.kt"), keep, runDir)
+            }
+
+            assertThat(error).hasMessageContaining("qaCommit")
+            assertThat(runner.calls).isZero()
+            assertThat(gateEvents()).isEmpty()
+        }
+    }
+
+    @Test
+    fun `AC-4 acceptance edit gate refuses an invalid file naming the field, with no process`() {
+        listOf("-x", "--output=x", "../x", "a/../b", "a\u0000b", "a\nb").forEach { bad ->
+            val runner = RecordingRunner()
+            val gate = AcceptanceEditGate(executor(runner), runner)
+
+            val error = assertThrows<RuntimeException> {
+                gate.check("card-1", dir, "abc1234", listOf("ok/FooTest.kt", bad), keep, runDir)
+            }
+
+            assertThat(error).hasMessageContaining("files")
+            assertThat(runner.calls).isZero()
+            assertThat(gateEvents()).isEmpty()
+        }
+    }
+
+    @Test
+    fun `AC-4 acceptance edit gate puts the files after a double dash and runs without a shell`() {
+        val runner = RecordingRunner()
+
+        val verdict = AcceptanceEditGate(executor(runner), runner)
+            .check("card-1", dir, "abc1234", listOf("a/FooTest.kt"), keep, runDir)
+
+        assertThat(verdict).isEqualTo(GateVerdict.Pass)
+        assertThat(runner.command.takeLast(2)).containsExactly("--", "a/FooTest.kt")
+        assertThat(runner.command).contains("abc1234", "git")
+        assertThat(gateEvents().single().payload["gate"]).isEqualTo("acceptance-edit")
     }
 }
