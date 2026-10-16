@@ -1,0 +1,1 @@
+{"issue":23,"slug":"runtime-codex","pipeline":"refine","started_at":"2026-10-16T00:55:00Z","finished_at":"2026-10-16T01:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15403,"duration_s":9}],"rounds":{"po":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
