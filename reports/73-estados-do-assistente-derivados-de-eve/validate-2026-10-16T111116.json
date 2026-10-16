@@ -1,0 +1,1 @@
+{"issue": 73, "slug": "estados-do-assistente-derivados-de-eve", "pipeline": "validate", "outcome": "staged", "agents": [], "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": ["green core sfv2.core.AssistantStateTest"], "amendments": [], "pr": 196, "head": "570fd0e64bc86dabc70164c158086857e0404586"}
