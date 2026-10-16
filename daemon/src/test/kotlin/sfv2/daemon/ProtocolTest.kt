@@ -10,9 +10,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -335,6 +337,82 @@ class ProtocolTest {
             .isInstanceOf(Request.Rejected::class.java)
         assertThat(parseRequest("""{"cmd":"cost.summary","from":"2026-10-16T03:00:00Z"}"""))
             .isInstanceOf(Request.Rejected::class.java)
+    }
+
+    private fun recordStay(store: CardEventStore, card: String, at: Instant, vararg moves: Pair<Column, Long>) {
+        var n = 0
+        fun record(type: EventType, time: Instant, payload: Map<String, String>) =
+            store.recordChange(card, Card.create(card, Column.CODING), Event(EventId("$card-${n++}"), time, Actor.Owner, type, payload))
+        record(EventType.CARD_CREATED, at, mapOf("title" to "T"))
+        moves.forEach { (column, offset) -> record(EventType.CARD_MOVED, at.plusSeconds(offset), mapOf("to" to column.name)) }
+    }
+
+    private fun columnTimes(dir: Path, block: (CardEventStore, JsonObject) -> Unit) {
+        Database.open(dir.resolve("times.db")).use { db ->
+            val store = CardEventStore(db)
+            val day = Instant.parse("2026-10-16T10:00:00Z")
+            // c1: Refinement 600s, Spec Review 600s, Coding 600s, Validation 600s, then Done.
+            recordStay(
+                store, "c1", day,
+                Column.REFINEMENT to 0L, Column.SPEC_REVIEW to 600L, Column.CODING to 1_200L,
+                Column.VALIDATION to 1_800L, Column.DONE to 2_400L,
+            )
+            // c2: Coding 1200s, then Done.
+            recordStay(store, "c2", day.plusSeconds(3_600), Column.CODING to 0L, Column.DONE to 1_200L)
+            // c3: Coding stay that ends after the requested day: must not count. c4: still open in Staged.
+            recordStay(store, "c3", Instant.parse("2026-10-17T04:00:00Z"), Column.CODING to 0L, Column.DONE to 3_600L)
+            recordStay(store, "c4", day, Column.STAGED to 0L)
+            val request = parseRequest("""{"cmd":"column.times","from":"2026-10-16T03:00:00Z","to":"2026-10-17T03:00:00Z"}""")
+            val reply = Json.parseToJsonElement(render(ColumnTimesQuery(store).handle(request))).jsonObject
+            block(store, reply)
+        }
+    }
+
+    @Test
+    fun `AC-5 column times request carries from and to and needs no actor or proof`() {
+        val request = parseRequest("""{"cmd":"column.times","from":"2026-10-16T03:00:00Z","to":"2026-10-17T03:00:00Z"}""")
+
+        assertThat(request).isNotInstanceOf(Request.Rejected::class.java)
+        assertThat(request.toString()).contains("2026-10-16T03:00:00Z").contains("2026-10-17T03:00:00Z")
+    }
+
+    @Test
+    fun `AC-5 column times request with a missing or invalid from or to is rejected`() {
+        assertThat(parseRequest("""{"cmd":"column.times","to":"2026-10-17T03:00:00Z"}"""))
+            .isEqualTo(Request.Rejected("missing or invalid from"))
+        assertThat(parseRequest("""{"cmd":"column.times","from":"2026-10-16T03:00:00Z"}"""))
+            .isEqualTo(Request.Rejected("missing or invalid to"))
+        assertThat(parseRequest("""{"cmd":"column.times","from":"yesterday","to":"2026-10-17T03:00:00Z"}"""))
+            .isEqualTo(Request.Rejected("missing or invalid from"))
+        assertThat(parseRequest("""{"cmd":"column.times","from":"2026-10-16T03:00:00Z","to":5}"""))
+            .isEqualTo(Request.Rejected("missing or invalid to"))
+    }
+
+    @Test
+    fun `AC-5 column times reply lists kind, seconds and stays per column in board order`(@TempDir dir: Path) {
+        columnTimes(dir) { _, reply ->
+            assertThat(reply.getValue("ok").jsonPrimitive.boolean).isTrue()
+            val columns = reply.getValue("result").jsonObject.getValue("columns").jsonArray.map { it.jsonObject }
+            assertThat(columns.map { it.getValue("column").jsonPrimitive.content })
+                .containsExactly("REFINEMENT", "SPEC_REVIEW", "CODING", "VALIDATION")
+            assertThat(columns.map { it.getValue("kind").jsonPrimitive.content })
+                .containsExactly("MEDIAN", "MEAN_WAIT", "MEDIAN", "MEDIAN")
+            assertThat(columns.map { it.getValue("seconds").jsonPrimitive.long }).containsExactly(600L, 600L, 900L, 600L)
+            assertThat(columns.map { it.getValue("stays").jsonPrimitive.int }).containsExactly(1, 1, 2, 1)
+        }
+    }
+
+    @Test
+    fun `AC-5 column times reads without writing anything`(@TempDir dir: Path) {
+        columnTimes(dir) { store, _ ->
+            val before = store.eventsAfter(0)
+
+            val request = parseRequest("""{"cmd":"column.times","from":"2026-10-16T03:00:00Z","to":"2026-10-17T03:00:00Z"}""")
+            ColumnTimesQuery(store).handle(request)
+
+            assertThat(before).isNotEmpty()
+            assertThat(store.eventsAfter(0)).isEqualTo(before)
+        }
     }
 
     @Test

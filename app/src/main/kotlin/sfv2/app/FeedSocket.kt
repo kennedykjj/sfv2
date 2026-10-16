@@ -21,8 +21,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import sfv2.core.Column
+import sfv2.core.ColumnTime
+import sfv2.core.ColumnTimeKind
 
 /** Opens the daemon's socket, sends one JSON line and hands over the channel. Replies are never logged. */
 private fun connect(socket: Path, request: JsonObject): SocketChannel {
@@ -168,4 +172,20 @@ class SocketCostSummarySource(private val socket: Path, private val zone: ZoneId
     }
 
     private fun statusOf(name: String?): CostStatus = CostStatus.entries.firstOrNull { it.name == name } ?: CostStatus.UNKNOWN
+}
+
+/** `column.times` over the daemon's socket; rows with an unknown column or kind are skipped. */
+class SocketColumnTimesSource(private val socket: Path) : ColumnTimesSource {
+    override fun times(from: Instant, to: Instant): Map<Column, ColumnTime> {
+        val reply = call(socket, buildJsonObject { put("cmd", "column.times"); put("from", from.toString()); put("to", to.toString()) })
+        val result = reply["result"] as? JsonObject ?: throw IOException("daemon sent column times without result")
+        return (result["columns"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val row = element as? JsonObject ?: return@mapNotNull null
+            val column = Column.entries.firstOrNull { it.name == text(row, "column") } ?: return@mapNotNull null
+            val kind = ColumnTimeKind.entries.firstOrNull { it.name == text(row, "kind") } ?: return@mapNotNull null
+            val seconds = (row["seconds"] as? JsonPrimitive)?.longOrNull ?: return@mapNotNull null
+            val stays = (row["stays"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            column to ColumnTime(kind, seconds, stays)
+        }.toMap()
+    }
 }

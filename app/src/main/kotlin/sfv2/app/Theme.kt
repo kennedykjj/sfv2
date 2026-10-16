@@ -35,6 +35,8 @@ object Texts {
     const val BOARD = "Esteira"
     const val COLUMN_MAP = "Mapa das colunas"
     const val WAITS_FOR_YOU = "Aguarda você"
+    const val MEDIAN = "mediana"
+    const val MEAN_WAIT = "espera média"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"
