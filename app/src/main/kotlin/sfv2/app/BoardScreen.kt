@@ -100,6 +100,9 @@ fun BoardScreen(
     controller: OwnerMoveController? = null,
     onOpenSettings: (() -> Unit)? = null,
     onReload: (suspend () -> ResyncResult)? = null,
+    openCardId: String? = null,
+    focusReturnCardId: String? = null,
+    onOpenCard: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var reloading by remember { mutableStateOf(false) }
@@ -200,6 +203,9 @@ fun BoardScreen(
                             dimmed = held != null && !accepts,
                             laneBounds = laneBounds,
                             scope = scope,
+                            openCardId = openCardId,
+                            focusReturnCardId = focusReturnCardId,
+                            onOpenCard = onOpenCard,
                         )
                     }
                 }
@@ -347,6 +353,7 @@ private fun DestinationChooser(
             .widthIn(max = 320.dp)
             .background(Tokens.raise, RoundedCornerShape(8.dp))
             .padding(8.dp)
+            .claimsEscape()
             .focusRequester(focus)
             .focusable()
             .onPreviewKeyEvent { event ->
@@ -399,6 +406,7 @@ private fun NoteBox(onSend: (String) -> Unit, onCancel: () -> Unit) {
                 .fillMaxWidth()
                 .border(1.dp, Tokens.edgeHi, RoundedCornerShape(6.dp))
                 .padding(6.dp)
+                .claimsEscape()
                 .focusRequester(focus)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -439,6 +447,9 @@ private fun Lane(
     dimmed: Boolean,
     laneBounds: MutableMap<BoardColumn, Rect>,
     scope: CoroutineScope,
+    openCardId: String?,
+    focusReturnCardId: String?,
+    onOpenCard: (String) -> Unit,
 ) {
     val waiting = isWaitingForOwner(column) && !cards.isNullOrEmpty()
     val accent = if (waiting) Tokens.sand else Tokens.text
@@ -480,7 +491,9 @@ private fun Lane(
             when {
                 cards == null -> Meta(Texts.LOADING_BOARD, Tokens.faint)
                 cards.isEmpty() -> Meta(Texts.EMPTY_COLUMN, Tokens.faint)
-                else -> cards.forEach { Card(it, waiting, controller, laneBounds, scope) }
+                else -> cards.forEach {
+                    Card(it, waiting, controller, laneBounds, scope, it.id == openCardId, it.id == focusReturnCardId, onOpenCard)
+                }
             }
         }
     }
@@ -498,6 +511,9 @@ private fun Card(
     controller: OwnerMoveController?,
     laneBounds: Map<BoardColumn, Rect>,
     scope: CoroutineScope,
+    open: Boolean,
+    takesFocus: Boolean,
+    onOpenCard: (String) -> Unit,
 ) {
     val shape = RoundedCornerShape(8.dp)
     val shortId = card.id.take(ID_LENGTH)
@@ -506,17 +522,25 @@ private fun Card(
     var origin by remember { mutableStateOf(Offset.Zero) }
     var pointer by remember { mutableStateOf(Offset.Zero) }
     val face = CardFace.of(card, Clock.systemUTC())
-    val description = face.description + if (movable) ", pode mover" else ""
+    val description = face.description + (if (movable) ", pode mover" else "") + (if (open) ", ${Texts.openCardHint()}" else "")
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(takesFocus) { if (takesFocus) focus.requestFocus() }
+    val openColor = hueColor(stageHue(card.column))
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { origin = it.boundsInRoot().topLeft }
-            .background(Tokens.ground, shape)
-            .border(if (focused) 2.dp else 1.dp, if (focused) Tokens.edgeHi else Tokens.edge, shape)
+            .background(if (open) Tokens.raise else Tokens.ground, shape)
+            .border(
+                if (focused || open) 2.dp else 1.dp,
+                if (focused) Tokens.edgeHi else if (open) openColor else Tokens.edge,
+                shape,
+            )
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .semantics { contentDescription = description }
+            .focusRequester(focus)
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
+            .clickable(role = Role.Button) { onOpenCard(card.id) }
             .onPreviewKeyEvent { event ->
                 if (controller != null && event.type == KeyEventType.KeyDown && event.key == Key.M) {
                     controller.hold(card.id)
@@ -573,7 +597,7 @@ private fun Card(
 }
 
 /** The color of a stage hue; the accent is the sand of the owner-decision columns, neutral is plain muted text. */
-private fun hueColor(hue: StageHue): Color =
+internal fun hueColor(hue: StageHue): Color =
     when (hue) {
         StageHue.REFINE -> Tokens.refine
         StageHue.DEVELOP -> Tokens.develop
