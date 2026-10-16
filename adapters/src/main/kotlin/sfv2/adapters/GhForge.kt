@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -23,6 +24,7 @@ import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
+import sfv2.ports.PullRequestSummary
 import sfv2.ports.UnknownPullRequestException
 
 /**
@@ -65,6 +67,41 @@ class GhForge(
             JSON.parseToJsonElement(out).jsonArray.firstOrNull()?.jsonObject?.let { toMerged(it, subject) }
         }
     }
+
+    override fun listPullRequests(): List<PullRequestSummary> {
+        val subject = "repo"
+        requireValid("listPullRequests", validRepo())
+        val out = call(
+            "listPullRequests",
+            subject,
+            "pr", "list", "--repo", repo, "--state", "all", "--limit", "1000",
+            "--json", "number,headRefName,headRefOid,title,state,author,isCrossRepository",
+        )
+        return parse("listPullRequests", subject) {
+            JSON.parseToJsonElement(out).jsonArray.map { toSummary(it.jsonObject) }
+        }
+    }
+
+    override fun authenticatedLogin(): String {
+        val subject = "user"
+        val out = call("authenticatedLogin", subject, "api", "user", "--jq", ".login").trim()
+        if (!LOGIN.matches(out)) throw ForgeException("authenticatedLogin falhou ($subject): resposta inválida")
+        return out
+    }
+
+    private fun toSummary(obj: JsonObject): PullRequestSummary =
+        PullRequestSummary(
+            number = requireNotNull(obj["number"]?.jsonPrimitive?.intOrNull) { "number ausente" },
+            branch = obj.text("headRefName").orEmpty(),
+            title = obj.text("title").orEmpty(),
+            state = when (obj.text("state")) {
+                "OPEN" -> PullRequestState.Open(obj.text("headRefOid").orEmpty())
+                "MERGED" -> PullRequestState.Merged
+                else -> PullRequestState.ClosedUnmerged
+            },
+            author = obj["author"]?.asObject()?.text("login").orEmpty(),
+            fromFork = (obj["isCrossRepository"] as? JsonPrimitive)?.booleanOrNull ?: false,
+        )
 
     private fun toMerged(obj: JsonObject, subject: String): MergedPullRequest {
         val oid = obj["mergeCommit"]?.asObject()?.text("oid")
