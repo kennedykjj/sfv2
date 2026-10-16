@@ -18,6 +18,7 @@ _Product Owner_
 - AC-4: Dado um diff só com arquivos dentro das camadas do estágio e fora dos caminhos proibidos, quando o gate roda, então ele passa.
 - AC-5: Dado que o worktree altera a config do projeto (`forbidden` ou camadas), quando o gate roda, então ele usa a config da main e a alteração não tem efeito.
 - AC-6: Dado um arquivo renomeado ou movido de/para um caminho proibido ou fora das camadas, quando o gate roda, então ele falha (os dois caminhos contam).
+- AC-7: Dado um diff que toca só `gradle/libs.versions.toml` ou arquivos sob `docs/superpowers/` (specs e planos) e arquivos das camadas do estágio, quando o gate roda, então ele passa: esses caminhos compartilhados são permitidos em qualquer estágio, além das camadas; `CLAUDE.md` na raiz conta como protegido (falha).
 
 **Fora de escopo:** edição dos caminhos proibidos pelo dono pela UI; gates de qualidade (build, testes, lint); revisão semântica do conteúdo do diff; o que fazer com o card após a falha (roteamento pertence ao pipeline).
 
@@ -33,7 +34,7 @@ _Tech Lead_
 
 **Contratos**
 - `daemon`: `Project` ganha `forbidden: List<String>` (prefixos de caminho lidos da chave `forbidden` do `factory.yml` da main; ausente = lista vazia; item que não é texto, vazio, absoluto ou com `..` → `InvalidProjectConfigException` nomeando `forbidden`). `ProjectRegistry` continua lendo só via `ProjectConfigSource` (`git show main:`), nunca da árvore de trabalho.
-- `daemon`: `ScopeGate.check(project: Project, changed: List<String>, stageLayers: Set<String>): ScopeVerdict`. `ScopeVerdict` é sealed: `Pass` | `Violations(forbidden: List<String>, outsideLayers: List<String>)`; as listas trazem os caminhos, ordenados. Os caminhos protegidos fixos `.shipfloor/`, `.github/`, `.claude/` valem sempre, somados ao `forbidden` do projeto. Um caminho é violador se cai em caminho protegido/proibido; senão, se não está sob o `path` de nenhuma camada em `stageLayers`. Função pura: sem IO e sem relógio.
+- `daemon`: `ScopeGate.check(project: Project, changed: List<String>, stageLayers: Set<String>): ScopeVerdict`. `ScopeVerdict` é sealed: `Pass` | `Violations(forbidden: List<String>, outsideLayers: List<String>)`; as listas trazem os caminhos, ordenados. Os caminhos protegidos fixos `.shipfloor/`, `.github/`, `.claude/` e o arquivo `CLAUDE.md` da raiz valem sempre, somados ao `forbidden` do projeto. Os caminhos compartilhados `gradle/libs.versions.toml` (dependência nova, CLAUDE.md) e `docs/superpowers/` (spec e plano do card) são permitidos em qualquer estágio, somados às camadas (AC-7): sem eles o gate recusaria o commit de spec/plano e toda dependência nova; a V0 resolve isso com `scope` por papel no `factory.yml`. Um caminho é violador se cai em caminho protegido/proibido; senão, se não está sob o `path` de nenhuma camada em `stageLayers`. Função pura: sem IO e sem relógio.
 - `daemon`: interface `ChangedPaths.between(worktree: Path, base: String): List<String>` e `GitChangedPaths` (`git diff --name-only --no-renames -z <base>`, sem shell, com timeout, saída lida de arquivo; `--no-renames` lista origem e destino, o que cobre AC-6). `base` que começa com `-` é recusado.
 - O dispatcher (#27) compõe `ChangedPaths` + `ScopeGate` e registra o veredito via `GateExecutor`; isso fica fora desta issue.
 
@@ -56,9 +57,12 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ScopeGateTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ScopeGateTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ScopeGateTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- Este gate é o juiz de "o agente tocou onde não devia": a lista protegida e a lista compartilhada ficam no código (não vêm do worktree), a lista `forbidden` vem só da `main`, e caminho com `..`, absoluto ou com caractere de controle no diff é violação.
+- A saída do `git diff` é lida de arquivo com limite de tamanho; um número grande de arquivos alterados falha o gate, não derruba o daemon.
 
 ## Rollback
 n/a
