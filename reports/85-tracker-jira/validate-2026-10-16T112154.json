@@ -1,0 +1,6 @@
+{"issue": 85, "slug": "tracker-jira", "pipeline": "validate", "started_at": "2026-10-16T14:08:00Z", "finished_at": "2026-10-16T14:30:00Z", "outcome": "ok",
+ "agents": [{"role": "cybersec", "tokens": 20629, "duration_s": 29}, {"role": "qa-engineer", "tokens": 18311, "duration_s": 22}],
+ "rounds": {"gates": 0, "review": 0, "ci": 1},
+ "gates_failed": ["CI build (AC-7 search text is escaped, dash echo)"],
+ "flaky": [], "gates_reused": [], "manual_edit": false,
+ "amendments": [{"file": "adapters/src/test/kotlin/sfv2/adapters/AcliTrackerTest.kt", "reason": "fake do acli gravava args com echo, que o dash do CI interpreta; trocado por printf. 0 asserções alteradas."}]}
