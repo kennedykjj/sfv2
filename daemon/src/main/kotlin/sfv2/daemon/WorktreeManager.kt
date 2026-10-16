@@ -73,19 +73,23 @@ class WorktreeManager(
     }
 
     private fun branchFor(project: Project, cardId: String, title: String): String =
-        project.policies.conventions.branchFormat.replace("{id}", cardId).replace("{slug}", slugOf(title))
-
-    private fun slugOf(title: String): String {
-        val ascii = Normalizer.normalize(title, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
-        val slug = ascii.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(MAX_SLUG).trim('-')
-        return slug.ifEmpty { "card" }
-    }
+        branchName(project.policies.conventions.branchFormat, cardId, title)
 
     private fun fields(cardId: String, dir: Path, branch: String) =
         mapOf("card" to cardId, "path" to dir.toString(), "branch" to branch)
 
-    private companion object {
-        val SAFE_SEGMENT = Regex("[A-Za-z0-9][A-Za-z0-9._-]*")
-        const val MAX_SLUG = 40
+    companion object {
+        private val SAFE_SEGMENT = Regex("[A-Za-z0-9][A-Za-z0-9._-]*")
+        private const val MAX_SLUG = 40
+
+        /** The card's branch name from a `branchFormat` with `{id}` and `{slug}` placeholders. */
+        fun branchName(branchFormat: String, cardId: String, title: String): String =
+            branchFormat.replace("{id}", cardId).replace("{slug}", slugOf(title))
+
+        private fun slugOf(title: String): String {
+            val ascii = Normalizer.normalize(title, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
+            val slug = ascii.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(MAX_SLUG).trim('-')
+            return slug.ifEmpty { "card" }
+        }
     }
 }

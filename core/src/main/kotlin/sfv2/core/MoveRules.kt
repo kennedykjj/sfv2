@@ -36,6 +36,7 @@ object MoveRules {
         (VALIDATION to STAGED) to FACTORY_OR_OWNER,
         (STAGED to READY_FOR_PROD) to OWNER_ONLY,
         (STAGED to CODING) to FACTORY_OR_OWNER,
+        (READY_FOR_PROD to STAGED) to FACTORY_OR_OWNER,
         (READY_FOR_PROD to DONE) to FACTORY_OR_OWNER,
     )
 

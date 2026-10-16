@@ -19,10 +19,12 @@ class RefineRuntime private constructor(
     private val endpoint: McpEndpoint,
     val dispatcherAllowed: Boolean,
     private val stepUp: ModelStepUp,
+    private val deliveryTrigger: AutonomousDeliveryTrigger,
 ) : AutoCloseable {
 
     override fun close() {
         dispatcher.close()
+        deliveryTrigger.close()
         stepUp.close()
         endpoint.close()
     }
@@ -31,6 +33,7 @@ class RefineRuntime private constructor(
         private const val POOL_CAPACITY = 2
         private const val MODEL = "claude-sonnet-5-5"
         private val MODEL_LADDER = listOf(MODEL, "claude-opus-5-5")
+        private const val DELIVERY_MAX_POLLS = 40
         private const val PRICES_FILE = "prices.yml"
         private val TICK: Duration = Duration.ofSeconds(30)
         private val SESSION_TIMEOUT: Duration = Duration.ofMinutes(30)
@@ -154,6 +157,19 @@ class RefineRuntime private constructor(
                 log = log,
                 onRunFinished = control::onRunFinished,
             )
+            val deliveryTrigger = AutonomousDeliveryTrigger(
+                AutonomousDelivery(
+                    store = store,
+                    recorder = recorder,
+                    forge = { cardId -> ProjectDelivery.forgeOf(projectOf(cardId, store, registry), dataDir.resolve("forge")) },
+                    policies = { cardId -> projectOf(cardId, store, registry).policies },
+                    pause = ParkingCiPause(),
+                    maxPolls = DELIVERY_MAX_POLLS,
+                    clock = clock,
+                    log = log,
+                ),
+                log,
+            )
             val dispatcher = Dispatcher(
                 store = store,
                 pool = pool,
@@ -172,8 +188,11 @@ class RefineRuntime private constructor(
                 log = log,
                 launchGuard = control,
                 stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP, DispatchStage.VALIDATE),
+                deliveries = deliveryTrigger,
             )
-            return RefineRuntime(dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp)
+            return RefineRuntime(
+                dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
+            )
         }
 
         private fun loadPrices(file: Path): Prices {

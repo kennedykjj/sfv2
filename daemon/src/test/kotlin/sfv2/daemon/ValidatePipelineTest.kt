@@ -1,5 +1,7 @@
 package sfv2.daemon
 
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Modifier
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
@@ -12,6 +14,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.listDirectoryEntries
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -117,7 +120,7 @@ class ValidatePipelineTest {
         sync: BranchSync,
         gates: ValidateGates,
         maxRounds: Int = 3,
-        delivery: PullRequestDelivery? = null,
+        delivery: PullRequestDelivery = greenDelivery(),
     ) = ValidatePipeline(
         project = project,
         store = store,
@@ -365,6 +368,7 @@ class ValidatePipelineTest {
             project = project, store = store, recorder = recorder, worktrees = worktrees, sessions = sessions, mcpPort = 4317,
             runtime = runtime, costRecorder = RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log),
             branchSync = sync(MergeResult.Merged), gates = gates(green), configDir = configDir, clock = clock, model = "model-a", log = log,
+            delivery = greenDelivery(),
         )
 
         defaulted.run("c1")
@@ -450,6 +454,12 @@ class ValidatePipelineTest {
 
     private fun delivery(publisher: BranchPublisher, head: String = "sha-1", maxPolls: Int = 3, onPause: () -> Unit = {}) =
         PullRequestDelivery(forge, publisher, WorktreeHead { head }, CiPause { onPause() }, maxPolls)
+
+    /** The default delivery of the stage tests: the forge shows the local head with a green CI. */
+    private fun greenDelivery(): PullRequestDelivery {
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+        return delivery(RecordingPublisher())
+    }
 
     private fun stagedMove() = events(EventType.CARD_MOVED).single { it.payload["to"] == Column.STAGED.name }
 
@@ -608,6 +618,76 @@ class ValidatePipelineTest {
         val reason = requireNotNull(events(EventType.CARD_MOVED).single().payload["reason"])
         assertThat(reason.toByteArray(Charsets.UTF_8).size).isBetween(1, 2048)
         assertThat(reason).doesNotContain("�").contains("test-a")
+    }
+
+    @Test
+    fun `AC-1 the delivery is a required non-null constructor parameter of the ValidatePipeline`() {
+        val constructor = ValidatePipeline::class.java.declaredConstructors.single { !it.isSynthetic && Modifier.isPublic(it.modifiers) }
+        val values = listOf<Any>(
+            project, store, recorder, worktrees, sessions, runtime(), RunCostRecorder(store, recorder, RunCostFixtures.prices(), clock, log),
+            sync(MergeResult.Merged), gates(green), configDir, clock, log, GitChangedPaths(), "model-a", 4317,
+        )
+        val arguments = constructor.parameterTypes.map { type ->
+            when {
+                type == PullRequestDelivery::class.java -> null
+                type.isPrimitive -> 4317
+                else -> values.first { type.isInstance(it) }
+            }
+        }.toTypedArray()
+
+        assertThat(ValidatePipeline::class.java.getDeclaredField("delivery").type).isEqualTo(PullRequestDelivery::class.java)
+        assertThat(constructor.parameterTypes.count { it == PullRequestDelivery::class.java }).isEqualTo(1)
+        assertThatThrownBy { constructor.newInstance(*arguments) }
+            .isInstanceOf(InvocationTargetException::class.java)
+            .hasCauseInstanceOf(NullPointerException::class.java)
+    }
+
+    private fun runtime(): Runtime = FakeRuntime(emptyList())
+
+    @Test
+    fun `AC-2 an approval with no CI result from the delivery never stages`() {
+        card("c1")
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(RecordingPublisher())).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("ci_timeout")
+    }
+
+    @Test
+    fun `AC-3 an unavailable forge never moves the card to Staged`() {
+        card("c1")
+        forge.failNext("openPullRequest")
+
+        runCatching {
+            pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(RecordingPublisher())).run("c1")
+        }
+
+        assertThat(column("c1")).isNotEqualTo(Column.STAGED)
+        assertThat(store.events("c1").flatMap { it.payload.values }).doesNotContain(Column.STAGED.name)
+    }
+
+    @Test
+    fun `AC-3 a CI that is not green never moves the card to Staged`() {
+        card("c1")
+        forge.scriptChecks("sha-1", ChecksState.Failed(listOf(FailedCheck("test-a", "boom"))))
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(RecordingPublisher())).run("c1")
+
+        assertThat(column("c1")).isNotEqualTo(Column.STAGED)
+        assertThat(store.events("c1").flatMap { it.payload.values }).doesNotContain(Column.STAGED.name)
+    }
+
+    @Test
+    fun `AC-4 the stage tests run on a delivery over a FakeForge with a green CI scripted and reach Staged`() {
+        card("c1")
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green)).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+        assertThat(forge.opened).hasSize(1)
+        assertThat(stagedMove().payload["head"]).isEqualTo("sha-1")
+        assertThat(stagedMove().payload["ci"]).isEqualTo("green")
     }
 
     private fun git(workdir: Path, vararg args: String): String {
