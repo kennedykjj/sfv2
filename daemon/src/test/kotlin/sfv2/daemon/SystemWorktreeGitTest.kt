@@ -82,4 +82,19 @@ class SystemWorktreeGitTest {
 
         assertThat(SystemWorktreeCommit().commitAll(plain, "x")).isFalse()
     }
+
+    @Test
+    fun `qaCommit finds the commit carrying the QA trailer and ignores the ones after it`() {
+        val dir = tmp.resolve("wt").resolve("c1")
+        git.addWorktree(repo, dir, "feat/c1-x")
+        Files.writeString(dir.resolve("a.txt"), "tests")
+        val commit = SystemWorktreeCommit()
+        commit.commitAll(dir, "test(tests): x\n\n" + WorktreeHead.QA_COMMIT_TRAILER)
+        val qa = sh(dir, "rev-parse", "HEAD").trim()
+        Files.writeString(dir.resolve("b.txt"), "impl")
+        commit.commitAll(dir, "feat(daemon): x")
+
+        assertThat(GitWorktreeHead().qaCommit(dir)).isEqualTo(qa)
+        assertThat(GitWorktreeHead().of(dir)).isNotEqualTo(qa)
+    }
 }

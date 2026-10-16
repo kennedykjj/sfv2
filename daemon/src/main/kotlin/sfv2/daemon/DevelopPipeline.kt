@@ -42,15 +42,27 @@ interface DevelopGates {
 /** The commit that is the worktree's HEAD, or null when it cannot be read. */
 fun interface WorktreeHead {
     fun of(worktree: Path): String?
+
+    /** The commit the daemon made for the QA tests (its message carries [QA_COMMIT_TRAILER]), or null. */
+    fun qaCommit(worktree: Path): String? = null
+
+    companion object {
+        const val QA_COMMIT_TRAILER = "sfv2-stage: qa"
+    }
 }
 
-/** `git rev-parse HEAD` without a shell. */
+/** `git rev-parse HEAD` and `git log --grep` without a shell. */
 class GitWorktreeHead(private val timeoutSeconds: Long = 10) : WorktreeHead {
-    override fun of(worktree: Path): String? {
+    override fun of(worktree: Path): String? = git(worktree, "rev-parse", "HEAD")
+
+    override fun qaCommit(worktree: Path): String? =
+        git(worktree, "log", "-n", "1", "--format=%H", "--fixed-strings", "--grep=${WorktreeHead.QA_COMMIT_TRAILER}")
+
+    private fun git(worktree: Path, vararg args: String): String? {
         val output = Files.createTempFile("worktree-head", ".out")
         try {
             val process = try {
-                ProcessBuilder("git", "-C", worktree.toString(), "rev-parse", "HEAD")
+                ProcessBuilder(listOf("git", "-C", worktree.toString()) + args)
                     .redirectErrorStream(true)
                     .redirectOutput(output.toFile())
                     .start()
@@ -143,7 +155,7 @@ class RealDevelopGates(
         execute(cardId, GateSpec(gateName(layer, "build"), command, worktree.resolve(layer.path), BUILD_TIMEOUT))
 
     private fun acceptanceEdit(cardId: String, layer: ProjectLayer, worktree: Path, plan: TestPlan): GateResult {
-        val qaCommit = qaCommits[cardId] ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
+        val qaCommit = qaCommits[cardId] ?: head.qaCommit(worktree) ?: return GateResult(EDIT_GATE, false, "no_qa_commit")
         val files = plan.filesOf(layer)
         val verdict = try {
             AcceptanceEditGate(executor, runner).check(cardId, worktree, qaCommit, files, keepAssertions, runDir.resolve(cardId))
@@ -307,7 +319,7 @@ class DevelopPipeline(
             }
         }
         val worktree = worktrees.ensure(project, cardId, card.title)
-        var failed: List<GateResult> = emptyList()
+        var failed: List<GateResult> = reworkReason(cardId)
         var redPassed = redProvenSinceSpec(cardId)
         for (round in 1..maxRounds) {
             val outcome = playRound(cardId, worktree.path, redPassed, failed)
@@ -320,6 +332,18 @@ class DevelopPipeline(
             }
         }
         block(cardId, failed)
+    }
+
+    /** Why the validation sent the card back to Coding, when this run is the rework it asked for. */
+    private fun reworkReason(cardId: String): List<GateResult> {
+        val events = store.events(cardId)
+        val lastValidation = events.indexOfLast { it.type == EventType.CARD_MOVED && it.payload["to"] == Column.VALIDATION.name }
+        val back = events.withIndex().lastOrNull { (index, event) ->
+            index > lastValidation && event.type == EventType.CARD_MOVED && event.payload["to"] == Column.CODING.name &&
+                event.payload["from"] in setOf(Column.VALIDATION.name, Column.STAGED.name)
+        }?.value ?: return emptyList()
+        val reason = back.payload["reason"]?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return listOf(GateResult("validate", false, reason))
     }
 
     /**
@@ -369,9 +393,10 @@ class DevelopPipeline(
     private fun commitSession(cardId: String, worktree: Path, type: String, scope: String) {
         if (type == "feat") RedStubFiles.removeEmptied(worktree)
         val card = store.card(cardId) ?: return
-        val message = ConventionText.commitSubject(
+        val subject = ConventionText.commitSubject(
             project.policies.conventions.commitFormat, type, scope, card.title, cardId, ConventionText.ticketOf(card.references),
         )
+        val message = if (type == "test") subject + "\n\n" + WorktreeHead.QA_COMMIT_TRAILER else subject
         if (!commit.commitAll(worktree, message)) log.log("develop_commit_failed", mapOf("card" to cardId, "scope" to scope))
     }
 

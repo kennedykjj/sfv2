@@ -289,6 +289,54 @@ class DevelopPipelineTest {
         assertThat(gates.calls).contains("red")
     }
 
+    private fun sentBackByValidation(id: String, reason: String? = "AC-1 não atendido: a versão continua a mesma") {
+        val payload = buildMap {
+            put("from", "VALIDATION")
+            put("to", "CODING")
+            reason?.let { put("reason", it) }
+        }
+        recorder.record(id, requireNotNull(store.card(id)), Event(EventId("back-$id"), clock.instant(), Actor.Factory("validate"), EventType.CARD_MOVED, payload))
+    }
+
+    @Test
+    fun `AC-6 a card the validation sent back to Coding is developed again and its engineers read the reason`() {
+        card("c1", Column.CODING)
+        val redPassed = Event(
+            EventId("red-pass"), clock.instant(), Actor.Factory("gate"), EventType.GATE_FINISHED,
+            mapOf("gate" to "daemon-red", "verdict" to "PASS"),
+        )
+        recorder.record("c1", requireNotNull(store.card("c1")), redPassed)
+        sentBackByValidation("c1")
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val runtime = succeeding(rounds(1))
+
+        pipeline(runtime, gates).run("c1")
+
+        val prompts = runtime.launched.map { it.prompt }
+        assertThat(prompts).hasSize(DevelopFixtures.project.layers.size)
+        assertThat(prompts).allSatisfy { assertThat(it).contains("engenheiro da camada").contains("AC-1 não atendido: a versão continua a mesma") }
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+    }
+
+    @Test
+    fun `AC-6 the dispatcher picks a card sent back to Coding until a session of the rework records its cost`() {
+        card("back", Column.CODING)
+        sentBackByValidation("back")
+        card("plain", Column.CODING)
+        val pool = RunPool(2, store, clock, ProcessProbe { _, _ -> true }, log, recorder = recorder)
+        val dispatcher = DispatcherFixtures.dispatcherFor(
+            setOf(DispatchStage.DEVELOP), store, pool, DevelopStageLauncher({ pipeline(succeeding(rounds(1)), DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))) }, pool),
+            DispatcherFixtures.FakePause(), AlwaysWorkTime, clock, log,
+        )
+        try {
+            assertThat(dispatcher.runCycle()).containsExactly(DispatchedRun(DispatchStage.DEVELOP, "back"))
+            assertThat(DevelopFixtures.await { column("back") == Column.VALIDATION && !pool.isLocked("back") }).isTrue()
+            assertThat(column("plain")).isEqualTo(Column.CODING)
+        } finally {
+            dispatcher.close()
+        }
+    }
+
     @Test
     fun `AC-2 a finished run with every gate green moves the card to Validation`() {
         card("c1")
