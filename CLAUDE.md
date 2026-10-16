@@ -1,6 +1,6 @@
 # sfv2
 
-Fábrica de software local: agentes refinam, implementam, validam e entregam; gates determinísticos seguram; o dono decide. Leia PRODUCT.md e ARCHITECTURE.md antes de propor ou escrever código.
+Fábrica de software local: agentes refinam, implementam, validam e entregam; gates determinísticos seguram; o dono decide. Leia PRODUCT.md e ARCHITECTURE.md antes de propor ou escrever código. O porquê das decisões, o mapa das issues e como a fábrica opera este repositório estão em `docs/context/`.
 
 ## Idioma
 
