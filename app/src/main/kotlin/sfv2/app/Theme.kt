@@ -129,6 +129,7 @@ internal object Texts {
         when (cause) {
             NotSentCause.DAEMON_UNAVAILABLE -> "Nada foi enviado: o daemon está indisponível. Confira com sfv2 doctor e tente de novo."
             NotSentCause.NO_OWNER_PROOF -> "Nada foi enviado: o arquivo do token do dono não foi encontrado. Rode sfv2 service install e tente de novo."
+            NotSentCause.NO_ANSWER -> "O daemon não respondeu a tempo: confira o card antes de tentar de novo."
         }
 
     /** What the move means to the owner, for the destination chooser and the drop button. */
