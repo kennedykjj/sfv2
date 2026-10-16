@@ -907,8 +907,204 @@ class BoardStateTest {
         }
     }
 
+    @Test
+    fun `AC-1 resizing a column sets its width and leaves the others alone`() {
+        val state = ColumnLayoutState().resize(Column.CODING, 300)
+
+        assertThat(state.widthOf(Column.CODING)).isEqualTo(300)
+        assertThat(Column.entries.filter { it != Column.CODING }.map { state.widthOf(it) }).allMatch { it == 220 }
+    }
+
+    @Test
+    fun `AC-1 the width is clamped to the minimum of the density and to 480`() {
+        val cards = ColumnLayoutState()
+        val chips = ColumnLayoutState().withDensity(BoardDensity.CHIPS)
+
+        assertThat(ColumnLayoutState.MAX_WIDTH).isEqualTo(480)
+        assertThat(cards.resize(Column.CODING, 150).widthOf(Column.CODING)).isEqualTo(200)
+        assertThat(cards.resize(Column.CODING, 900).widthOf(Column.CODING)).isEqualTo(480)
+        assertThat(chips.resize(Column.CODING, 50).widthOf(Column.CODING)).isEqualTo(96)
+        assertThat(chips.resize(Column.CODING, 900).widthOf(Column.CODING)).isEqualTo(480)
+    }
+
+    @Test
+    fun `AC-2 resetting a column brings back only its default width of the current density`() {
+        val state = ColumnLayoutState().resize(Column.CODING, 300).resize(Column.INBOX, 260)
+
+        val after = state.reset(Column.CODING)
+
+        assertThat(after.widthOf(Column.CODING)).isEqualTo(220)
+        assertThat(after.widthOf(Column.INBOX)).isEqualTo(260)
+        assertThat(state.withDensity(BoardDensity.CHIPS).resize(Column.CODING, 200).reset(Column.CODING).widthOf(Column.CODING))
+            .isEqualTo(96)
+    }
+
+    @Test
+    fun `AC-3 equalize restores every width and keeps fit and density`() {
+        val state = ColumnLayoutState().withFit(false).resize(Column.CODING, 300).resize(Column.INBOX, 260)
+
+        val after = state.equalize()
+
+        assertThat(Column.entries.map { after.widthOf(it) }).allMatch { it == 220 }
+        assertThat(after.fit).isFalse()
+        assertThat(after.density).isEqualTo(BoardDensity.CARDS)
+    }
+
+    @Test
+    fun `AC-3 equalize in Chips goes back to the chip default and stays in Chips`() {
+        val state = ColumnLayoutState().withDensity(BoardDensity.CHIPS).resize(Column.CODING, 300)
+
+        val after = state.equalize()
+
+        assertThat(Column.entries.map { after.widthOf(it) }).allMatch { it == 96 }
+        assertThat(after.density).isEqualTo(BoardDensity.CHIPS)
+        assertThat(after.fit).isTrue()
+    }
+
+    @Test
+    fun `AC-4 a wide window splits the spare room in proportion to the widths and fills it exactly`() {
+        val state = ColumnLayoutState().resize(Column.CODING, 440)
+
+        val widths = columnWidths(state, FULL_COUNTS, viewportDp = 3000, gap = 10)
+
+        assertThat(widths.keys).containsExactlyElementsOf(Column.entries)
+        assertThat(widths.values.sum() + 9 * 10).isEqualTo(3000)
+        assertThat(widths.getValue(Column.CODING).toFloat() / widths.getValue(Column.INBOX))
+            .isCloseTo(2f, within(0.05f))
+        assertThat(widths.values).allMatch { it > 220 }
+    }
+
+    @Test
+    fun `AC-4 the spare room goes only to expanded columns and collapsed ones keep their strip`() {
+        val counts = FULL_COUNTS + (Column.INBOX to 0) + (Column.DONE to 0)
+
+        val widths = columnWidths(ColumnLayoutState(), counts, viewportDp = 3000, gap = 10)
+
+        assertThat(widths.getValue(Column.INBOX)).isEqualTo(46)
+        assertThat(widths.getValue(Column.DONE)).isEqualTo(46)
+        assertThat(widths.values.sum() + 9 * 10).isEqualTo(3000)
+        assertThat(Column.entries.filter { it != Column.INBOX && it != Column.DONE }.map { widths.getValue(it) })
+            .allMatch { it > 220 }
+    }
+
+    @Test
+    fun `AC-5 a narrow window keeps every column at or above the minimum of the density`() {
+        val state = ColumnLayoutState().resize(Column.CODING, 200)
+
+        val widths = columnWidths(state, FULL_COUNTS, viewportDp = 1000, gap = 10)
+
+        assertThat(widths.values).allMatch { it >= 200 }
+        assertThat(widths.getValue(Column.CODING)).isEqualTo(200)
+        assertThat(widths.values.sum() + 9 * 10).isGreaterThan(1000)
+    }
+
+    @Test
+    fun `AC-5 with fit off no column grows even in a wide window`() {
+        val state = ColumnLayoutState().withFit(false).resize(Column.CODING, 300)
+
+        val widths = columnWidths(state, FULL_COUNTS, viewportDp = 5000, gap = 10)
+
+        assertThat(widths.getValue(Column.CODING)).isEqualTo(300)
+        assertThat(Column.entries.filter { it != Column.CODING }.map { widths.getValue(it) }).allMatch { it == 220 }
+    }
+
+    @Test
+    fun `AC-5 fit is on by default`() {
+        assertThat(ColumnLayoutState().fit).isTrue()
+        assertThat(ColumnLayoutState().density).isEqualTo(BoardDensity.CARDS)
+        assertThat(ColumnLayoutState().withFit(false).withFit(true).fit).isTrue()
+    }
+
+    @Test
+    fun `AC-6 an empty column becomes a 46 strip until the owner restores it`() {
+        val counts = FULL_COUNTS + (Column.INBOX to 0)
+        val state = ColumnLayoutState().withFit(false)
+
+        val collapsed = columnWidths(state, counts, viewportDp = 5000, gap = 10)
+        val restored = columnWidths(state.restore(Column.INBOX), counts, viewportDp = 5000, gap = 10)
+
+        assertThat(ColumnLayoutState.COLLAPSED_WIDTH).isEqualTo(46)
+        assertThat(collapsed.getValue(Column.INBOX)).isEqualTo(46)
+        assertThat(collapsed.getValue(Column.CODING)).isEqualTo(220)
+        assertThat(restored.getValue(Column.INBOX)).isEqualTo(220)
+    }
+
+    @Test
+    fun `AC-6 a restored column comes back at the width the owner gave it`() {
+        val counts = FULL_COUNTS + (Column.INBOX to 0)
+        val state = ColumnLayoutState().withFit(false).resize(Column.INBOX, 300)
+
+        val widths = columnWidths(state.restore(Column.INBOX), counts, viewportDp = 5000, gap = 10)
+
+        assertThat(widths.getValue(Column.INBOX)).isEqualTo(300)
+    }
+
+    @Test
+    fun `AC-6 a column with cards is never a strip`() {
+        val widths = columnWidths(ColumnLayoutState().withFit(false), FULL_COUNTS, viewportDp = 5000, gap = 10)
+
+        assertThat(widths.values).allMatch { it == 220 }
+    }
+
+    @Test
+    fun `AC-7 changing the density keeps the widths the owner set for the other density`() {
+        val cards = ColumnLayoutState().resize(Column.CODING, 300)
+
+        val chips = cards.withDensity(BoardDensity.CHIPS)
+        val chipsResized = chips.resize(Column.CODING, 150)
+        val backToCards = chipsResized.withDensity(BoardDensity.CARDS)
+        val backToChips = backToCards.withDensity(BoardDensity.CHIPS)
+
+        assertThat(chips.widthOf(Column.CODING)).isEqualTo(96)
+        assertThat(backToCards.widthOf(Column.CODING)).isEqualTo(300)
+        assertThat(backToChips.widthOf(Column.CODING)).isEqualTo(150)
+    }
+
+    @Test
+    fun `AC-7 the densities have their own minimum and default width`() {
+        assertThat(BoardDensity.entries.map { it.name }).containsExactly("CARDS", "CHIPS")
+        assertThat(BoardDensity.CARDS.minWidth).isEqualTo(200)
+        assertThat(BoardDensity.CARDS.defaultWidth).isEqualTo(220)
+        assertThat(BoardDensity.CHIPS.minWidth).isEqualTo(96)
+        assertThat(BoardDensity.CHIPS.defaultWidth).isEqualTo(96)
+    }
+
+    @Test
+    fun `AC-8 the arrow keys move a column by 16 dp`() {
+        val state = ColumnLayoutState().resize(Column.CODING, 300)
+        val step = ColumnLayoutState.KEY_STEP
+
+        assertThat(step).isEqualTo(16)
+        assertThat(state.resize(Column.CODING, state.widthOf(Column.CODING) + step).widthOf(Column.CODING)).isEqualTo(316)
+        assertThat(state.resize(Column.CODING, state.widthOf(Column.CODING) - step).widthOf(Column.CODING)).isEqualTo(284)
+    }
+
+    @Test
+    fun `AC-8 the arrow keys stop at the limits of the density`() {
+        val step = ColumnLayoutState.KEY_STEP
+        val atMax = ColumnLayoutState().resize(Column.CODING, 480)
+        val atMin = ColumnLayoutState().resize(Column.CODING, 200)
+
+        assertThat(atMax.resize(Column.CODING, atMax.widthOf(Column.CODING) + step).widthOf(Column.CODING)).isEqualTo(480)
+        assertThat(atMin.resize(Column.CODING, atMin.widthOf(Column.CODING) - step).widthOf(Column.CODING)).isEqualTo(200)
+    }
+
+    @Test
+    fun `AC-8 the minimap and the scroll target work on the rendered widths`() {
+        val widths = columnWidths(ColumnLayoutState().resize(Column.CODING, 440), FULL_COUNTS, viewportDp = 3000, gap = 10)
+
+        val map = boardMap(BoardFixtures.empty(), widths, gap = 10, viewportWidth = 3000, scrollOffset = 0)
+        val target = scrollTarget(Column.entries[3], widths, gap = 10, viewportWidth = 1000)
+
+        assertThat(map.viewShare).isCloseTo(1f, within(EPSILON))
+        assertThat(map.boxes.first { it.column == Column.CODING }.share)
+            .isCloseTo(widths.getValue(Column.CODING) / 3000f, within(EPSILON))
+        assertThat(target).isEqualTo(Column.entries.take(3).sumOf { widths.getValue(it) + 10 })
+    }
+
     private companion object {
         const val EPSILON = 1e-5f
+        val FULL_COUNTS: Map<Column, Int> = Column.entries.associateWith { 1 }
     }
 }
 
