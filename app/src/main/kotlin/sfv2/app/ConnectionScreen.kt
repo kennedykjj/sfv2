@@ -56,17 +56,22 @@ fun ConnectionScreen(state: ConnectionState, onOpenSettings: (() -> Unit)? = nul
             }
             if (state is ConnectionState.Disconnected) Explanation(Texts.explain(state.reason))
             if (state == ConnectionState.Connected && onOpenSettings != null) {
-                BasicText(
-                    Texts.OPEN_SETTINGS,
-                    modifier = Modifier
-                        .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
-                        .clickable(role = Role.Button, onClick = onOpenSettings)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.text),
-                )
+                SettingsButton(onOpenSettings)
             }
         }
     }
+}
+
+@Composable
+internal fun SettingsButton(onClick: () -> Unit) {
+    BasicText(
+        Texts.OPEN_SETTINGS,
+        modifier = Modifier
+            .border(1.dp, Tokens.edge, RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        style = TextStyle(fontFamily = sans, fontSize = 14.sp, color = Tokens.text),
+    )
 }
 
 @Composable
