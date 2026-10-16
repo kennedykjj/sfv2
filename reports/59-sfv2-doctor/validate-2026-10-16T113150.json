@@ -1,0 +1,17 @@
+{
+  "outcome": "staged",
+  "pr": 201,
+  "head": "d2ecd5c893013584e83cb15c583115147aef3398",
+  "agents": [],
+  "rounds": 0,
+  "failed_gates": [],
+  "gates_reused": ["green cli sfv2.cli.MainTest"],
+  "flaky": [],
+  "amendments": [],
+  "findings": {
+    "🔴": [],
+    "🟡": ["cli/src/main/kotlin/sfv2/cli/DoctorCommand.kt:86 socket connect bloqueante sem timeout"],
+    "⚪": []
+  },
+  "ci": {"build": "pass", "guard": "pass"}
+}
