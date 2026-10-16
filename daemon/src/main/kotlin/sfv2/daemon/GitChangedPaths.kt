@@ -10,6 +10,9 @@ class ChangedPathsException(message: String) : RuntimeException(message)
 
 interface ChangedPaths {
     fun between(worktree: Path, base: String): List<String>
+
+    /** Files the worktree holds that git does not track yet (and does not ignore). */
+    fun untracked(worktree: Path): List<String> = emptyList()
 }
 
 /** Lists the changed paths with `git diff --name-only --no-renames`, so a rename yields origin and destination. */
@@ -19,9 +22,16 @@ class GitChangedPaths(private val timeoutSeconds: Long = 30) : ChangedPaths {
         if (base.isBlank() || base.startsWith("-")) {
             throw ChangedPathsException("invalid base revision: $base")
         }
+        return list(worktree, "diff", "--name-only", "--no-renames", "-z", base, "--")
+    }
+
+    override fun untracked(worktree: Path): List<String> =
+        list(worktree, "ls-files", "--others", "--exclude-standard", "-z")
+
+    private fun list(worktree: Path, vararg args: String): List<String> {
         val output = Files.createTempFile("changed-paths", ".out")
         try {
-            val process = ProcessBuilder("git", "-C", worktree.toString(), "diff", "--name-only", "--no-renames", "-z", base, "--")
+            val process = ProcessBuilder(listOf("git", "-C", worktree.toString()) + args)
                 .redirectErrorStream(true)
                 .redirectOutput(output.toFile())
                 .start()
