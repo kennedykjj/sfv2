@@ -173,6 +173,12 @@ object Texts {
 
     const val OPEN_SETTINGS = "Configurações"
     const val RELOAD = "Recarregar"
+    const val FIT_TO_WINDOW = "Ajustar à janela"
+    const val EQUALIZE = "Equalizar"
+    const val DENSITY_CARDS = "Cartões"
+    const val DENSITY_CHIPS = "Fichas"
+    fun resizeHandle(column: BoardColumn): String = "Ajustar largura de ${column.displayName}"
+    fun restoreColumn(column: BoardColumn): String = "Restaurar ${column.displayName}, vazia"
     const val RELOADING = "Recarregando…"
     const val RELOAD_FAILED = "Não foi possível ler o quadro do daemon. Confira se o daemon está ativo e tente de novo."
     const val SETTINGS_TITLE = "Configurações"
