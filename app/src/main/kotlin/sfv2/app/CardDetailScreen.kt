@@ -59,16 +59,31 @@ import kotlinx.coroutines.launch
 
 private val COMPACT_WIDTH = 860.dp
 private val OWNER_DECISIONS = setOf("OWNER_APPROVED", "OWNER_CHANGE_REQUESTED")
+private const val PASS = "PASS"
+private const val FAIL = "FAIL"
+private const val NO_GATE = "none"
+private const val MANUAL = "manual"
 private val INSTANT_FORMAT = DateTimeFormatter.ofPattern("d MMM HH:mm", Locale.forLanguageTag("pt-BR"))
 
 /** `16 out 14:32`, in the given zone. */
 fun formatInstant(at: Instant, zone: ZoneId): String =
     INSTANT_FORMAT.format(at.atZone(zone)).replace(".", "")
 
+/** `850 ms`, `12 s`, `3 min 20 s`; `—` when the gate ran no process. */
+fun formatDuration(durationMs: Long?): String {
+    if (durationMs == null) return Texts.NO_DURATION
+    if (durationMs < 1_000) return "$durationMs ms"
+    val seconds = durationMs / 1_000
+    if (seconds < 60) return "$seconds s"
+    val rest = seconds % 60
+    return if (rest == 0L) "${seconds / 60} min" else "${seconds / 60} min $rest s"
+}
+
 /** An approval or change request signed by the owner, as opposed to an event written by an agent or the factory. */
 internal fun TimelineEvent.isOwnerDecision(): Boolean = type in OWNER_DECISIONS && actor == "owner"
 
 private fun body(color: Color = Tokens.soft) = TextStyle(fontFamily = sans, fontSize = 14.sp, color = color)
+private fun meta(color: Color = Tokens.muted) = TextStyle(fontFamily = sans, fontSize = 13.sp, color = color)
 private fun tabular(style: TextStyle) = style.copy(fontFeatureSettings = "tnum")
 
 /** [specReview] is null without a daemon; the owner's actions show only for a card in `SPEC_REVIEW`. */
@@ -161,6 +176,14 @@ private fun Detail(detail: CardDetail, zone: ZoneId, specReview: SpecReviewContr
             Faint(Texts.NO_SPEC)
         } else {
             SelectionContainer { BasicText(detail.spec.text, modifier = Modifier.widthIn(max = 640.dp), style = body()) }
+        }
+    }
+    Section(Texts.GATES) {
+        if (detail.gates.isEmpty() && detail.criteria.isEmpty()) Faint(Texts.NO_GATES)
+        detail.gates.forEach { GateLine(it) }
+        if (detail.criteria.isNotEmpty()) {
+            BasicText(Texts.CRITERIA, style = meta(Tokens.soft).copy(fontWeight = FontWeight.SemiBold))
+            detail.criteria.forEach { CriterionLine(it) }
         }
     }
     Section(Texts.TIMELINE) {
@@ -325,6 +348,36 @@ private fun Section(title: String, content: @Composable () -> Unit) {
             style = TextStyle(fontFamily = sans, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Tokens.text),
         )
         content()
+    }
+}
+
+@Composable
+private fun GateLine(gate: GateRow) {
+    val passed = gate.verdict == PASS
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicText(
+            if (passed) Texts.GATE_OK else Texts.GATE_BAD,
+            style = meta(if (passed) Tokens.ok else Tokens.bad).copy(fontWeight = FontWeight.SemiBold),
+        )
+        BasicText(gate.name, style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.text))
+        BasicText(formatDuration(gate.durationMs), style = tabular(meta()))
+        gate.reason?.let { BasicText(it, style = meta()) }
+    }
+}
+
+@Composable
+private fun CriterionLine(criterion: CriterionRow) {
+    val (label, color) = when (criterion.gate) {
+        PASS -> Texts.GATE_OK to Tokens.ok
+        FAIL -> Texts.GATE_BAD to Tokens.bad
+        MANUAL -> Texts.GATE_MANUAL to Tokens.muted
+        NO_GATE -> Texts.GATE_NOT_RUN to Tokens.faint
+        else -> criterion.gate to Tokens.muted
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        BasicText(criterion.ac, style = meta(Tokens.text).copy(fontWeight = FontWeight.SemiBold))
+        BasicText(criterion.testFile, style = TextStyle(fontFamily = mono, fontSize = 13.sp, color = Tokens.soft))
+        BasicText(label, style = meta(color))
     }
 }
 

@@ -28,6 +28,16 @@ import sfv2.core.OWNER_WAIT_COLUMNS
  *   squares (`true` = in use, one per slot) and the meter (`percent` = spent over the day limit, rounded).
  * - `ceiling` is `PulseCeiling.Meter` when the day has a limit, `PulseCeiling.Unlimited` otherwise, null before a reading.
  *
+ * Command palette (pure, in `PaletteModel.kt`):
+ *
+ * - `PaletteView(label)` with `BOARD("Quadro")`, `FEED("Feed")`, `SETTINGS("Configurações")`; `Direction { UP, DOWN, FIRST, LAST }`.
+ * - `PaletteEntry.Card(card, waiting)` and `PaletteEntry.View(view)`.
+ * - `paletteEntries(cards, views, query)`: waiting cards, then views, then the other cards; filtered by label, title,
+ *   `id` prefix or column display name (case-insensitive); at most `PALETTE_ROWS` (9) rows, cut after filtering.
+ * - `PaletteState(open, query, active)`: `toggle()`, `close()` (both drop query and active), `withQuery(query)`,
+ *   `move(direction, size)` (UP/DOWN wrap, FIRST/LAST jump, result always in `0 until size`, 0 when `size` is 0),
+ *   `select(entries): PaletteChoice(state, entry)` where `state` is closed and `entry` is the active row or null.
+ *
  * Column map (pure, in `BoardMap.kt`): `boardMap`, `scrollTarget` and `edgeFades`. Total width is the sum of the
  * column widths plus the gaps between them; `maxScroll = max(0, total - viewportWidth)`.
  */
@@ -240,6 +250,140 @@ class BoardStateTest {
     }
 
     @Test
+    fun `AC-1 palette with an empty query lists waiting cards, then views, then the other cards`() {
+        val entries = paletteEntries(PaletteFixtures.mixedCards(), PaletteView.entries, "")
+
+        assertThat(entries.keys()).containsExactly(
+            "card:b", "card:d", "view:BOARD", "view:FEED", "view:SETTINGS", "card:abc123", "card:c",
+        )
+        assertThat(entries.filterIsInstance<PaletteEntry.Card>().associate { it.card.id to it.waiting })
+            .containsEntry("b", true)
+            .containsEntry("d", true)
+            .containsEntry("abc123", false)
+            .containsEntry("c", false)
+    }
+
+    @Test
+    fun `AC-1 palette shows at most nine rows and keeps the waiting cards first`() {
+        val cards = (1..12).map { BoardFixtures.aCard("c$it", Column.CODING, "Plain $it") } +
+            BoardFixtures.aCard("w", Column.STAGED, "Waiting")
+
+        val entries = paletteEntries(cards, PaletteView.entries, "")
+
+        assertThat(PALETTE_ROWS).isEqualTo(9)
+        assertThat(entries).hasSize(9)
+        assertThat(entries.keys().take(4)).containsExactly("card:w", "view:BOARD", "view:FEED", "view:SETTINGS")
+    }
+
+    @Test
+    fun `AC-2 palette filters by title, id prefix and column name without caring about case`() {
+        val cards = PaletteFixtures.mixedCards()
+
+        assertThat(paletteEntries(cards, PaletteView.entries, "LOGIN").keys()).containsExactly("card:c")
+        assertThat(paletteEntries(cards, PaletteView.entries, "abc").keys()).containsExactly("card:abc123")
+        assertThat(paletteEntries(cards, PaletteView.entries, "spec rev").keys()).containsExactly("card:b")
+        assertThat(paletteEntries(cards, PaletteView.entries, "staged").keys()).containsExactly("card:d")
+    }
+
+    @Test
+    fun `AC-2 palette filters views by label and keeps the order of the empty query`() {
+        val cards = PaletteFixtures.mixedCards()
+
+        assertThat(paletteEntries(cards, PaletteView.entries, "quad").keys()).containsExactly("view:BOARD")
+        assertThat(paletteEntries(cards, PaletteView.entries, "FEED").keys()).containsExactly("view:FEED")
+        assertThat(paletteEntries(cards, PaletteView.entries, "configura").keys()).containsExactly("view:SETTINGS")
+        assertThat(paletteEntries(cards, PaletteView.entries, "e").keys())
+            .containsSubsequence("card:b", "card:d", "view:BOARD", "view:FEED", "view:SETTINGS")
+    }
+
+    @Test
+    fun `AC-2 palette without a match is empty and nothing can be chosen`() {
+        val entries = paletteEntries(PaletteFixtures.mixedCards(), PaletteView.entries, "zzz-no-match")
+        val choice = PaletteState(open = true, query = "zzz-no-match", active = 0).select(entries)
+
+        assertThat(entries).isEmpty()
+        assertThat(choice.entry).isNull()
+    }
+
+    @Test
+    fun `AC-3 arrows move the active row and wrap at both ends`() {
+        val state = PaletteState(open = true)
+
+        assertThat(state.move(Direction.DOWN, 3).active).isEqualTo(1)
+        assertThat(state.move(Direction.DOWN, 3).move(Direction.DOWN, 3).move(Direction.DOWN, 3).active).isEqualTo(0)
+        assertThat(state.move(Direction.UP, 3).active).isEqualTo(2)
+        assertThat(state.move(Direction.DOWN, 3).move(Direction.UP, 3).active).isEqualTo(0)
+    }
+
+    @Test
+    fun `AC-3 Home and End jump to the first and last row`() {
+        val middle = PaletteState(open = true, active = 2)
+
+        assertThat(middle.move(Direction.FIRST, 5).active).isEqualTo(0)
+        assertThat(middle.move(Direction.LAST, 5).active).isEqualTo(4)
+    }
+
+    @Test
+    fun `AC-3 the active row stays inside the list after the filter shrinks it`() {
+        val deep = PaletteState(open = true, active = 7)
+
+        assertThat(deep.move(Direction.DOWN, 3).active).isBetween(0, 2)
+        assertThat(deep.move(Direction.UP, 3).active).isBetween(0, 2)
+        assertThat(deep.move(Direction.LAST, 3).active).isEqualTo(2)
+        assertThat(deep.move(Direction.DOWN, 0).active).isEqualTo(0)
+    }
+
+    @Test
+    fun `AC-4 choosing a card row returns that card and closes the palette`() {
+        val entries = paletteEntries(PaletteFixtures.mixedCards(), PaletteView.entries, "")
+        val state = PaletteState(open = true, query = "", active = 1)
+
+        val choice = state.select(entries)
+
+        assertThat(choice.entry)
+            .isEqualTo(PaletteEntry.Card(BoardFixtures.aCard("d", Column.STAGED, "Approve release"), true))
+        assertThat(choice.state.open).isFalse()
+        assertThat(choice.state.query).isEmpty()
+    }
+
+    @Test
+    fun `AC-4 choosing a view row returns that view and closes the palette`() {
+        val entries = paletteEntries(PaletteFixtures.mixedCards(), PaletteView.entries, "feed")
+        val state = PaletteState(open = true, query = "feed", active = 0)
+
+        val choice = state.select(entries)
+
+        assertThat(choice.entry).isEqualTo(PaletteEntry.View(PaletteView.FEED))
+        assertThat(choice.state.open).isFalse()
+    }
+
+    @Test
+    fun `AC-5 the shortcut opens the palette and pressing it again closes it dropping the text`() {
+        val closed = PaletteState()
+
+        val opened = closed.toggle()
+        val typed = opened.withQuery("abc")
+        val toggledOff = typed.toggle()
+
+        assertThat(opened.open).isTrue()
+        assertThat(typed.query).isEqualTo("abc")
+        assertThat(toggledOff.open).isFalse()
+        assertThat(toggledOff.query).isEmpty()
+    }
+
+    @Test
+    fun `AC-5 Esc or a click on the backdrop closes the palette and discards the text`() {
+        val typed = PaletteState(open = true, query = "abc", active = 2)
+
+        val closed = typed.close()
+
+        assertThat(closed.open).isFalse()
+        assertThat(closed.query).isEmpty()
+        assertThat(closed.active).isEqualTo(0)
+        assertThat(closed.toggle().query).isEmpty()
+    }
+
+    @Test
     fun `AC-1 map has one box per column in board order with the card counts`() {
         val board = BoardFixtures.empty().applySnapshot(
             listOf(
@@ -384,6 +528,22 @@ class BoardStateTest {
     private companion object {
         const val EPSILON = 1e-5f
     }
+}
+
+private fun List<PaletteEntry>.keys(): List<String> = map {
+    when (it) {
+        is PaletteEntry.Card -> "card:${it.card.id}"
+        is PaletteEntry.View -> "view:${it.view.name}"
+    }
+}
+
+object PaletteFixtures {
+    fun mixedCards(): List<BoardCard> = listOf(
+        BoardFixtures.aCard("abc123", Column.CODING, "Refactor parser"),
+        BoardFixtures.aCard("b", Column.SPEC_REVIEW, "Write the spec"),
+        BoardFixtures.aCard("c", Column.DONE, "Fix login"),
+        BoardFixtures.aCard("d", Column.STAGED, "Approve release"),
+    )
 }
 
 object BoardFixtures {
