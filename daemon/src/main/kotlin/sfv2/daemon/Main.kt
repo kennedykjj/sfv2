@@ -76,6 +76,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                 milestones = refine.milestones,
                 settings = settings,
                 costSummary = refine.costSummary,
+                pulse = refine.pulse,
                 onClose = {
                     runCatching { refine.close() }
                     database.close()

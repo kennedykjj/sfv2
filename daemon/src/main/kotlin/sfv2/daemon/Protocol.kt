@@ -11,6 +11,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
+import sfv2.core.AssistantState
 import sfv2.core.Column
 import sfv2.core.FactorySettings
 import sfv2.store.StoredEvent
@@ -119,6 +120,9 @@ sealed interface Request {
     /** Read-only: the newest [limit] events (1..[MAX_RECENT_EVENTS]) in seq order. */
     data class EventsRecent(val limit: Int) : Request
 
+    /** Read-only: the assistant state and phrase, the pool capacity and the cards with an active run. Takes no parameter. */
+    data object FactoryPulse : Request
+
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
 
@@ -145,6 +149,14 @@ data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostS
 sealed interface Response {
     /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
     data class EventsRecentResult(val events: List<StoredEvent>, val truncated: Boolean) : Response
+
+    /** The pulse of the factory; [active] holds card labels (`#<number>` or 8 hex characters), never titles. */
+    data class PulseResult(
+        val state: AssistantState,
+        val phrase: String,
+        val poolCapacity: Int,
+        val active: List<String>,
+    ) : Response
 
     data class CostSummaryResult(
         val totalUsd: BigDecimal,
@@ -273,6 +285,7 @@ fun parseRequest(line: String): Request {
         }
         "events.subscribe" -> parseSubscribe(obj)
         "events.recent" -> parseRecent(obj)
+        "factory.pulse" -> Request.FactoryPulse
         "cost.summary" -> {
             val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
             val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
@@ -483,6 +496,18 @@ fun render(response: Response): String = when (response) {
         put("ok", true)
         put("result", JsonArray(response.events.map { eventJson(it) }))
         put("truncated", response.truncated)
+    }.toString()
+    is Response.PulseResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("state", response.state.name)
+                put("phrase", response.phrase)
+                put("poolCapacity", response.poolCapacity)
+                put("active", JsonArray(response.active.map { JsonPrimitive(it) }))
+            },
+        )
     }.toString()
     is Response.CostSummaryResult -> buildJsonObject {
         put("ok", true)

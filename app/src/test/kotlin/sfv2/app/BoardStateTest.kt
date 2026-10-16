@@ -1,8 +1,10 @@
 package sfv2.app
 
+import java.math.BigDecimal
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.within
 import org.junit.jupiter.api.Test
+import sfv2.core.AssistantState
 import sfv2.core.Column
 import sfv2.core.EventType
 import sfv2.core.OWNER_WAIT_COLUMNS
@@ -17,6 +19,14 @@ import sfv2.core.OWNER_WAIT_COLUMNS
  *   card as `BoardSource.fetchCard` reported it (real column); without it the created card is not placed (never Inbox).
  *   `CARD_MOVED`/`OWNER_APPROVED` put the card in `payload["to"]` (a `Column` name), at the end of that column.
  * - `isWaitingForOwner(column)` and `OWNER_DECISION_COLUMNS`.
+ *
+ * Pulse strip (pure, in `PulseModel.kt`):
+ *
+ * - `Pulse(state: AssistantState, phrase: String, poolCapacity: Int, active: List<String>)`: the daemon's reading.
+ * - `PulseView.of(pulse, cost: CostSummary)` is the live strip; `PulseView.loading()` is the strip before any reading;
+ *   `PulseView.markStale()` keeps the last reading and says it is out of date. Nothing is computed beyond words,
+ *   squares (`true` = in use, one per slot) and the meter (`percent` = spent over the day limit, rounded).
+ * - `ceiling` is `PulseCeiling.Meter` when the day has a limit, `PulseCeiling.Unlimited` otherwise, null before a reading.
  *
  * Command palette (pure, in `PaletteModel.kt`):
  *
@@ -163,6 +173,80 @@ class BoardStateTest {
         assertThat(after.cardsIn(Column.STAGED)).isEmpty()
         assertThat(isWaitingForOwner(Column.READY_FOR_PROD)).isFalse()
         assertThat(after.cardsIn(Column.READY_FOR_PROD).map { it.id }).containsExactly("a")
+    }
+
+    @Test
+    fun `AC-3 pulse strip shows the state in words with the daemon's phrase`() {
+        val view = PulseView.of(PulseFixtures.aPulse(), PulseFixtures.dayWithLimit("3.20"))
+
+        assertThat(view.freshness).isEqualTo(PulseFreshness.Live)
+        assertThat(view.stateText).isEqualTo("▸ trabalhando")
+        assertThat(view.phrase).isEqualTo("Em andamento: #235, #240.")
+        assertThat(view.notice).isNull()
+    }
+
+    @Test
+    fun `AC-3 pulse strip shows the pool as used and total squares with the active cards`() {
+        val view = PulseView.of(PulseFixtures.aPulse(capacity = 4, active = listOf("#235", "#240")), PulseFixtures.dayWithLimit("3.20"))
+
+        assertThat(view.sessionsText).isEqualTo("2 de 4 sessões")
+        assertThat(view.squares).containsExactly(true, true, false, false)
+        assertThat(view.activeCards).containsExactly("#235", "#240")
+    }
+
+    @Test
+    fun `AC-3 pulse strip shows the day ceiling as a meter with the spend marked as estimate`() {
+        val view = PulseView.of(PulseFixtures.aPulse(), PulseFixtures.dayWithLimit("3.20"))
+
+        val meter = view.ceiling as? PulseCeiling.Meter
+        assertThat(meter).isNotNull()
+        assertThat(meter?.spent).contains("est.").contains("US$ 3,20")
+        assertThat(meter?.percent).isEqualTo(32)
+        assertThat(meter?.limitState).isEqualTo(LimitState.Within)
+    }
+
+    @Test
+    fun `AC-3 pulse strip meter follows the limit state the daemon reports`() {
+        val view = PulseView.of(PulseFixtures.aPulse(), PulseFixtures.dayWithLimit("10.00", dayReached = true))
+
+        val meter = view.ceiling as? PulseCeiling.Meter
+        assertThat(meter?.limitState).isEqualTo(LimitState.Reached)
+        assertThat(meter?.percent).isEqualTo(100)
+    }
+
+    @Test
+    fun `AC-3 pulse strip without a day limit says no ceiling and has no meter`() {
+        val view = PulseView.of(PulseFixtures.aPulse(), FeedFixtures.aSummary("3.20"))
+
+        assertThat(view.ceiling).isEqualTo(PulseCeiling.Unlimited("sem teto"))
+    }
+
+    @Test
+    fun `AC-4 a stale pulse strip keeps the last reading dimmed with the out of date notice`() {
+        val live = PulseView.of(PulseFixtures.aPulse(), PulseFixtures.dayWithLimit("3.20"))
+
+        val stale = live.markStale()
+
+        assertThat(stale.freshness).isEqualTo(PulseFreshness.Stale)
+        assertThat(stale.notice).containsIgnoringCase("desatualizad")
+        assertThat(stale.copy(freshness = PulseFreshness.Live, notice = null)).isEqualTo(live)
+    }
+
+    @Test
+    fun `AC-4 a pulse strip that never read the daemon invents no state, phrase or number`() {
+        val loading = PulseView.loading()
+        val staleBeforeAnyReading = loading.markStale()
+
+        assertThat(loading.freshness).isEqualTo(PulseFreshness.Loading)
+        for (view in listOf(loading, staleBeforeAnyReading)) {
+            assertThat(view.stateText).isNull()
+            assertThat(view.phrase).isNull()
+            assertThat(view.sessionsText).isNull()
+            assertThat(view.squares).isEmpty()
+            assertThat(view.activeCards).isEmpty()
+            assertThat(view.ceiling).isNull()
+        }
+        assertThat(staleBeforeAnyReading.freshness).isEqualTo(PulseFreshness.Stale)
     }
 
     @Test
@@ -478,4 +562,17 @@ object BoardFixtures {
         anEvent(seq, cardId, type, mapOf("to" to to.name))
 
     fun uniformWidths(width: Int): Map<Column, Int> = Column.entries.associateWith { width }
+}
+
+object PulseFixtures {
+    fun aPulse(
+        state: AssistantState = AssistantState.WORKING,
+        phrase: String = "Em andamento: #235, #240.",
+        capacity: Int = 4,
+        active: List<String> = listOf("#235", "#240"),
+    ) = Pulse(state, phrase, capacity, active)
+
+    /** A day with a US$ 10.00 limit and [spent] already spent. */
+    fun dayWithLimit(spent: String, dayReached: Boolean = false) =
+        FeedFixtures.aSummary(spent, limits = CostLimitsInfo(null, BigDecimal("10.00")), dayReached = dayReached)
 }

@@ -5,8 +5,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
+import java.time.ZoneId
 import sfv2.adapters.ClaudeRuntime
 import sfv2.adapters.RuntimeProvider
+import sfv2.core.AssistantStateRules
 import sfv2.store.CardEventStore
 import sfv2.store.Database
 import sfv2.store.SpecStore
@@ -23,6 +25,7 @@ class RefineRuntime private constructor(
     private val deliveryTrigger: AutonomousDeliveryTrigger,
     val milestones: ExternalMilestones,
     val costSummary: CostSummaryQuery,
+    val pulse: FactoryPulse,
 ) : AutoCloseable {
 
     override fun close() {
@@ -259,10 +262,19 @@ class RefineRuntime private constructor(
                 stages = setOf(DispatchStage.REFINE, DispatchStage.DEVELOP, DispatchStage.VALIDATE),
                 deliveries = deliveryTrigger,
             )
+            val pulse = FactoryPulse(
+                store = store,
+                pool = pool,
+                poolCapacity = { poolCapacity(settings, log) },
+                clock = clock,
+                rules = AssistantStateRules(zone = ZoneId.systemDefault()),
+                speaker = AssistantSpeaker(null, VoiceMode.OFF, log = log),
+            )
             return RefineRuntime(
                 dispatcher, endpoint, dispatcherAllowed = prices is Prices.Loaded, stepUp = stepUp, deliveryTrigger = deliveryTrigger,
                 milestones = milestones,
                 costSummary = CostSummaryQuery(store, control::limits),
+                pulse = pulse,
             )
         }
 
