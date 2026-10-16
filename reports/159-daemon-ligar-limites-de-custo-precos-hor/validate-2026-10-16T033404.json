@@ -1,0 +1,1 @@
+{"outcome":"infra","step":4,"agents":[],"rounds":0,"failed_gates":[],"flaky":[],"gates_reused":["build"],"amendments":[],"ci":"build red: ModelStepUpTest temp dir deletion (unrelated flake); rerun needed approval"}
