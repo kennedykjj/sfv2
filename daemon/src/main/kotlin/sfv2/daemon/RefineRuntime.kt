@@ -129,6 +129,25 @@ class RefineRuntime private constructor(
                 log = log,
                 onRunFinished = control::onRunFinished,
             )
+            val branchSync = SystemBranchSync()
+            val conflictsOf = { project: Project ->
+                ConflictResolution(
+                    project = project,
+                    store = store,
+                    recorder = recorder,
+                    sessions = sessions,
+                    mcpPort = endpoint.port,
+                    runtime = runtime,
+                    costRecorder = costRecorder,
+                    branchSync = branchSync,
+                    head = GitWorktreeHead(),
+                    configDir = dataDir.resolve("mcp"),
+                    clock = clock,
+                    model = MODEL,
+                    limits = ConflictLimits(),
+                    log = log,
+                )
+            }
             val gateExecutor = GateExecutor(store, recorder, clock, gateRunner, log)
             val validateLauncher = ValidateStageLauncher(
                 pipelineFor = { cardId ->
@@ -142,7 +161,7 @@ class RefineRuntime private constructor(
                         mcpPort = endpoint.port,
                         runtime = runtime,
                         costRecorder = costRecorder,
-                        branchSync = SystemBranchSync(),
+                        branchSync = branchSync,
                         gates = ProjectValidateGates(
                             project, store, recorder, gateExecutor, changedPaths, clock, dataDir.resolve("gates"),
                         ),
@@ -151,6 +170,7 @@ class RefineRuntime private constructor(
                         model = MODEL,
                         delivery = ProjectDelivery.create(project, dataDir.resolve("forge")),
                         changedPaths = changedPaths,
+                        conflicts = conflictsOf(project),
                     )
                 },
                 pool = pool,
@@ -167,6 +187,14 @@ class RefineRuntime private constructor(
                     maxPolls = DELIVERY_MAX_POLLS,
                     clock = clock,
                     log = log,
+                    conflicts = ConflictResolver { cardId, worktree ->
+                        conflictsOf(projectOf(cardId, store, registry)).resolve(cardId, worktree)
+                    },
+                    publisher = SystemBranchPublisher(),
+                    worktreeOf = { cardId ->
+                        val title = store.card(cardId)?.title ?: cardId
+                        worktrees.ensure(projectOf(cardId, store, registry), cardId, title).path
+                    },
                 ),
                 log,
             )
