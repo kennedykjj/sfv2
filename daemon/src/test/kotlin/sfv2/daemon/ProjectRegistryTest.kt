@@ -290,6 +290,47 @@ class ProjectRegistryTest {
         assertThat(registry.list()).isEmpty()
     }
 
+    private fun refusedField(yamlTail: String, name: String): String {
+        val repo = aRepo(name)
+        val registry = ProjectRegistry(FakeSource().also { it.put(repo, validYaml() + "\n" + yamlTail) })
+        val failure = assertThrows(InvalidProjectConfigException::class.java) { registry.register(repo) }
+        assertThat(registry.list()).isEmpty()
+        assertThat(failure.message).contains(failure.field)
+        return failure.field
+    }
+
+    @Test
+    fun `AC-4 of #197 an unknown tracker or a jira tracker without site or project is refused naming the key`() {
+        assertThat(refusedField("tracker: gitlab\n", "tracker-unknown")).isEqualTo("tracker")
+        assertThat(refusedField("tracker: [jira]\n", "tracker-list")).isEqualTo("tracker")
+        assertThat(refusedField("tracker: jira\njira_project: PROJ\n", "jira-no-site")).isEqualTo("jira_site")
+        assertThat(refusedField("tracker: jira\njira_site: acme.atlassian.net\n", "jira-no-project")).isEqualTo("jira_project")
+
+        val github = aRepo("tracker-github")
+        val jira = aRepo("tracker-jira")
+        val registry = ProjectRegistry(FakeSource().also {
+            it.put(github, validYaml("tracker-github") + "\ntracker: github\n")
+            it.put(jira, validYaml("tracker-jira") + "\ntracker: jira\njira_site: acme.atlassian.net\njira_project: PROJ\n")
+        })
+        assertThat(registry.register(github).name).isEqualTo("tracker-github")
+        assertThat(registry.register(jira).name).isEqualTo("tracker-jira")
+    }
+
+    @Test
+    fun `AC-5 of #197 a jira site or project outside the allowed format is refused at registration naming the key`() {
+        val jira = "tracker: jira\n"
+        val badSites = listOf("Acme.atlassian.net", "-acme.net", "acme atlassian.net", "acme.net/evil", "a".repeat(64))
+        val badProjects = listOf("proj", "P", "1PROJ", "PROJ-1", "A" + "B".repeat(20), "PROJ\" OR 1=1")
+
+        badSites.forEachIndexed { index, site ->
+            assertThat(refusedField("${jira}jira_site: '$site'\njira_project: PROJ\n", "bad-site-$index")).describedAs(site).isEqualTo("jira_site")
+        }
+        badProjects.forEachIndexed { index, project ->
+            assertThat(refusedField("${jira}jira_site: acme.atlassian.net\njira_project: '$project'\n", "bad-project-$index"))
+                .describedAs(project).isEqualTo("jira_project")
+        }
+    }
+
     // ---- AC-7: through the socket of a real daemon ----
 
     private fun startDaemon(): Pair<Path, String> {
