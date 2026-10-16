@@ -36,6 +36,9 @@ class ConfiguredDispatchControl(
 
     override fun dayLimitReached(): Boolean = (control() as? Control.Open)?.budget?.dayLimitReached() ?: true
 
+    /** The cost limits of the configured project; none while the dispatcher is closed. */
+    fun limits(): CostLimits = (control() as? Control.Open)?.settings?.limits ?: CostLimits.NONE
+
     override fun isWorkTime(now: Instant): Boolean = (control() as? Control.Open)?.settings?.schedule?.isWorkTime(now) ?: false
 
     /** Lets the cost budget block the card when its run pushed it over the per-card limit. */

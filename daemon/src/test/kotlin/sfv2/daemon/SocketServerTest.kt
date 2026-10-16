@@ -40,6 +40,7 @@ import sfv2.core.MoveDecision
 import sfv2.core.MoveRules
 import sfv2.store.CardEventStore
 import sfv2.store.Database
+import sfv2.store.SpecStore
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -856,6 +857,194 @@ class SocketServerTest {
         assertThat(rows.map { it.str("column") }).containsExactly("READY_FOR_REFINEMENT", "INBOX")
         assertThat(missing.getValue("ok").jsonPrimitive.boolean).isFalse()
         assertThat(missing.str("error")).isEqualTo("card not found: nope")
+    }
+
+    private fun withDetailServer(block: (CardEventStore, SpecStore) -> Unit) {
+        Database.open(runtimeDir.resolve("cards.db")).use { db ->
+            val store = CardEventStore(db)
+            val specs = SpecStore(db, runtimeDir.resolve("specs"))
+            val ownerProof = OwnerProof.create(tokenPath, SecureRandom())
+            proof = Files.readString(tokenPath).trim()
+            servers.add(SocketServer.start(socketPath(), commands = commandsWithSpecs(store, ownerProof, specs)))
+            block(store, specs)
+        }
+    }
+
+    /**
+     * Builds [CardCommands] handing it the SpecStore wherever its constructor takes one (the spec fixes that it
+     * receives it, not the parameter position); before that exists it builds the commands without it.
+     */
+    private fun commandsWithSpecs(store: CardEventStore, ownerProof: OwnerProof, specs: SpecStore): CardCommands {
+        val constructors = CardCommands::class.java.constructors.filter { !it.isSynthetic }.sortedByDescending { it.parameterCount }
+        val constructor = constructors.firstOrNull { c -> c.parameterTypes.any { it == SpecStore::class.java } }
+            ?: constructors.first()
+        val args = constructor.parameterTypes.map { type ->
+            val arg: Any = when (type.name) {
+                CardEventStore::class.java.name -> store
+                Clock::class.java.name -> clock
+                OwnerProof::class.java.name -> ownerProof
+                DaemonLog::class.java.name -> cardLog
+                SpecStore::class.java.name -> specs
+                "int" -> EventStream.DEFAULT_QUEUE_LIMIT
+                Duration::class.java.name -> EventStream.DEFAULT_CLOSE_GRACE
+                else -> error("unexpected CardCommands parameter ${type.name}")
+            }
+            arg
+        }
+        return constructor.newInstance(*args.toTypedArray()) as CardCommands
+    }
+
+    private fun detailOf(id: String): JsonObject {
+        val answer = reply("""{"cmd":"card.detail","id":"$id"}""")
+        assertThat(ok(answer)).isTrue()
+        return answer.getValue("detail").jsonObject
+    }
+
+    private fun record(store: CardEventStore, cardId: String, seq: Int, actor: Actor, type: EventType, payload: Map<String, String>) {
+        val event = Event(EventId("$cardId-ev-$seq"), fixedNow.plusSeconds(seq.toLong()), actor, type, payload)
+        store.recordChange(cardId, Card.create("Detail card", Column.CODING), event)
+    }
+
+    private fun costEvent(
+        store: CardEventStore,
+        cardId: String,
+        seq: Int,
+        fields: Map<String, String>,
+    ) = record(
+        store, cardId, seq, Actor.Factory("run-cost"), EventType.RUN_COST_RECORDED,
+        mapOf("run_id" to "run-$seq", "stage" to "develop", "runtime" to "claude", "estimate" to "true") + fields,
+    )
+
+    private fun JsonObject.items(key: String): List<JsonObject> = getValue(key).jsonArray.map { it.jsonObject }
+
+    @Test
+    fun `AC-1 card detail returns title column and spec and a missing card is not found`() = withDetailServer { store, specs ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        specs.write("c1", "# Spec\nDo the thing")
+
+        val detail = detailOf("c1")
+        val missing = reply("""{"cmd":"card.detail","id":"nope"}""")
+
+        val card = detail.getValue("card").jsonObject
+        assertThat(card.str("id")).isEqualTo("c1")
+        assertThat(card.str("title")).isEqualTo("Detail card")
+        assertThat(card.str("column")).isEqualTo("CODING")
+        val spec = detail.getValue("spec").jsonObject
+        assertThat(spec.str("status")).isEqualTo("valid")
+        assertThat(spec.str("text")).isEqualTo("# Spec\nDo the thing")
+        assertThat(ok(missing)).isFalse()
+        assertThat(missing.str("error")).isEqualTo("card not found: nope")
+    }
+
+    @Test
+    fun `AC-2 card detail lists every event in chronological order with actor type and instant`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        record(store, "c1", 1, Actor.Agent("dev"), EventType.CARD_MOVED, mapOf("from" to "INBOX", "to" to "CODING"))
+        record(store, "c1", 2, Actor.Factory("dispatcher"), EventType.CARD_MOVED, mapOf("from" to "CODING", "to" to "CODING"))
+
+        val events = detailOf("c1").items("events")
+
+        assertThat(events.map { it.str("actor") }).containsExactly("owner", "agent:dev", "factory:dispatcher")
+        assertThat(events.map { it.str("type") }).containsExactly("CARD_CREATED", "CARD_MOVED", "CARD_MOVED")
+        assertThat(events.map { Instant.parse(it.str("at")) })
+            .containsExactly(fixedNow, fixedNow.plusSeconds(1), fixedNow.plusSeconds(2))
+    }
+
+    @Test
+    fun `AC-3 an owner approval shows as the owner's OWNER_APPROVED event apart from agent events`() = withDetailServer { store, _ ->
+        seed(store, "c1", Column.SPEC_REVIEW)
+        assertThat(ok(approve("c1"))).isTrue()
+        record(store, "c1", 9, Actor.Agent("dev"), EventType.CARD_MOVED, mapOf("from" to "READY_FOR_DEV", "to" to "CODING"))
+
+        val events = detailOf("c1").items("events")
+
+        val approvals = events.filter { it.str("type") == "OWNER_APPROVED" }
+        assertThat(approvals).hasSize(1)
+        assertThat(approvals.single().str("actor")).isEqualTo("owner")
+        assertThat(events.filter { it.str("actor").startsWith("agent:") }.map { it.str("type") }).doesNotContain("OWNER_APPROVED")
+    }
+
+    @Test
+    fun `AC-4 card detail shows each run with its measured cost labelled as estimate`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        costEvent(store, "c1", 1, mapOf("status" to "KNOWN", "cost_usd" to "0.42", "tokens" to "m1:1/2/0/0/0"))
+        costEvent(store, "c1", 2, mapOf("status" to "KNOWN", "cost_usd" to "0.94", "tokens" to "m1:3/4/0/0/0"))
+
+        val runs = detailOf("c1").items("runs")
+
+        assertThat(runs.map { it.str("run_id") }).containsExactly("run-1", "run-2")
+        assertThat(runs.map { it.str("stage") }.distinct()).containsExactly("develop")
+        assertThat(runs.map { it.str("runtime") }.distinct()).containsExactly("claude")
+        assertThat(runs.map { it.str("status") }).containsExactly("KNOWN", "KNOWN")
+        assertThat(runs[0].str("cost_usd").toBigDecimal()).isEqualByComparingTo("0.42")
+        assertThat(runs[1].str("cost_usd").toBigDecimal()).isEqualByComparingTo("0.94")
+        assertThat(runs.map { it.str("estimate") }.distinct()).containsExactly("true")
+    }
+
+    @Test
+    fun `AC-5 card detail total is the sum of the run costs`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        costEvent(store, "c1", 1, mapOf("status" to "KNOWN", "cost_usd" to "0.42"))
+        costEvent(store, "c1", 2, mapOf("status" to "KNOWN", "cost_usd" to "0.94"))
+
+        val total = detailOf("c1").getValue("total").jsonObject
+
+        assertThat(total.str("status")).isEqualTo("KNOWN")
+        assertThat(total.str("cost_usd").toBigDecimal()).isEqualByComparingTo("1.36")
+    }
+
+    @Test
+    fun `AC-6 card detail of a card without spec or runs answers empty sections without error`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+
+        val detail = detailOf("c1")
+
+        assertThat(detail.getValue("spec").jsonObject.str("status")).isEqualTo("missing")
+        assertThat(detail.items("runs")).isEmpty()
+        val total = detail.getValue("total").jsonObject
+        assertThat(total.str("status")).isEqualTo("KNOWN")
+        assertThat(total.str("cost_usd").toBigDecimal()).isEqualByComparingTo("0")
+    }
+
+    @Test
+    fun `AC-9 card detail keeps the latest 500 events and cuts spec and payload values`() = withDetailServer { store, specs ->
+        for (n in 0..500) {
+            val payload = if (n == 500) mapOf("note" to "x".repeat(600)) else mapOf("n" to "$n")
+            record(store, "c1", n, Actor.Agent("dev"), EventType.CARD_MOVED, payload)
+        }
+        specs.write("c1", "é".repeat(40_000))
+
+        val answer = exchange("""{"cmd":"card.detail","id":"c1"}""")
+        val detail = Json.parseToJsonElement(answer).jsonObject.getValue("detail").jsonObject
+
+        val events = detail.items("events")
+        assertThat(events).hasSize(500)
+        assertThat(events.first().str("id")).isEqualTo("c1-ev-1")
+        assertThat(events.last().str("id")).isEqualTo("c1-ev-500")
+        assertThat(answer).contains(""""truncated":true""")
+        assertThat(events.last().getValue("payload").jsonObject.str("note").length).isLessThanOrEqualTo(512)
+        val specText = detail.getValue("spec").jsonObject.str("text")
+        assertThat(specText).contains("spec cortada")
+        assertThat(specText.toByteArray(Charsets.UTF_8).size).isLessThan(66 * 1024)
+    }
+
+    @Test
+    fun `AC-10 card detail never counts an unknown run cost as zero`() = withDetailServer { store, _ ->
+        record(store, "c1", 0, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to "Detail card"))
+        costEvent(store, "c1", 1, mapOf("status" to "UNKNOWN", "reason" to "no price for model m9"))
+
+        val onlyUnknown = detailOf("c1")
+        costEvent(store, "c1", 2, mapOf("status" to "KNOWN", "cost_usd" to "0.42"))
+        val mixed = detailOf("c1")
+
+        val unknownRun = onlyUnknown.items("runs").single()
+        assertThat(unknownRun.str("status")).isEqualTo("UNKNOWN")
+        assertThat(unknownRun["cost_usd"]).isNull()
+        assertThat(unknownRun.str("reason")).isEqualTo("no price for model m9")
+        assertThat(onlyUnknown.getValue("total").jsonObject.str("status")).isEqualTo("UNKNOWN")
+        val partial = mixed.getValue("total").jsonObject
+        assertThat(partial.str("status")).isEqualTo("PARTIAL")
+        assertThat(partial.str("cost_usd").toBigDecimal()).isEqualByComparingTo("0.42")
     }
 
     private fun approve(id: String, proofValue: String? = proof, actor: String = "owner"): JsonObject =

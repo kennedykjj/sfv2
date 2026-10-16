@@ -23,6 +23,11 @@ interface ProjectFileSource {
     }
 }
 
+/** A source with no files, the default where nothing is read from the repository. */
+object NoProjectFiles : ProjectFileSource {
+    override fun read(repo: Path, path: String): String? = null
+}
+
 /** Reads files from the `main` commit, never from the working tree. */
 class GitProjectConfigSource(private val timeoutSeconds: Long = TIMEOUT_SECONDS) :
     ProjectConfigSource, ProjectFileSource {

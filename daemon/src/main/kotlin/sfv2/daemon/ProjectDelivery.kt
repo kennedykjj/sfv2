@@ -6,7 +6,9 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
+import sfv2.adapters.AcliTracker
 import sfv2.adapters.GhForge
+import sfv2.core.TrackerConfig
 import sfv2.adapters.GhTracker
 import sfv2.ports.CloseResult
 import sfv2.ports.Tracker
@@ -24,7 +26,7 @@ import sfv2.ports.ChecksState
 /** Builds the production [PullRequestDelivery] of a project: GitHub through `gh`, the push through plain git. */
 object ProjectDelivery {
     private val GH_TIMEOUT: Duration = Duration.ofSeconds(60)
-    private val GITHUB_REMOTE = Regex("""github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?""")
+    private val GITHUB_REMOTE = Regex("""github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$""")
 
     fun create(project: Project, tmpDir: Path): PullRequestDelivery {
         return PullRequestDelivery(forgeOf(project, tmpDir), SystemBranchPublisher(), GitWorktreeHead(), ParkingCiPause())
@@ -41,10 +43,19 @@ object ProjectDelivery {
     /** The project's [Tracker]: GitHub issues through `gh` when origin is on GitHub, otherwise one that fails every call. */
     fun trackerOf(project: Project, tmpDir: Path): Tracker {
         val repo = Path.of(project.repo)
+        val config = project.policies.tracker
+        if (config is TrackerConfig.Jira) {
+            Files.createDirectories(tmpDir)
+            return AcliTracker(site = config.site, project = config.project, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
+        }
         val slug = originSlug(repo) ?: return UnavailableTracker
         Files.createDirectories(tmpDir)
         return GhTracker(repo = slug, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
     }
+
+    /** The web link of pull request [pr] on the project's GitHub origin; null without a GitHub origin. */
+    fun pullRequestUrl(project: Project, pr: String): String? =
+        originSlug(Path.of(project.repo))?.let { "https://github.com/$it/pull/$pr" }
 
     private fun originSlug(repo: Path): String? {
         val output = Files.createTempFile("sfv2-origin", ".txt")

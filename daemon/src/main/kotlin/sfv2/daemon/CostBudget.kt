@@ -40,8 +40,6 @@ class CostBudget(
     private val log: DaemonLog = StderrDaemonLog,
 ) : LaunchGuard {
 
-    private data class Spent(val usd: BigDecimal, val unpriced: Boolean)
-
     fun onRunFinished(cardId: String) {
         val limit = limits.perCardUsd ?: return
         if (isBlocked(cardId)) return
@@ -50,7 +48,7 @@ class CostBudget(
         val spent = sum(cardId, costs, logZero = true)
         val reason = when {
             spent.unpriced -> "unpriced_model"
-            spent.usd >= limit -> "card_cost_limit"
+            spent.reached(limit) -> "card_cost_limit"
             else -> return
         }
         val event = Event(
@@ -82,14 +80,34 @@ class CostBudget(
         val to = today.plusDays(1).atStartOfDay(zone).toInstant()
         val byCard = store.costEventsBetween(from, to)
             .groupBy({ it.cardId }, { it.event })
-        val spents = byCard.map { (cardId, events) -> sum(cardId, events, logZero = false) }
-        if (spents.any { it.unpriced }) return true
-        return spents.fold(BigDecimal.ZERO) { acc, s -> acc + s.usd } >= limit
+        return CostSums.total(byCard.map { (cardId, events) -> sum(cardId, events, logZero = false) }).reached(limit)
     }
 
     override fun allows(cardId: String): Boolean = !isBlocked(cardId)
 
-    private fun sum(cardId: String, costs: List<Event>, logZero: Boolean): Spent {
+    private fun sum(cardId: String, costs: List<Event>, logZero: Boolean): Spent =
+        CostSums.sum(costs) { event ->
+            if (logZero) {
+                log.log(
+                    "run_cost_unknown_counted_zero",
+                    mapOf("card" to cardId, "run" to (event.payload["run_id"] ?: "unknown")),
+                )
+            }
+        }
+}
+
+/** What was spent: the known [usd] and whether any run used a model with no price (which fails closed). */
+internal data class Spent(val usd: BigDecimal, val unpriced: Boolean) {
+    /** True when [limit] exists and the spending reached it; an unpriced model counts as reached. */
+    fun reached(limit: BigDecimal?): Boolean = limit != null && (unpriced || usd >= limit)
+}
+
+/** The single place that sums recorded run costs; shared by [CostBudget] and [CostSummaryQuery]. */
+internal object CostSums {
+    private const val UNPRICED_PREFIX = "no price for models"
+
+    /** Sums the `cost_usd` of [costs]; [onUnknownZero] sees each unknown-cost run counted as zero. */
+    fun sum(costs: List<Event>, onUnknownZero: (Event) -> Unit = {}): Spent {
         var total = BigDecimal.ZERO
         var unpriced = false
         for (event in costs) {
@@ -97,20 +115,12 @@ class CostBudget(
             if (usd != null) {
                 total += usd
             } else if (event.payload["status"] == "UNKNOWN") {
-                if (event.payload["reason"]?.startsWith(UNPRICED_PREFIX) == true) {
-                    unpriced = true
-                } else if (logZero) {
-                    log.log(
-                        "run_cost_unknown_counted_zero",
-                        mapOf("card" to cardId, "run" to (event.payload["run_id"] ?: "unknown")),
-                    )
-                }
+                if (event.payload["reason"]?.startsWith(UNPRICED_PREFIX) == true) unpriced = true else onUnknownZero(event)
             }
         }
         return Spent(total, unpriced)
     }
 
-    private companion object {
-        const val UNPRICED_PREFIX = "no price for models"
-    }
+    fun total(spents: Collection<Spent>): Spent =
+        Spent(spents.fold(BigDecimal.ZERO) { acc, s -> acc + s.usd }, spents.any { it.unpriced })
 }

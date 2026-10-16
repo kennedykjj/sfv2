@@ -1,10 +1,13 @@
 package sfv2.daemon
 
+import java.math.BigDecimal
+import java.time.Instant
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Actor
@@ -74,11 +77,35 @@ sealed interface Request {
             "CardImportBoard(actor=$actor, project=$project, rows=${rows.size}, proof=${if (proof == null) "null" else "***"})"
     }
 
+    /** Read-only: the milestones held until the owner confirms them. */
+    data object MilestoneList : Request
+
+    /** Owner confirmation of the pending [milestone] of card [id] whose text hash is [textHash]; also the retry of a failed write. */
+    data class MilestoneConfirm(
+        val actor: Actor,
+        val id: String,
+        val milestone: String,
+        val textHash: String,
+        val proof: String? = null,
+    ) : Request {
+        override fun toString(): String =
+            "MilestoneConfirm(actor=$actor, id=$id, milestone=$milestone, textHash=$textHash, proof=${if (proof == null) "null" else "***"})"
+    }
+
     data object CardList : Request
     data class CardShow(val id: String) : Request
 
+    /** Read-only: card, spec, events and runs of card [id]. */
+    data class CardDetail(val id: String) : Request
+
     /** Read-only: lead time per stage and estimated cost of every Done card, as CSV. */
     data object ReportCsv : Request
+
+    /** Read-only: the cost recorded in [from, to), the configured limits and which totals reached them. */
+    data class CostSummary(val from: Instant, val to: Instant) : Request
+
+    /** Read-only: the newest [limit] events (1..[MAX_RECENT_EVENTS]) in seq order. */
+    data class EventsRecent(val limit: Int) : Request
 
     /** Starts the event stream; [after] is the last seq the client has seen, or null for live events only. */
     data class Subscribe(val after: Long?) : Request
@@ -93,19 +120,39 @@ data class CardView(val id: String, val title: String, val column: Column)
 /** One line of the V0 board: the issue number and the V0 column name. */
 data class BoardRow(val id: String, val column: String)
 
+/** A milestone waiting for the owner: the [text] to be written to the tracker and its [textHash]. */
+data class MilestoneItem(val card: String, val milestone: String, val text: String, val textHash: String)
+
 /** A board row that was not imported; [reason] is `unknown_column` or `not_found`. */
 data class IgnoredRow(val id: String, val reason: String)
 
+/** The cost of one card in the period asked. */
+data class CardCost(val card: String, val costUsd: BigDecimal, val status: CostStatus)
+
 /** A reply to the client. */
 sealed interface Response {
+    /** The newest events in seq order; [truncated] is true when older ones exist beyond the window. */
+    data class EventsRecentResult(val events: List<StoredEvent>, val truncated: Boolean) : Response
+
+    data class CostSummaryResult(
+        val totalUsd: BigDecimal,
+        val status: CostStatus,
+        val cards: List<CardCost>,
+        val limits: CostLimits,
+        val dayReached: Boolean,
+        val cardsReached: List<String>,
+    ) : Response
+
     data object Pong : Response
     data class CardResult(val card: CardView) : Response
+    data class CardDetailResult(val detail: JsonObject) : Response
     data class CardsResult(val cards: List<CardView>) : Response
     data class BoardImportResult(val cards: List<CardView>, val ignored: List<IgnoredRow>) : Response
     data class ReportResult(val csv: String) : Response
     data class ProjectResult(val project: Project) : Response
     data class ProjectsResult(val projects: List<Project>) : Response
     data class CloseDraftResult(val status: String, val summary: String, val prLink: String, val draftHash: String) : Response
+    data class MilestonesResult(val items: List<MilestoneItem>) : Response
     data class Error(val message: String) : Response
 }
 
@@ -176,14 +223,32 @@ fun parseRequest(line: String): Request {
             val rows = parseRows(obj) ?: return Request.Rejected("missing or invalid rows")
             Request.CardImportBoard(actor, stringField(obj, "project"), rows, stringField(obj, "proof"))
         }
+        "milestone.list" -> Request.MilestoneList
+        "milestone.confirm" -> {
+            val actor = parseActor(obj) ?: return Request.Rejected("missing or invalid actor")
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            val milestone = stringField(obj, "milestone") ?: return Request.Rejected("missing milestone")
+            val textHash = stringField(obj, "textHash") ?: return Request.Rejected("missing textHash")
+            Request.MilestoneConfirm(actor, id, milestone, textHash, stringField(obj, "proof"))
+        }
         "project.list" -> Request.ProjectList
         "card.list" -> Request.CardList
         "card.show" -> {
             val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
             Request.CardShow(id)
         }
+        "card.detail" -> {
+            val id = stringField(obj, "id") ?: return Request.Rejected("missing id")
+            Request.CardDetail(id)
+        }
         "report.csv" -> Request.ReportCsv
         "events.subscribe" -> parseSubscribe(obj)
+        "events.recent" -> parseRecent(obj)
+        "cost.summary" -> {
+            val from = instantField(obj, "from") ?: return Request.Rejected("missing or invalid from")
+            val to = instantField(obj, "to") ?: return Request.Rejected("missing or invalid to")
+            Request.CostSummary(from, to)
+        }
         else -> Request.Rejected("unknown cmd")
     }
 }
@@ -196,6 +261,16 @@ private fun parseSubscribe(obj: JsonObject): Request {
     return Request.Subscribe(after)
 }
 
+/** Largest window `events.recent` returns. */
+const val MAX_RECENT_EVENTS = 2000
+
+private fun parseRecent(obj: JsonObject): Request {
+    val primitive = obj["limit"] as? JsonPrimitive
+    val limit = if (primitive == null || primitive.isString) null else primitive.content.toIntOrNull()
+    if (limit == null || limit < 1 || limit > MAX_RECENT_EVENTS) return Request.Rejected("invalid limit")
+    return Request.EventsRecent(limit)
+}
+
 private fun parseRows(obj: JsonObject): List<BoardRow>? {
     val array = obj["rows"] as? JsonArray ?: return null
     return array.map { element ->
@@ -203,6 +278,9 @@ private fun parseRows(obj: JsonObject): List<BoardRow>? {
         BoardRow(stringField(row, "id") ?: return null, stringField(row, "column") ?: return null)
     }
 }
+
+private fun instantField(obj: JsonObject, key: String): Instant? =
+    stringField(obj, key)?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
 private fun stringField(obj: JsonObject, key: String): String? {
     val primitive = obj[key] as? JsonPrimitive ?: return null
@@ -250,6 +328,7 @@ private fun projectJson(project: Project): JsonObject = buildJsonObject {
         "policies",
         buildJsonObject {
             put("delivery_mode", project.policies.deliveryMode.key)
+            put("dor", buildJsonArray { project.policies.dor.forEach { add(JsonPrimitive(it.key)) } })
             put(
                 "signers",
                 buildJsonObject { project.policies.signers.forEach { (effect, signer) -> put(effect.key, signer.key) } },
@@ -259,13 +338,15 @@ private fun projectJson(project: Project): JsonObject = buildJsonObject {
                 buildJsonObject {
                     put("commit_format", project.policies.conventions.commitFormat)
                     put("branch_format", project.policies.conventions.branchFormat)
+                    put("pr_template", project.policies.conventions.prTemplate)
+                    put("language", project.policies.conventions.language)
                 },
             )
         },
     )
 }
 
-private fun actorText(actor: Actor): String = when (actor) {
+internal fun actorText(actor: Actor): String = when (actor) {
     Actor.Owner -> "owner"
     is Actor.Agent -> "agent:${actor.role}"
     is Actor.Adapter -> "adapter:${actor.provider}"
@@ -273,20 +354,17 @@ private fun actorText(actor: Actor): String = when (actor) {
 }
 
 /** Renders a stream event as a single JSON line (without the newline). Pure: no IO. */
-fun renderEvent(stored: StoredEvent): String = buildJsonObject {
-    put(
-        "event",
-        buildJsonObject {
-            put("seq", stored.seq)
-            put("card", stored.cardId)
-            put("id", stored.event.id.value)
-            put("at", stored.event.at.toString())
-            put("actor", actorText(stored.event.actor))
-            put("type", stored.event.type.name)
-            put("payload", JsonObject(stored.event.payload.mapValues { JsonPrimitive(it.value) }))
-        },
-    )
-}.toString()
+fun renderEvent(stored: StoredEvent): String = buildJsonObject { put("event", eventJson(stored)) }.toString()
+
+private fun eventJson(stored: StoredEvent): JsonObject = buildJsonObject {
+    put("seq", stored.seq)
+    put("card", stored.cardId)
+    put("id", stored.event.id.value)
+    put("at", stored.event.at.toString())
+    put("actor", actorText(stored.event.actor))
+    put("type", stored.event.type.name)
+    put("payload", JsonObject(stored.event.payload.mapValues { JsonPrimitive(it.value) }))
+}
 
 /** Renders the line that ends a stream abnormally. Pure: no IO. */
 fun renderStreamError(message: String): String = buildJsonObject { put("error", message) }.toString()
@@ -300,6 +378,10 @@ fun render(response: Response): String = when (response) {
     is Response.CardResult -> buildJsonObject {
         put("ok", true)
         put("result", cardJson(response.card))
+    }.toString()
+    is Response.CardDetailResult -> buildJsonObject {
+        put("ok", true)
+        put("detail", response.detail)
     }.toString()
     is Response.CardsResult -> buildJsonObject {
         put("ok", true)
@@ -341,6 +423,58 @@ fun render(response: Response): String = when (response) {
                 put("summary", response.summary)
                 put("prLink", response.prLink)
                 put("draftHash", response.draftHash)
+            },
+        )
+    }.toString()
+    is Response.MilestonesResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            JsonArray(
+                response.items.map { item ->
+                    buildJsonObject {
+                        put("card", item.card)
+                        put("milestone", item.milestone)
+                        put("text", item.text)
+                        put("textHash", item.textHash)
+                    }
+                },
+            ),
+        )
+    }.toString()
+    is Response.EventsRecentResult -> buildJsonObject {
+        put("ok", true)
+        put("result", JsonArray(response.events.map { eventJson(it) }))
+        put("truncated", response.truncated)
+    }.toString()
+    is Response.CostSummaryResult -> buildJsonObject {
+        put("ok", true)
+        put(
+            "result",
+            buildJsonObject {
+                put("totalUsd", response.totalUsd.toPlainString())
+                put("status", response.status.name)
+                put(
+                    "cards",
+                    JsonArray(
+                        response.cards.map { cost ->
+                            buildJsonObject {
+                                put("card", cost.card)
+                                put("costUsd", cost.costUsd.toPlainString())
+                                put("status", cost.status.name)
+                            }
+                        },
+                    ),
+                )
+                put(
+                    "limits",
+                    buildJsonObject {
+                        put("perCardUsd", response.limits.perCardUsd?.toPlainString())
+                        put("perDayUsd", response.limits.perDayUsd?.toPlainString())
+                    },
+                )
+                put("dayReached", response.dayReached)
+                put("cardsReached", JsonArray(response.cardsReached.map { JsonPrimitive(it) }))
             },
         )
     }.toString()

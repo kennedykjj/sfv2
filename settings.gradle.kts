@@ -11,6 +11,12 @@ dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {
         mavenCentral()
+        // Compose Multiplatform depends on a few androidx artifacts that are published only there.
+        google {
+            content {
+                includeGroupByRegex("androidx\\..*")
+            }
+        }
     }
 }
 
