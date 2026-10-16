@@ -1,7 +1,10 @@
 package sfv2.app
 
 import java.io.IOException
+import java.time.Clock
 import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -11,16 +14,25 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeoutOrNull
+import sfv2.core.Column
+import sfv2.core.ColumnTime
 import sfv2.core.EventType
 
+/** The time per column for the stays that ended in [from, to). Read only. */
+fun interface ColumnTimesSource {
+    @Throws(IOException::class)
+    fun times(from: Instant, to: Instant): Map<Column, ColumnTime>
+}
+
 /** The board as the screen shows it; [live] is false while the event stream is not open. */
-data class BoardView(val board: Board, val live: Boolean)
+data class BoardView(val board: Board, val live: Boolean, val columnTimes: Map<Column, ColumnTime> = emptyMap())
 
 /**
  * Keeps the board in step with the daemon while [connection] says Connected. It subscribes first, then reads the
  * snapshot; events that arrive before the snapshot is applied wait and are applied right after it (events are
  * absolute, so the last one per card wins). After a drop it subscribes again from the last seen `seq`, without
- * reloading the snapshot.
+ * reloading the snapshot. With a [times] source it also reads the time per column of the current local day after
+ * the snapshot and after each move; a failed read hides the subtitles and never touches the board.
  */
 class BoardMonitor(
     private val source: BoardSource,
@@ -28,12 +40,16 @@ class BoardMonitor(
     private val io: CoroutineDispatcher,
     private val observer: (BoardEvent, BoardCard?) -> Unit = { _, _ -> },
     private val snapshotObserver: (List<BoardCard>) -> Unit = {},
+    private val times: ColumnTimesSource? = null,
+    private val clock: Clock = Clock.systemUTC(),
+    private val zone: ZoneId = ZoneId.systemDefault(),
 ) : BoardEdits {
     private val mutableView = MutableStateFlow<BoardView?>(null)
     val view: StateFlow<BoardView?> = mutableView
 
     private val lock = Any()
     private var board = Board(emptyList(), null)
+    private var columnTimes: Map<Column, ColumnTime> = emptyMap()
     private var live = false
     private var hasSnapshot = false
     private var waiting: MutableList<BoardEvent>? = null
@@ -88,8 +104,10 @@ class BoardMonitor(
         } catch (e: IOException) {
             return false
         }
+        val read = runInterruptible(io) { readColumnTimes() }
         synchronized(lock) {
             board = board.applySnapshot(cards)
+            columnTimes = read
             hasSnapshot = true
         }
         snapshotObserver(cards)
@@ -120,11 +138,23 @@ class BoardMonitor(
 
     private fun apply(event: BoardEvent) {
         val fetched = if (event.type == EventType.CARD_CREATED) fetchOrNull(event.cardId) else null
+        val read = if (event.type == EventType.CARD_MOVED || event.type == EventType.OWNER_APPROVED) readColumnTimes() else null
         synchronized(lock) {
             board = board.applyEvent(event, fetched)
+            read?.let { columnTimes = it }
             publish()
         }
         observer(event, fetched)
+    }
+
+    private fun readColumnTimes(): Map<Column, ColumnTime> {
+        val source = times ?: return emptyMap()
+        val today = clock.instant().atZone(zone).toLocalDate()
+        return try {
+            source.times(today.atStartOfDay(zone).toInstant(), today.plusDays(1).atStartOfDay(zone).toInstant())
+        } catch (e: IOException) {
+            emptyMap()
+        }
     }
 
     private fun fetchOrNull(id: String): BoardCard? =
@@ -142,7 +172,7 @@ class BoardMonitor(
     }
 
     private fun publish() {
-        if (hasSnapshot && waiting == null) mutableView.value = BoardView(board, live)
+        if (hasSnapshot && waiting == null) mutableView.value = BoardView(board, live, columnTimes)
     }
 
     private companion object {

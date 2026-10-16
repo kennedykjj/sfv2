@@ -33,6 +33,8 @@ internal object Texts {
     const val DISCONNECTED = "Desconectado do daemon"
     const val BOARD = "Esteira"
     const val WAITS_FOR_YOU = "Aguarda você"
+    const val MEDIAN = "mediana"
+    const val MEAN_WAIT = "espera média"
     const val EMPTY_COLUMN = "Vazia"
     const val EMPTY_BOARD = "Nenhum card na fábrica ainda."
     const val LOADING_BOARD = "Carregando a esteira…"

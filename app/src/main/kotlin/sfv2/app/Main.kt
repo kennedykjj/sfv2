@@ -140,6 +140,7 @@ fun main() {
             Dispatchers.IO,
             shell::onEvent,
             shell::onSnapshot,
+            SocketColumnTimesSource(Path.of(it, SOCKET_RELATIVE_PATH)),
         )
     }
     val cardSource = runtimeDir?.let { SocketCardDetailSource(Path.of(it, SOCKET_RELATIVE_PATH)) }
