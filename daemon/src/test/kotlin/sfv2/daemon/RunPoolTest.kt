@@ -15,7 +15,6 @@ import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
 import sfv2.store.Database
-import sfv2.store.StoredEvent
 
 object RunPoolFixtures {
     val now: Instant = Instant.parse("2026-10-16T10:00:00Z")
@@ -46,7 +45,7 @@ class RunPoolTest {
 
     private val probe = RunPoolFixtures.FakeProbe()
     private val log = RunPoolFixtures.RecordingLog()
-    private val published = mutableListOf<StoredEvent>()
+    private lateinit var collector: StreamCollector
 
     private fun withPool(capacity: Int, block: (RunPool, CardEventStore) -> Unit) {
         Database.open(dir.resolve("pool.db")).use { db ->
@@ -54,8 +53,15 @@ class RunPoolTest {
             RunPoolFixtures.seed(store, "c1")
             RunPoolFixtures.seed(store, "c2")
             RunPoolFixtures.seed(store, "c3")
-            val pool = RunPool(capacity, store, RunPoolFixtures.clock, probe, log, onEvent = { published.add(it) })
-            block(pool, store)
+            val stream = EventStream(store)
+            collector = StreamCollector(stream)
+            try {
+                val pool = RunPool(capacity, store, RunPoolFixtures.clock, probe, log, recorder = EventRecorder(store, stream))
+                block(pool, store)
+            } finally {
+                collector.close()
+                stream.close()
+            }
         }
     }
 
@@ -103,7 +109,7 @@ class RunPoolTest {
             val event = store.events("c1").single { it.type.name == "LOCK_RELEASED" }
             assertThat(event.actor).isEqualTo(Actor.Factory("pool"))
             assertThat(event.payload).containsEntry("reason", "owner_dead").containsEntry("pid", "101")
-            assertThat(published.map { it.event }).containsExactly(event)
+            assertThat(collector.read(1).map { it.id }).containsExactly(event.id.value)
             assertThat(log.lines).contains("lock_released" to mapOf("card" to "c1", "pid" to "101"))
         }
     }
@@ -120,7 +126,7 @@ class RunPoolTest {
             assertThat(pool.active()).containsExactly(lock)
             assertThat(pool.tryStart("c2", 102, RunPoolFixtures.now)).isEqualTo(StartDecision.PoolFull(1))
             assertThat(store.events("c1").map { it.type.name }).doesNotContain("LOCK_RELEASED")
-            assertThat(published).isEmpty()
+            assertThat(collector.read(1, timeoutMillis = 300)).isEmpty()
         }
     }
 
