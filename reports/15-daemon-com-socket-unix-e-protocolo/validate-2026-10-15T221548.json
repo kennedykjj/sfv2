@@ -1,0 +1,1 @@
+{"issue":15,"slug":"daemon-com-socket-unix-e-protocolo","pipeline":"validate","started_at":"2026-10-16T01:08:00Z","finished_at":"2026-10-16T01:20:00Z","outcome":"ok","agents":[{"role":"engineer","tokens":26281,"duration_s":46}],"rounds":{"3":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":false}
