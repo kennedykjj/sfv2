@@ -1,0 +1,4 @@
+{"issue":106,"slug":"store-banco-acessivel-so-ao-dono","pipeline":"develop","started_at":"2026-10-16T03:20:00Z","finished_at":"2026-10-16T03:35:00Z","outcome":"ok",
+"agents":[{"role":"qa-engineer","tokens":29129,"duration_s":28},{"role":"qa-engineer (amend)","tokens":28416,"duration_s":63}],
+"rounds":{"qa":1,"qa-amend":1,"implementation":1},"gates_failed":["build","green store *owner-only* (testes de aceitação com defeito, corrigidos pela QA)"],"flaky":[],"gates_reused":[],"manual_edit":false,
+"amendments":[{"file":"store/src/test/kotlin/sfv2/store/ModuleTest.kt","reason":"modo de permissão inválido (rw-----r--) e -shm não existe em repouso; o teste agora abre uma leitora externa para o SQLite criar -wal/-shm"}]}
