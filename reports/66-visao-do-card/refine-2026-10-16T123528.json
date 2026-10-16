@@ -1,0 +1,1 @@
+{"issue":66,"slug":"visao-do-card","pipeline":"refine","started_at":"2026-10-16T00:00:00Z","finished_at":"2026-10-16T00:00:00Z","outcome":"ok","agents":[{"role":"product-owner","tokens":15611,"duration_s":16},{"role":"ux-designer","tokens":38454,"duration_s":32}],"rounds":{"po":1,"ux":1,"techlead":1},"gates_failed":[],"flaky":[],"gates_reused":[],"manual_edit":null}
