@@ -11,7 +11,7 @@ import sfv2.core.EventType
 import sfv2.core.OWNER_WAIT_COLUMNS
 
 /** The total cost of a card as `card.list` reports it; [costUsd] is present only for KNOWN and PARTIAL. */
-data class CardCost(val status: CostStatus, val costUsd: BigDecimal? = null)
+data class BoardCost(val status: CostStatus, val costUsd: BigDecimal? = null)
 
 /** A card of the board. [enteredAt] and [cost] are null when the daemon does not send them (an older daemon). */
 data class BoardCard(
@@ -20,7 +20,7 @@ data class BoardCard(
     val column: Column,
     val blocked: Boolean = false,
     val enteredAt: Instant? = null,
-    val cost: CardCost? = null,
+    val cost: BoardCost? = null,
 )
 
 /** What a board card says about itself: texts built only from the column, numbers and ids, never from the title. */

@@ -125,10 +125,10 @@ fun parseBoardCard(element: JsonElement?): BoardCard? {
     return BoardCard(id, title, column, blocked, enteredAt, parseCardCost(obj["cost"]))
 }
 
-private fun parseCardCost(element: JsonElement?): CardCost? {
+private fun parseCardCost(element: JsonElement?): BoardCost? {
     val obj = element as? JsonObject ?: return null
     val status = obj["status"]?.primitiveOrNull()?.contentOrNull?.let { name -> CostStatus.entries.firstOrNull { it.name == name } }
         ?: return null
     val usd = obj["costUsd"]?.primitiveOrNull()?.contentOrNull?.toBigDecimalOrNull()
-    return CardCost(status, usd)
+    return BoardCost(status, usd)
 }
