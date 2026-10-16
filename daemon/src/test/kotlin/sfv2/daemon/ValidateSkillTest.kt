@@ -54,6 +54,7 @@ class ValidateSkillTest {
 
         assertThat(registered).containsExactlyInAnyOrder(
             "card_get", "spec_get", "review_criteria_get", "policies_get", "layers_get", "completion_report", "file_write_request",
+            "file_edit_request",
         )
         assertThat(cited).isNotEmpty()
         assertThat(registered).containsAll(cited)
