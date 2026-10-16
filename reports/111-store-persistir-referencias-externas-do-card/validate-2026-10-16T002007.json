@@ -1,0 +1,1 @@
+{"issue":111,"slug":"store-persistir-referencias-externas-do-card","pipeline":"validate","started_at":"2026-10-16T03:19:00Z","finished_at":"2026-10-16T03:30:00Z","outcome":"ok","agents":[],"rounds":{},"gates_failed":[],"flaky":[],"gates_reused":["green store sfv2.store.ModuleTest"],"manual_edit":false,"amendments":[]}
