@@ -4,6 +4,7 @@ import java.io.IOException
 import java.io.PrintStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.SecureRandom
 import java.time.Clock
 import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
@@ -21,7 +22,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
     val socketPath = resolveSocketPath(env)
     val database = openDatabase(resolveDatabasePath(env, socketPath))
     try {
-        val commands = CardCommands(CardEventStore(database), Clock.systemUTC())
+        val commands = CardCommands(CardEventStore(database), Clock.systemUTC(), OwnerProof.create(socketPath.resolveSibling("owner.token"), SecureRandom()))
         DaemonLaunch.Started(SocketServer.start(socketPath, commands = commands, onClose = { database.close() }))
     } catch (e: Throwable) {
         runCatching { database.close() }

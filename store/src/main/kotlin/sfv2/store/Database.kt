@@ -4,7 +4,9 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Properties
 import sfv2.store.db.Sfv2Database
 
@@ -17,7 +19,10 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
     companion object {
         const val SCHEMA_VERSION = 4
 
+        private val OWNER_ONLY = PosixFilePermissions.fromString("rw-------")
+
         fun open(path: Path): Database {
+            ensureOwnerOnly(path)
             val driver = JdbcSqliteDriver("jdbc:sqlite:$path", Properties().apply { setProperty("foreign_keys", "true") })
             try {
                 // The version is read before any write PRAGMA: WAL changes the file header.
@@ -41,6 +46,19 @@ class Database private constructor(private val driver: SqlDriver) : AutoCloseabl
                 throw e
             }
             return Database(driver)
+        }
+
+        // A new file is created 0600 (the -wal and -shm files inherit its mode); an existing one is only checked.
+        private fun ensureOwnerOnly(path: Path) {
+            if (!path.fileSystem.supportedFileAttributeViews().contains("posix")) return
+            if (!Files.exists(path)) {
+                Files.createFile(path, PosixFilePermissions.asFileAttribute(OWNER_ONLY))
+                return
+            }
+            val found = Files.getPosixFilePermissions(path)
+            if (found.any { it !in OWNER_ONLY }) {
+                throw DatabaseInsecurePermissionsException(path, PosixFilePermissions.toString(found))
+            }
         }
 
         private fun SqlDriver.readInt(sql: String): Int =
