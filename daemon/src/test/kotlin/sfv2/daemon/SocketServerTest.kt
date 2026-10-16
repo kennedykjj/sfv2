@@ -1,6 +1,10 @@
 package sfv2.daemon
 
+import java.io.File
 import java.io.IOException
+import java.time.Duration
+import java.time.ZoneId
+import java.util.concurrent.locks.LockSupport
 import java.net.StandardProtocolFamily
 import java.nio.channels.ClosedChannelException
 import java.util.concurrent.CompletableFuture
@@ -450,6 +454,178 @@ class SocketServerTest {
 
                 assertThat(ids.flatMap { store.events(it) }).hasSize(10)
                 assertThat(exchange("""{"cmd":"ping"}""")).isEqualTo("""{"ok":true,"result":"pong"}""")
+            }
+        }
+
+    private class MutableClock(private var now: Instant) : Clock() {
+        override fun getZone() = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+        override fun instant(): Instant = now
+        fun advance(by: Duration) {
+            now = now.plus(by)
+        }
+    }
+
+    private val grace = Duration.ofSeconds(5)
+
+    private class StreamHarness(val commands: CardCommands, val clock: MutableClock)
+
+    /** A card server whose subscribers are dropped after 5 queued events and closed after [grace] on a manual clock. */
+    private fun withGraceServer(block: (StreamHarness) -> Unit) {
+        Database.open(runtimeDir.resolve("cards.db")).use { db ->
+            val store = CardEventStore(db)
+            val ownerProof = OwnerProof.create(tokenPath, SecureRandom())
+            proof = Files.readString(tokenPath).trim()
+            val manual = MutableClock(fixedNow)
+            val commands = CardCommands(
+                store, manual, ownerProof, cardLog, subscriberQueueLimit = 5, closeGrace = grace,
+            )
+            servers.add(SocketServer.start(socketPath(), commands = commands))
+            block(StreamHarness(commands, manual))
+        }
+    }
+
+    private fun openFds(): Int = File("/proc/self/fd").list().orEmpty().size
+
+    /** Descriptor count once closes running on other threads have settled. */
+    private fun settledFds(): Int {
+        var last = openFds()
+        repeat(100) {
+            LockSupport.parkNanos(20_000_000L)
+            val now = openFds()
+            if (now == last) return now
+            last = now
+        }
+        return last
+    }
+
+    /** Publishes enough big events, each read by [fast], for every subscriber that never reads to be dropped. */
+    private fun floodUntilDropped(fast: EventStreamClient) {
+        repeat(150) { n ->
+            val id = createCard(bigTitle(n))
+            assertThat(fast.nextEvent().str("card")).isEqualTo(id)
+        }
+    }
+
+    private fun EventStreamClient.drain(): List<String> {
+        val lines = mutableListOf<String>()
+        while (true) lines.add(nextLine() ?: return lines)
+    }
+
+    @Test
+    fun `AC-1 grace a dropped subscriber that never reads has its connection closed after the grace without reading`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                createCard("warm")
+                fast.nextEvent()
+                val baseline = settledFds()
+                subscribe().use { slow ->
+                    floodUntilDropped(fast)
+                    h.clock.advance(grace.plusMillis(1))
+                    h.commands.events.sweep()
+
+                    val lines = slow.drain()
+
+                    assertThat(lines).isNotEmpty().noneMatch { it.contains("error") }
+                    slow.close()
+                    assertThat(settledFds()).isLessThanOrEqualTo(baseline)
+                }
+            }
+        }
+
+    @Test
+    fun `AC-2 grace a dropped subscriber that reads within the grace receives subscriber too slow before the close`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                subscribe().use { slow ->
+                    floodUntilDropped(fast)
+                    h.clock.advance(grace.minusMillis(1))
+                    h.commands.events.sweep()
+
+                    val lines = slow.drain()
+
+                    assertThat(lines.last()).isEqualTo("""{"error":"subscriber too slow"}""")
+                }
+            }
+        }
+
+    @Test
+    fun `AC-3 grace a dropped subscriber that consumed everything before the grace is closed too`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                createCard("warm")
+                fast.nextEvent()
+                val baseline = settledFds()
+                subscribe().use { slow ->
+                    floodUntilDropped(fast)
+                    var line: String?
+                    do {
+                        line = slow.nextLine()
+                    } while (line != null && !line.contains("error"))
+                    assertThat(line).isEqualTo("""{"error":"subscriber too slow"}""")
+
+                    h.clock.advance(grace.plusMillis(1))
+                    h.commands.events.sweep()
+
+                    assertThat(slow.nextLine()).isNull()
+                    slow.close()
+                    assertThat(settledFds()).isLessThanOrEqualTo(baseline)
+                }
+            }
+        }
+
+    @Test
+    fun `AC-4 grace several dropped subscribers release their descriptors once all graces pass`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                createCard("warm")
+                fast.nextEvent()
+                val baseline = settledFds()
+                val slows = List(3) { subscribe() }
+                floodUntilDropped(fast)
+                assertThat(settledFds()).isGreaterThan(baseline)
+
+                h.clock.advance(grace.plusMillis(1))
+                h.commands.events.sweep()
+                slows.forEach { it.close() }
+
+                assertThat(settledFds()).isLessThanOrEqualTo(baseline)
+            }
+        }
+
+    @Test
+    fun `AC-5 grace a healthy subscriber keeps receiving while slow ones are closed`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                val slows = List(2) { subscribe() }
+                floodUntilDropped(fast)
+
+                h.clock.advance(grace.plusMillis(1))
+                h.commands.events.sweep()
+                val id = createCard("after the sweep")
+
+                assertThat(fast.nextEvent().str("card")).isEqualTo(id)
+                slows.forEach { it.close() }
+            }
+        }
+
+    @Test
+    fun `AC-6 grace the close happens exactly when the injected clock reaches the grace with no real wait`() =
+        withGraceServer { h ->
+            subscribe().use { fast ->
+                subscribe().use { slow ->
+                    floodUntilDropped(fast)
+                    val open = settledFds()
+
+                    h.clock.advance(grace.minusMillis(1))
+                    h.commands.events.sweep()
+                    assertThat(settledFds()).isEqualTo(open)
+
+                    h.clock.advance(Duration.ofMillis(1))
+                    h.commands.events.sweep()
+                    assertThat(settledFds()).isLessThan(open)
+                    slow.close()
+                }
             }
         }
 

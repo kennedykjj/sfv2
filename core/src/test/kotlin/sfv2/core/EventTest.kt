@@ -53,6 +53,20 @@ class EventTest {
     }
 
     @Test
+    fun `a lock released event survives a JSON round trip`() {
+        val event = EventFixtures.anEvent(
+            actor = Actor.Factory("scheduler"),
+            type = EventType.LOCK_RELEASED,
+            payload = mapOf("card" to "9"),
+        )
+
+        val decoded = EventJson.decode(EventJson.encode(event))
+
+        assertThat(decoded).isEqualTo(event)
+        assertThat(decoded.type).isEqualTo(EventType.LOCK_RELEASED)
+    }
+
+    @Test
     fun `AC-3 reading an unknown event type fails naming the type`() {
         val json = EventJson.encode(EventFixtures.anEvent(type = EventType.CARD_CREATED))
             .replace("CARD_CREATED", "TIME_TRAVEL")

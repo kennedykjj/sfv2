@@ -1,6 +1,7 @@
 package sfv2.daemon
 
 import java.time.Clock
+import java.time.Duration
 import java.util.UUID
 import sfv2.core.Actor
 import sfv2.core.Card
@@ -21,10 +22,11 @@ class CardCommands(
     private val ownerProof: OwnerProof,
     private val log: DaemonLog = StderrDaemonLog,
     subscriberQueueLimit: Int = EventStream.DEFAULT_QUEUE_LIMIT,
+    closeGrace: Duration = EventStream.DEFAULT_CLOSE_GRACE,
 ) {
 
     /** Live feed of every recorded change. */
-    val events: EventStream = EventStream(store, subscriberQueueLimit, log)
+    val events: EventStream = EventStream(store, subscriberQueueLimit, log, clock, closeGrace)
 
     /** Serialized so the read-check-write of a move cannot interleave with another command. */
     @Synchronized
@@ -33,7 +35,7 @@ class CardCommands(
         is Request.CardMove -> move(request)
         Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
-        Request.Ping, is Request.Rejected, is Request.Subscribe -> Response.Error("not a card command")
+        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList -> Response.Error("not a card command")
     }
 
     private fun create(request: Request.CardCreate): Response {
