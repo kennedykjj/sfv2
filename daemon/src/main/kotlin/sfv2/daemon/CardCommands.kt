@@ -18,7 +18,7 @@ import sfv2.store.CardEventStore
 class CardCommands(
     private val store: CardEventStore,
     private val clock: Clock,
-    private val ownerProof: OwnerProof,
+    internal val ownerProof: OwnerProof,
     private val log: DaemonLog = StderrDaemonLog,
     subscriberQueueLimit: Int = EventStream.DEFAULT_QUEUE_LIMIT,
     closeGrace: Duration = EventStream.DEFAULT_CLOSE_GRACE,
@@ -40,7 +40,7 @@ class CardCommands(
         Request.CardList -> Response.CardsResult(store.cards().map { CardView(it.id, it.card.title, it.card.column) })
         is Request.CardShow -> show(request.id)
         Request.ReportCsv -> Response.ReportResult(CardReport.toCsv(CardReport.build(store.cards()) { store.events(it) }))
-        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm -> Response.Error("not a card command")
+        Request.Ping, is Request.Rejected, is Request.Subscribe, is Request.ProjectAdd, Request.ProjectList, is Request.CardRebuild, is Request.CardImport, is Request.CardImportBoard, is Request.CardCloseDraft, is Request.CardCloseConfirm, Request.MilestoneList, is Request.MilestoneConfirm -> Response.Error("not a card command")
     }
 
     private fun create(request: Request.CardCreate): Response {
