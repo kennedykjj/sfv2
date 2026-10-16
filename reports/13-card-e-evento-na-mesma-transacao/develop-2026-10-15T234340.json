@@ -1,0 +1,17 @@
+{
+  "issue": 13,
+  "slug": "card-e-evento-na-mesma-transacao",
+  "pipeline": "develop",
+  "started_at": "2026-10-16T02:30:00Z",
+  "finished_at": "2026-10-16T02:43:29Z",
+  "outcome": "ok",
+  "agents": [
+    {"role": "qa-engineer", "tokens": 26957, "duration_s": 39}
+  ],
+  "rounds": {"plan": 1, "acceptance": 1, "implementation": 1},
+  "gates_failed": ["build (SQLDelight 3.18 sem UPSERT; corrigido com INSERT OR REPLACE)", "build (acesso às queries; corrigido para schemaQueries)"],
+  "flaky": [],
+  "gates_reused": [],
+  "manual_edit": false,
+  "amendments": []
+}
