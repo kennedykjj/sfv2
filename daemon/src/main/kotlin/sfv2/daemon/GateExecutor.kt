@@ -7,6 +7,10 @@ import java.nio.file.Path
 import java.time.Clock
 import java.time.Duration
 import java.util.UUID
+import sfv2.core.AcceptancePatterns
+import sfv2.core.AcceptanceReason
+import sfv2.core.AcceptanceRules
+import sfv2.core.AcceptanceVerdict
 import sfv2.core.Actor
 import sfv2.core.Event
 import sfv2.core.EventId
@@ -14,7 +18,25 @@ import sfv2.core.EventType
 import sfv2.store.CardEventStore
 
 /** What to run: [command] is executed without a shell in [workingDir], killed after [timeout]. */
-data class GateSpec(val name: String, val command: List<String>, val workingDir: Path, val timeout: Duration)
+data class GateSpec(
+    val name: String,
+    val command: List<String>,
+    val workingDir: Path,
+    val timeout: Duration,
+    val check: GateCheck = GateCheck.ExitCode,
+)
+
+/** How the verdict is derived once the process ends. */
+sealed interface GateCheck {
+    data object ExitCode : GateCheck
+
+    data class Red(val patterns: AcceptancePatterns) : GateCheck
+
+    data class Green(val patterns: AcceptancePatterns) : GateCheck
+
+    /** The output is a git diff; the gate fails when it changes lines matching [keep]. */
+    data class AssertionEdit(val keep: Regex) : GateCheck
+}
 
 /** Raw outcome of a gate process: no exit code and not timed out means it could not start. */
 data class GateRun(val exitCode: Int?, val timedOut: Boolean)
@@ -55,8 +77,25 @@ class GateExecutor(
         val (verdict, reason) = when {
             run.timedOut -> GateVerdict.Fail("timeout") to "timeout"
             run.exitCode == null -> GateVerdict.Fail("start_error") to "start_error"
-            run.exitCode == 0 -> GateVerdict.Pass to null
-            else -> GateVerdict.Fail("exit_code") to "exit_code"
+            else -> when (val check = spec.check) {
+                GateCheck.ExitCode ->
+                    if (run.exitCode == 0) GateVerdict.Pass to null else GateVerdict.Fail("exit_code") to "exit_code"
+                is GateCheck.Red -> acceptance(
+                    outputFile,
+                ) { AcceptanceRules.red(run.exitCode, it, check.patterns) }
+                is GateCheck.Green -> acceptance(
+                    outputFile,
+                ) { AcceptanceRules.green(run.exitCode, it, check.patterns) }
+                is GateCheck.AssertionEdit ->
+                    if (run.exitCode != 0) {
+                        GateVerdict.Fail("exit_code") to "exit_code"
+                    } else if (readLines(outputFile) { AcceptanceRules.assertionEdit(it, check.keep) }.isEmpty()) {
+                        GateVerdict.Pass to null
+                    } else {
+                        val name = AcceptanceReason.ASSERTION_EDITED.name.lowercase()
+                        GateVerdict.Fail(name) to name
+                    }
+            }
         }
         val payload = buildMap {
             put("gate", spec.name)
@@ -80,6 +119,24 @@ class GateExecutor(
         )
         return verdict
     }
+
+    private fun acceptance(
+        file: Path,
+        rule: (Sequence<String>) -> AcceptanceVerdict,
+    ): Pair<GateVerdict, String?> =
+        when (val result = readLines(file, rule)) {
+            AcceptanceVerdict.Ok -> GateVerdict.Pass to null
+            is AcceptanceVerdict.Rejected -> {
+                val name = result.reason.name.lowercase()
+                GateVerdict.Fail(name) to name
+            }
+        }
+
+    /** Streams the file line by line; malformed bytes are replaced instead of failing the read. */
+    private fun <T> readLines(file: Path, block: (Sequence<String>) -> T): T =
+        Files.newInputStream(file).use { input ->
+            input.reader(StandardCharsets.UTF_8).buffered().use { block(it.lineSequence()) }
+        }
 
     /** Last [SUMMARY_LINES] lines, at most [SUMMARY_CHARS] characters, reading only the end of the file. */
     private fun summary(file: Path): String {
