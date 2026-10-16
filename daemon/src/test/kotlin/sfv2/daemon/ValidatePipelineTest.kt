@@ -22,7 +22,12 @@ import sfv2.core.Column
 import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
+import sfv2.ports.ChecksState
+import sfv2.ports.FailedCheck
+import sfv2.ports.FakeForge
 import sfv2.ports.FakeRuntime
+import sfv2.ports.PullRequestRef
+import sfv2.ports.PullRequestRequest
 import sfv2.ports.Runtime
 import sfv2.ports.SessionRequest
 import sfv2.ports.SessionScript
@@ -107,7 +112,13 @@ class ValidatePipelineTest {
         override fun launch(request: SessionRequest) = inner.launch(request).also { onLaunch() }
     }
 
-    private fun pipeline(runtime: Runtime, sync: BranchSync, gates: ValidateGates, maxRounds: Int = 3) = ValidatePipeline(
+    private fun pipeline(
+        runtime: Runtime,
+        sync: BranchSync,
+        gates: ValidateGates,
+        maxRounds: Int = 3,
+        delivery: PullRequestDelivery? = null,
+    ) = ValidatePipeline(
         project = project,
         store = store,
         recorder = recorder,
@@ -123,6 +134,7 @@ class ValidatePipelineTest {
         model = "model-a",
         maxRounds = maxRounds,
         log = log,
+        delivery = delivery,
     )
 
     private fun column(id: String): Column = requireNotNull(store.card(id)).column
@@ -423,6 +435,188 @@ class ValidatePipelineTest {
 
         assertThat(events(EventType.CARD_BLOCKED).single().payload["reason"]).isEqualTo("gates_failed: test-daemon,scope")
         assertThat(column("c1")).isNotEqualTo(Column.STAGED)
+    }
+
+    private val forge = FakeForge()
+
+    private class RecordingPublisher(private val result: PushResult = PushResult.Pushed) : BranchPublisher {
+        val pushed = mutableListOf<String>()
+
+        override fun push(worktree: Path, branch: String): PushResult {
+            pushed.add(branch)
+            return result
+        }
+    }
+
+    private fun delivery(publisher: BranchPublisher, head: String = "sha-1", maxPolls: Int = 3, onPause: () -> Unit = {}) =
+        PullRequestDelivery(forge, publisher, WorktreeHead { head }, CiPause { onPause() }, maxPolls)
+
+    private fun stagedMove() = events(EventType.CARD_MOVED).single { it.payload["to"] == Column.STAGED.name }
+
+    @Test
+    fun `AC-1 an approved validate pushes the card branch and opens the PR for it through the forge`() {
+        card("c1")
+        val publisher = RecordingPublisher()
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(publisher)).run("c1")
+
+        val branch = worktrees.ensure(project, "c1", "Validate c1").branch
+        assertThat(publisher.pushed).containsExactly(branch)
+        assertThat(forge.opened.single().branch).isEqualTo(branch)
+        assertThat(forge.opened.single().base).isEqualTo("main")
+    }
+
+    @Test
+    fun `AC-1 an existing PR for the branch is updated and not duplicated`() {
+        card("c1")
+        val branch = worktrees.ensure(project, "c1", "Validate c1").branch
+        forge.openPullRequest(PullRequestRequest(branch, "main", "old title", "old body"))
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(RecordingPublisher())).run("c1")
+
+        assertThat(forge.opened).hasSize(1)
+        assertThat(forge.findOpenPullRequest(branch)).isNotNull
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+    }
+
+    @Test
+    fun `AC-2 a pending CI keeps the card in Validation until the forge reports green after the wait`() {
+        card("c1")
+        var pauses = 0
+
+        pipeline(
+            reviewing(approved), sync(MergeResult.Merged), gates(green),
+            delivery = delivery(RecordingPublisher(), maxPolls = 5) {
+                pauses++
+                forge.scriptChecks("sha-1", ChecksState.Passed)
+            },
+        ).run("c1")
+
+        assertThat(pauses).isEqualTo(1)
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+    }
+
+    @Test
+    fun `AC-2 a CI that stays pending past maxPolls leaves the card in Validation, blocked with ci_timeout`() {
+        card("c1")
+        var pauses = 0
+
+        pipeline(
+            reviewing(approved), sync(MergeResult.Merged), gates(green),
+            delivery = delivery(RecordingPublisher(), maxPolls = 3) { pauses++ },
+        ).run("c1")
+
+        assertThat(pauses).isBetween(1, 3)
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(store.events("c1").flatMap { it.payload.values }).doesNotContain(Column.STAGED.name)
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("ci_timeout")
+    }
+
+    @Test
+    fun `AC-5 the green of an old PR head is not accepted, the card waits for the local head and records it on Staged`() {
+        card("c1")
+        forge.scriptChecks("sha-1", ChecksState.Failed(listOf(FailedCheck("old", "stale head"))))
+        forge.scriptChecks("local-sha", ChecksState.Passed)
+        var pauses = 0
+
+        pipeline(
+            reviewing(approved), sync(MergeResult.Merged), gates(green),
+            delivery = delivery(RecordingPublisher(), head = "local-sha", maxPolls = 5) {
+                pauses++
+                forge.pushHead(PullRequestRef(1, "", ""), "local-sha")
+            },
+        ).run("c1")
+
+        assertThat(pauses).isEqualTo(1)
+        assertThat(column("c1")).isEqualTo(Column.STAGED)
+        assertThat(stagedMove().payload["head"]).isEqualTo("local-sha")
+        assertThat(stagedMove().payload["ci"]).isEqualTo("green")
+    }
+
+    @Test
+    fun `AC-5 a forge that never shows the local head times out instead of trusting the old head`() {
+        card("c1")
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+        forge.scriptChecks("local-sha", ChecksState.Passed)
+
+        pipeline(
+            reviewing(approved), sync(MergeResult.Merged), gates(green),
+            delivery = delivery(RecordingPublisher(), head = "local-sha", maxPolls = 3),
+        ).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("ci_timeout")
+    }
+
+    @Test
+    fun `AC-6 a refused push blocks the card with push_refused and never stages it`() {
+        card("c1")
+        forge.scriptChecks("sha-1", ChecksState.Passed)
+
+        pipeline(
+            reviewing(approved), sync(MergeResult.Merged), gates(green),
+            delivery = delivery(RecordingPublisher(PushResult.Refused)),
+        ).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.VALIDATION)
+        assertThat(requireNotNull(events(EventType.CARD_BLOCKED).single().payload["reason"])).contains("push_refused")
+        assertThat(forge.opened).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 the production publisher pushes only the card branch, no tags, and refuses invalid branches or the base`() {
+        val remote = dir.resolve("remote.git")
+        val work = dir.resolve("work")
+        git(dir, "init", "--bare", "-b", "main", remote.toString())
+        git(dir, "init", "-b", "main", work.toString())
+        git(work, "commit", "--allow-empty", "-m", "base")
+        git(work, "remote", "add", "origin", remote.toString())
+        git(work, "push", "origin", "main")
+        val mainBefore = git(remote, "rev-parse", "refs/heads/main")
+        git(work, "checkout", "-b", "feat/c1")
+        git(work, "commit", "--allow-empty", "-m", "card work")
+        git(work, "branch", "feat/other")
+        git(work, "tag", "v1")
+
+        assertThat(SystemBranchPublisher().push(work, "feat/c1")).isEqualTo(PushResult.Pushed)
+
+        assertThat(git(remote, "rev-parse", "refs/heads/feat/c1")).isEqualTo(git(work, "rev-parse", "HEAD"))
+        assertThat(git(remote, "branch", "--list", "feat/other")).isEmpty()
+        assertThat(git(remote, "tag", "--list")).isEmpty()
+        assertThat(git(remote, "rev-parse", "refs/heads/main")).isEqualTo(mainBefore)
+        listOf("-x", "a..b", "a b", "main").forEach { bad ->
+            assertThat(SystemBranchPublisher().push(work, bad)).describedAs(bad).isEqualTo(PushResult.Refused)
+        }
+        assertThat(git(remote, "rev-parse", "refs/heads/main")).isEqualTo(mainBefore)
+    }
+
+    @Test
+    fun `AC-7 a red CI with long multi-byte summaries returns the card to Coding with a reason cut at 2048 UTF-8 bytes`() {
+        card("c1")
+        val long = "€".repeat(1500)
+        forge.scriptChecks(
+            "sha-1",
+            ChecksState.Failed(listOf(FailedCheck("test-a", long), FailedCheck("test-b", long), FailedCheck("test-c", long))),
+        )
+
+        pipeline(reviewing(approved), sync(MergeResult.Merged), gates(green), delivery = delivery(RecordingPublisher())).run("c1")
+
+        assertThat(column("c1")).isEqualTo(Column.CODING)
+        assertThat(events(EventType.CARD_BLOCKED)).isEmpty()
+        val reason = requireNotNull(events(EventType.CARD_MOVED).single().payload["reason"])
+        assertThat(reason.toByteArray(Charsets.UTF_8).size).isBetween(1, 2048)
+        assertThat(reason).doesNotContain("�").contains("test-a")
+    }
+
+    private fun git(workdir: Path, vararg args: String): String {
+        val process = ProcessBuilder(listOf("git", "-C", workdir.toString(), "-c", "user.name=t", "-c", "user.email=t@t.invalid") + args)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.readAllBytes().toString(Charsets.UTF_8).trim()
+        assertThat(process.waitFor()).describedAs("git ${args.toList()}: $output").isZero()
+        return output
     }
 
     private fun lockReleasedAfter(failure: RuntimeException?, script: List<SessionScript>): Boolean {

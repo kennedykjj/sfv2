@@ -157,3 +157,48 @@ class SystemBranchSync(private val timeoutSeconds: Long = TIMEOUT_SECONDS) : Bra
         const val TIMEOUT_SECONDS = 120L
     }
 }
+
+/**
+ * Pushes only `refs/heads/<branch>:refs/heads/<branch>` of the card's own branch: no `--force`, no tags, no `--all`, and
+ * never the base. Hooks and fsmonitor are switched off so nothing from the repository's config runs in the daemon.
+ */
+class SystemBranchPublisher(
+    private val base: String = "main",
+    private val timeoutSeconds: Long = PUSH_TIMEOUT_SECONDS,
+) : BranchPublisher {
+
+    override fun push(worktree: Path, branch: String): PushResult {
+        if (!acceptable(branch)) return PushResult.Refused
+        val refspec = "refs/heads/$branch:refs/heads/$branch"
+        return if (git(worktree, "push", "origin", refspec) == 0) PushResult.Pushed else PushResult.Failed
+    }
+
+    private fun acceptable(branch: String): Boolean =
+        branch.isNotEmpty() && branch != base && !branch.startsWith("-") && !branch.contains("..") &&
+            branch.none { it.isWhitespace() || it.isISOControl() || it in FORBIDDEN_CHARS } &&
+            !branch.startsWith("/") && !branch.endsWith("/") && !branch.endsWith(".lock") && !branch.contains("@{")
+
+    private fun git(worktree: Path, vararg args: String): Int {
+        val process = try {
+            ProcessBuilder(listOf("git", "-C", worktree.toString(), "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false") + args)
+                .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .also { it.environment()["GIT_TERMINAL_PROMPT"] = "0" }
+                .start()
+        } catch (e: IOException) {
+            return -1
+        }
+        try {
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) return -1
+            return process.exitValue()
+        } finally {
+            process.destroyForcibly()
+        }
+    }
+
+    private companion object {
+        const val PUSH_TIMEOUT_SECONDS = 120L
+        val FORBIDDEN_CHARS = setOf('~', '^', ':', '?', '*', '[', '\\')
+    }
+}
