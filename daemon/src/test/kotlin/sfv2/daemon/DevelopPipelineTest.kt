@@ -144,7 +144,7 @@ class DevelopPipelineTest {
         store.recordChange(id, Card.create("Develop $id", column), event)
     }
 
-    private fun pipeline(runtime: Runtime, gates: DevelopGates, maxRounds: Int = 3) = DevelopPipeline(
+    private fun pipeline(runtime: Runtime, gates: DevelopGates, commit: WorktreeCommit = WorktreeCommit.None, maxRounds: Int = 3) = DevelopPipeline(
         project = project,
         store = store,
         recorder = recorder,
@@ -159,6 +159,7 @@ class DevelopPipelineTest {
         clock = clock,
         maxRounds = maxRounds,
         log = log,
+        commit = commit,
     )
 
     private fun column(id: String): Column = requireNotNull(store.card(id)).column
@@ -215,6 +216,22 @@ class DevelopPipelineTest {
         assertThat(prompts.drop(1)).allSatisfy { assertThat(it).contains("engenheiro da camada") }
         assertThat(prompts.drop(1).map { it.substringAfter("camada `").substringBefore("`") })
             .containsExactlyInAnyOrderElementsOf(DevelopFixtures.project.layers.map { it.name })
+    }
+
+    @Test
+    fun `AC-1 what each session wrote is committed, the QA tests before the red gate and each layer after its engineer`() {
+        card("c1")
+        val calls = CopyOnWriteArrayList<String>()
+        val gates = DevelopFixtures.ScriptedDevelopGates(listOf(DevelopFixtures.green))
+        val commits = CopyOnWriteArrayList<String>()
+        val commit = WorktreeCommit { _, message -> commits.add(message).also { calls.add("commit") } }
+        val runtime = DevelopFixtures.ProbingRuntime(succeeding(rounds(1)), calls)
+
+        pipeline(runtime, RecordingGates(gates, calls), commit).run("c1")
+
+        assertThat(calls.take(3)).containsExactly("session", "commit", "red")
+        assertThat(commits).hasSize(1 + DevelopFixtures.project.layers.size)
+        assertThat(commits.first()).startsWith("test(tests)")
     }
 
     @Test
