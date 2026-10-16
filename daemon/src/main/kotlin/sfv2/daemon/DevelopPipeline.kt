@@ -266,6 +266,8 @@ class RealDevelopGates(
 
 /** One pass of the develop stage: QA writes red tests, engineers implement per layer, gates move the card. */
 @Suppress("LongParameterList")
+private const val QA_ROLE = "QA (passo vermelho): escreva só os testes de aceitação de cada critério, sem código de produção"
+
 class DevelopPipeline(
     private val project: Project,
     private val store: CardEventStore,
@@ -317,19 +319,23 @@ class DevelopPipeline(
     /** Failed gates of one round; empty when every gate is green. */
     private fun playRound(cardId: String, worktree: Path): List<GateResult> {
         val model = modelStepUp.modelFor(cardId)
-        runSession(cardId, worktree, model)
+        runSession(cardId, worktree, model, QA_ROLE)
         val red = gates.red(cardId, worktree).filter { !it.passed }
         if (red.isNotEmpty()) return red
         val layers = gates.layers(worktree)
-        layers.forEach { _ -> runSession(cardId, worktree, model) }
+        layers.forEach { layer -> runSession(cardId, worktree, model, engineerRole(layer)) }
         return layers.flatMap { gates.green(cardId, it, worktree) }.filter { !it.passed }
     }
 
-    private fun runSession(cardId: String, worktree: Path, model: String) {
+    private fun engineerRole(layer: ProjectLayer): String =
+        "engenheiro da camada `${layer.name}` (caminho `${layer.path}`): implemente só dentro dela, até os testes de aceitação " +
+            "passarem, sem alterar os testes da QA"
+
+    private fun runSession(cardId: String, worktree: Path, model: String, role: String) {
         val token = sessions.open(project.repo, "develop", cardId)
         val config = writeConfig(token)
         try {
-            val result = runtime.launch(SessionRequest("develop", worktree, model, config))
+            val result = runtime.launch(SessionRequest("develop", worktree, model, config, StagePrompt.of("develop", cardId, role)))
             recordCost(cardId, model, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }
