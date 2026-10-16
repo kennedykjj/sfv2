@@ -28,15 +28,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sfv2.core.Column as BoardColumn
 
-private val sans = FontFamily.SansSerif
-private val mono = FontFamily.Monospace
 private const val ID_LENGTH = 8
 
 /**
