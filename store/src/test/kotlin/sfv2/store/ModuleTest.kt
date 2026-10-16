@@ -2,6 +2,7 @@ package sfv2.store
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Instant
@@ -37,6 +38,7 @@ class ModuleTest {
                 s.execute("PRAGMA user_version = $version")
             }
         }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
         return file
     }
 
@@ -270,6 +272,7 @@ class ModuleTest {
             }
             c.createStatement().use { it.execute("PRAGMA user_version = $version") }
         }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
         return file
     }
 
@@ -387,6 +390,79 @@ class ModuleTest {
             StoredCard("c1", moved),
             StoredCard("c2", Card.create("Second", Column.INBOX)),
         )
+    }
+
+    private fun perms(file: Path): String = PosixFilePermissions.toString(Files.getPosixFilePermissions(file))
+
+    private fun existingDatabase(name: String, mode: String): Path {
+        val file = dir.resolve(name)
+        Database.open(file).use { CardEventStore(it).recordChange("c1", Card.create("Write docs", Column.INBOX), anEvent("e1")) }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString(mode))
+        return file
+    }
+
+    @Test
+    fun `AC-1 new database and its wal and shm files are owner-only`() {
+        val file = dir.resolve("owner-new.db")
+
+        Database.open(file).use { db ->
+            CardEventStore(db).recordChange("c1", Card.create("Write docs", Column.INBOX), anEvent("e1"))
+
+            // The store's own connection leaves no side files at rest; a reader holding the WAL database
+            // open (as a second process would) is what makes SQLite create -wal and -shm.
+            DriverManager.getConnection("jdbc:sqlite:$file").use { reader ->
+                reader.createStatement().use { it.execute("SELECT count(*) FROM sqlite_master") }
+                reader.createStatement().use { it.execute("PRAGMA user_version") }
+                assertThat(perms(file)).isEqualTo("rw-------")
+                assertSideFilesOwnerOnly()
+            }
+        }
+    }
+
+    private fun assertSideFilesOwnerOnly() {
+        run {
+            assertThat(Files.exists(dir.resolve("owner-new.db-wal"))).isTrue()
+            assertThat(Files.exists(dir.resolve("owner-new.db-shm"))).isTrue()
+            assertThat(perms(dir.resolve("owner-new.db-wal"))).isEqualTo("rw-------")
+            assertThat(perms(dir.resolve("owner-new.db-shm"))).isEqualTo("rw-------")
+        }
+    }
+
+    @Test
+    fun `AC-2 existing database open to group or others is refused citing path and permission owner-only`() {
+        listOf("rw-r--r--", "rw-rw----", "rw----r--").forEach { mode ->
+            val file = existingDatabase("open-$mode.db", mode)
+
+            assertThatThrownBy { Database.open(file) }
+                .isInstanceOf(RuntimeException::class.java)
+                .satisfies({ e -> assertThat(e.javaClass.simpleName).isEqualTo("DatabaseInsecurePermissionsException") })
+                .hasMessageContaining(file.toString())
+                .hasMessageContaining(mode)
+        }
+    }
+
+    @Test
+    fun `AC-3 refused database keeps its permission and content owner-only`() {
+        val file = existingDatabase("refused.db", "rw-r--r--")
+        val before = Files.readAllBytes(file)
+        val filesBefore = Files.list(dir).use { it.map { p -> p.fileName.toString() }.sorted().toList() }
+
+        assertThatThrownBy { Database.open(file) }
+            .satisfies({ e -> assertThat(e.javaClass.simpleName).isEqualTo("DatabaseInsecurePermissionsException") })
+
+        assertThat(perms(file)).isEqualTo("rw-r--r--")
+        assertThat(Files.readAllBytes(file)).isEqualTo(before)
+        assertThat(Files.list(dir).use { it.map { p -> p.fileName.toString() }.sorted().toList() }).isEqualTo(filesBefore)
+    }
+
+    @Test
+    fun `AC-4 existing database with 0600 or 0400 opens normally owner-only`() {
+        val rw = existingDatabase("rw.db", "rw-------")
+        Database.open(rw).use { assertThat(CardEventStore(it).card("c1")).isEqualTo(Card.create("Write docs", Column.INBOX)) }
+        assertThat(perms(rw)).isEqualTo("rw-------")
+
+        val ro = existingDatabase("ro.db", "r--------")
+        Database.open(ro).use { assertThat(CardEventStore(it).events("c1")).hasSize(1) }
     }
 
     @Test
