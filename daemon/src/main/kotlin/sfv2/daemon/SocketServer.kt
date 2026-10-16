@@ -29,6 +29,8 @@ class SocketServer private constructor(
     private val lock: FileLock,
     private val log: DaemonLog,
     private val pause: (Long) -> Unit,
+    private val commands: CardCommands?,
+    private val onClose: () -> Unit,
 ) : AutoCloseable {
 
     private val closed = AtomicBoolean(false)
@@ -81,6 +83,8 @@ class SocketServer private constructor(
     private fun dispatch(request: Request): Response = when (request) {
         Request.Ping -> Response.Pong
         is Request.Rejected -> Response.Error(request.message)
+        is Request.CardCreate, is Request.CardMove, Request.CardList, is Request.CardShow ->
+            commands?.handle(request) ?: Response.Error("card commands are not available")
     }
 
     /** Stops accepting, closes the channel and removes the socket file. Idempotent. */
@@ -91,6 +95,7 @@ class SocketServer private constructor(
         runCatching { Files.deleteIfExists(path) }
         runCatching { lock.release() }
         runCatching { lock.channel().close() }
+        runCatching { onClose() }
     }
 
     private sealed interface LineRead {
@@ -134,6 +139,8 @@ class SocketServer private constructor(
             path: Path,
             log: DaemonLog = StderrDaemonLog,
             pause: (Long) -> Unit = Thread::sleep,
+            commands: CardCommands? = null,
+            onClose: () -> Unit = {},
         ): SocketServer {
             prepareDirectory(path)
             val lock = acquireLock(path)
@@ -155,7 +162,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {

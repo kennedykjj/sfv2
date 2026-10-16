@@ -375,6 +375,21 @@ class ModuleTest {
     }
 
     @Test
+    fun `AC-4 cards lists every stored card by insertion order with current state`() = withStore { store, _ ->
+        assertThat(store.cards()).isEmpty()
+        store.recordChange("c1", Card.create("First", Column.INBOX), anEvent("e1"))
+        store.recordChange("c2", Card.create("Second", Column.INBOX), anEvent("e2"))
+        val moved = Card.create("First", Column.READY_FOR_REFINEMENT)
+
+        store.recordChange("c1", moved, anEvent("e3", EventType.CARD_MOVED))
+
+        assertThat(store.cards()).containsExactly(
+            StoredCard("c1", moved),
+            StoredCard("c2", Card.create("Second", Column.INBOX)),
+        )
+    }
+
+    @Test
     fun `AC-5 public API has no way to alter or delete an event`() {
         val names = CardEventStore::class.java.methods
             .filter { it.declaringClass == CardEventStore::class.java }

@@ -28,7 +28,7 @@ INSERT OR REPLACE INTO spec(card_id, path, hash) VALUES (?, ?, ?);
 selectSpec:
 SELECT path, hash FROM spec WHERE card_id = ?;
 
-upsertCard:
+insertCardIfAbsent:
 INSERT OR IGNORE INTO card (id, title, column_name)
 VALUES (:id, :title, :column_name);
 
@@ -41,6 +41,9 @@ VALUES (:id, :cardId, :at, :actor, :type, :payloadJson);
 
 eventPayloadsByCard:
 SELECT payload_json FROM event WHERE card_id = :cardId ORDER BY seq;
+
+allCards:
+SELECT id, title, column_name FROM card ORDER BY rowid;
 
 cardById:
 SELECT title, column_name FROM card WHERE id = :id;
