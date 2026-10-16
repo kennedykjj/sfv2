@@ -562,7 +562,7 @@ class BoardStateTest {
     }
 
     @Test
-    fun `AC-2 a card.list row from an old daemon becomes a card that is not blocked, with no time and no cost`() {
+    fun `AC-2 a card list row from an old daemon becomes a card that is not blocked, with no time and no cost`() {
         val card = CardFaceFixtures.parse("""{"id":"a1","title":"Old row","column":"CODING"}""")
 
         val face = CardFace.of(requireNotNull(card) { "the old row was dropped" }, CardFaceFixtures.clock)
