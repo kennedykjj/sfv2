@@ -1,7 +1,21 @@
 package sfv2.daemon
 
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import sfv2.core.Card
+import sfv2.core.Column
+import sfv2.ports.FakeRuntime
+import sfv2.ports.SessionRequest
+import sfv2.ports.SessionResult
+import sfv2.ports.SessionScript
+import sfv2.store.CardEventStore
+import sfv2.store.Database
 
 class SpecGatesTest {
 
@@ -213,5 +227,84 @@ class SpecGatesTest {
         val result = check(aSpec(criteria = "- o sistema deve funcionar", testPlan = ""))
 
         assertThat(result.findings.map { it.gate }).contains(SpecGate.TEST_PLAN)
+    }
+
+    /** Scripted refine agent: the runtime launches it, then it fills the skill's template and writes the spec through the MCP tool. */
+    private class ScriptedRefineAgent(private val tools: McpRequestTools, private val template: String) {
+        private val bodies = mapOf(
+            "Product" to "**Acceptance criteria**\n- **AC-1** — primeiro criterio\n**Touches UI:** no",
+            "Architecture" to "Camada unica. Arquivos: `daemon/src/main/kotlin/A.kt`.",
+            "Test plan" to "| AC | Layer | Test file |\n|---|---|---|\n| AC-1 | daemon | `daemon/src/test/kotlin/sfv2/daemon/XTest.kt` |",
+            "Security" to "_Revisao_ — n/a",
+            "Rollback" to "n/a",
+            "Decisions" to "- nada",
+        )
+
+        fun run(runtime: FakeRuntime, request: SessionRequest, cardId: String, path: String) {
+            val exited = runtime.launch(request) as SessionResult.Exited
+            assertThat(exited.exitCode).isEqualTo(0)
+            tools.fileWriteRequest(cardId, path, fill())
+        }
+
+        private fun fill(): String {
+            val out = mutableListOf<String>()
+            var skipping = false
+            for (line in template.lines()) {
+                if (line.startsWith("## ")) {
+                    skipping = true
+                    out += line
+                    out += bodies[line.removePrefix("## ").trim()] ?: "n/a"
+                    out += ""
+                } else if (!skipping) {
+                    out += if (line.startsWith("**Weight:**")) "**Weight:** light" else line
+                }
+            }
+            return out.joinToString("\n")
+        }
+    }
+
+    @Test
+    fun `AC-2 the scripted runtime fills the refine template and the written spec raises no gate finding`(@TempDir dir: Path) {
+        val resource = javaClass.classLoader.getResourceAsStream("skills/refine/spec-template.md")
+        assertThat(resource).describedAs("skills/refine/spec-template.md is packaged").isNotNull()
+        val template = requireNotNull(resource).use { String(it.readAllBytes(), Charsets.UTF_8) }
+        val clock = Clock.fixed(Instant.parse("2026-10-16T10:00:00Z"), ZoneOffset.UTC)
+        val database = Database.open(dir.resolve("factory.db"))
+        val store = CardEventStore(database)
+        val events = EventStream(store)
+        try {
+            val config = McpFixtures.FakeConfigSource()
+            val registry = ProjectRegistry(config)
+            val repo = Files.createDirectories(dir.resolve("alpha"))
+            Files.createDirectories(repo.resolve(".git"))
+            config.files[repo.toRealPath()] = McpFixtures.yaml("alpha")
+            val project = registry.register(repo)
+            store.recordChange("c36", Card.create("Skill de refine", Column.REFINEMENT), McpFixtures.anEvent("e-c36"))
+            store.assignProject("c36", project.repo)
+            val worktrees = WorktreeManager(dir.resolve("wt"), WorktreeFixtures.FakeWorktreeGit())
+            val worktree = Files.createDirectories(worktrees.ensure(project, "c36", "Skill de refine").path)
+            val tools = McpRequestTools(
+                McpSession(project.repo, "refiner", "c36"),
+                store,
+                EventRecorder(store, events),
+                worktrees,
+                registry,
+                clock,
+            )
+            val specPath = "docs/superpowers/specs/2026-10-16-skill-de-refine-via-mcp-design.md"
+            val request = SessionRequest("refine", worktree, "model", dir.resolve("mcp.json"))
+
+            ScriptedRefineAgent(tools, template).run(FakeRuntime(listOf(SessionScript.Succeed)), request, "c36", specPath)
+
+            val written = Files.readString(worktree.resolve(specPath))
+            val result = check(written)
+            assertThat(result.findings).isEmpty()
+            assertThat(result.weight).isEqualTo(SpecWeight.LIGHT)
+            assertThat(written.lines().filter { it.startsWith("## ") })
+                .containsSubsequence("## Product", "## Architecture", "## Test plan", "## Security", "## Rollback")
+        } finally {
+            events.close()
+            database.close()
+        }
     }
 }
