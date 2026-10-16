@@ -21,13 +21,15 @@ object ProjectDelivery {
     private val GITHUB_REMOTE = Regex("""github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?""")
 
     fun create(project: Project, tmpDir: Path): PullRequestDelivery {
+        return PullRequestDelivery(forgeOf(project, tmpDir), SystemBranchPublisher(), GitWorktreeHead(), ParkingCiPause())
+    }
+
+    /** The project's [Forge]: GitHub through `gh` when origin is on GitHub, otherwise one that fails every call. */
+    fun forgeOf(project: Project, tmpDir: Path): Forge {
         val repo = Path.of(project.repo)
-        val slug = originSlug(repo)
-        val forge = if (slug == null) UnavailableForge else {
-            Files.createDirectories(tmpDir)
-            GhForge(repo = slug, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
-        }
-        return PullRequestDelivery(forge, SystemBranchPublisher(), GitWorktreeHead(), ParkingCiPause())
+        val slug = originSlug(repo) ?: return UnavailableForge
+        Files.createDirectories(tmpDir)
+        return GhForge(repo = slug, workDir = repo, tmpDir = tmpDir, timeout = GH_TIMEOUT)
     }
 
     private fun originSlug(repo: Path): String? {

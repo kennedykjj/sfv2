@@ -67,6 +67,7 @@ class Dispatcher(
     private val log: DaemonLog = StderrDaemonLog,
     private val launchGuard: LaunchGuard = LaunchGuard.Open,
     private val stages: Set<DispatchStage> = DispatchStage.entries.toSet(),
+    private val deliveries: DeliveryTrigger = DeliveryTrigger { },
 ) : AutoCloseable {
     private data class Backoff(val retryAt: Instant, val delay: Duration)
 
@@ -88,6 +89,7 @@ class Dispatcher(
         if (launchGuard.dayLimitReached()) return emptyList()
         val active = pool.active().map { it.cardId }.toSet()
         running.keys.retainAll(active)
+        store.cards().filter { it.card.column == Column.READY_FOR_PROD }.forEach { deliveries.trigger(it.id) }
         val started = mutableListOf<DispatchedRun>()
         for (stage in DispatchStage.entries.filter { it in stages }) {
             val limit = limits.wip[stage] ?: 0
