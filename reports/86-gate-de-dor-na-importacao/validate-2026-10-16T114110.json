@@ -1,0 +1,1 @@
+{"outcome": "ok", "agents": [], "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": ["green core sfv2.core.ProjectPoliciesTest", "green daemon sfv2.daemon.CardImportTest"], "amendments": []}
