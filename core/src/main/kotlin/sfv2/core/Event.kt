@@ -20,6 +20,7 @@ enum class EventType {
     OWNER_APPROVED,
     GATE_FINISHED,
     LOCK_RELEASED,
+    RUN_COST_RECORDED,
 }
 
 /** Thrown when reading an event whose type is not in the catalog. */

@@ -1,0 +1,4 @@
+CREATE TABLE card_project (
+    card_id TEXT NOT NULL PRIMARY KEY REFERENCES card(id),
+    repo TEXT NOT NULL
+);

@@ -16,7 +16,6 @@ import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventType
 import sfv2.store.CardEventStore
-import sfv2.store.StoredEvent
 
 /** What to run: [command] is executed without a shell in [workingDir], killed after [timeout]. */
 data class GateSpec(
@@ -58,7 +57,7 @@ class GateCardNotFoundException(cardId: String) : RuntimeException("card not fou
 /** Runs a gate for a card and records the result as a GATE_FINISHED event with a bounded summary. */
 class GateExecutor(
     private val store: CardEventStore,
-    private val events: EventStream,
+    private val recorder: EventRecorder,
     private val clock: Clock,
     private val runner: GateRunner,
     private val log: DaemonLog = StderrDaemonLog,
@@ -113,7 +112,7 @@ class GateExecutor(
             type = EventType.GATE_FINISHED,
             payload = payload,
         )
-        events.publish(StoredEvent(store.recordChange(cardId, card, event), cardId, event))
+        recorder.record(cardId, card, event)
         log.log(
             "gate_finished",
             mapOf("card" to cardId, "gate" to spec.name, "verdict" to requireNotNull(payload["verdict"])),
