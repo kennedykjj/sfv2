@@ -1,0 +1,27 @@
+{
+  "outcome": "done",
+  "issue": 15,
+  "slug": "daemon-com-socket-unix-e-protocolo",
+  "weight": "heavy",
+  "agents": [
+    {"name": "qa-engineer", "tokens": 21990, "duration_s": 30, "rounds": 1},
+    {"name": "engineer", "tokens": 64542, "duration_s": 95, "rounds": 2}
+  ],
+  "solo_tasks": [],
+  "rounds": {"plan": 0, "qa": 1, "implementation": 1},
+  "gates": {
+    "test-plan": "pass",
+    "scope": "pass",
+    "red": "pass",
+    "acceptance-intact": "pass",
+    "green": "pass",
+    "migration": "pass",
+    "build": "pass",
+    "forbidden": "pass"
+  },
+  "failed_gates": ["scope techlead (gradle/libs.versions.toml fora da área do Tech Lead; dependência movida para commit próprio depois do QA)"],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": [],
+  "commits": ["ab6b592", "24132d0", "657cc1b", "3d3cae6", "f44225f"]
+}
