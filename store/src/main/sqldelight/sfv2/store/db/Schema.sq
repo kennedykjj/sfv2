@@ -22,6 +22,27 @@ CREATE TABLE spec (
     hash TEXT NOT NULL
 );
 
+CREATE TABLE card_reference (
+    card_id TEXT NOT NULL REFERENCES card(id),
+    position INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    text_hash TEXT NOT NULL,
+    PRIMARY KEY (card_id, provider, external_id)
+);
+
+deleteReferences:
+DELETE FROM card_reference WHERE card_id = :cardId;
+
+insertReference:
+INSERT INTO card_reference (card_id, position, provider, external_id, url, imported_at, text_hash)
+VALUES (:cardId, :position, :provider, :externalId, :url, :importedAt, :textHash);
+
+referencesByCard:
+SELECT provider, external_id, url, imported_at, text_hash FROM card_reference WHERE card_id = :cardId ORDER BY position;
+
 upsertSpec:
 INSERT OR REPLACE INTO spec(card_id, path, hash) VALUES (?, ?, ?);
 

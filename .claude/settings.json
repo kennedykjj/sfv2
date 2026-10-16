@@ -18,6 +18,7 @@
       "Bash(gh run view:*)",
       "Bash(gh run watch:*)",
       "Bash(gh api repos/kennedykjj/sfv2/issues/*/comments*)",
+      "Bash(gh api repos/kennedykjj/sfv2/*)",
       "Bash(./gradlew:*)",
       "Bash(bash ./gradlew:*)",
       "Bash(printenv SHIPFLOOR_INFRA_RETRY)",

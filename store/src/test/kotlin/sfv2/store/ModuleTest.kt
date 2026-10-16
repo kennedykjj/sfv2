@@ -13,6 +13,7 @@ import sfv2.core.Event
 import sfv2.core.EventId
 import sfv2.core.EventJson
 import sfv2.core.EventType
+import sfv2.core.ExternalRef
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
@@ -48,14 +49,14 @@ class ModuleTest {
     }
 
     @Test
-    fun `AC-1 creates a new database at schema version 3 in WAL mode`() {
+    fun `AC-1 creates a new database at schema version 4 in WAL mode`() {
         val file = dir.resolve("fresh.db")
 
         Database.open(file).close()
 
         assertThat(Files.exists(file)).isTrue()
-        assertThat(Database.SCHEMA_VERSION).isEqualTo(3)
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
+        assertThat(Database.SCHEMA_VERSION).isEqualTo(4)
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
         val tables = jdbc(file) { c ->
             c.createStatement().use { s ->
@@ -84,7 +85,7 @@ class ModuleTest {
         assertThat(scalar(file, "SELECT group_concat(sql, ';') FROM (SELECT sql FROM sqlite_master ORDER BY name)"))
             .isEqualTo(schemaBefore)
         assertThat(scalar(file, "SELECT note FROM probe")).isEqualTo("kept")
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
         assertThat(scalar(file, "PRAGMA journal_mode")).isEqualTo("wal")
     }
 
@@ -329,7 +330,7 @@ class ModuleTest {
                 assertThat(db.queries.schemaQueries.selectSpec("c1").executeAsOne().hash).isEqualTo("abc123")
             }
         }
-        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("3")
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
         assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
     }
 
@@ -350,7 +351,7 @@ class ModuleTest {
         val v1 = legacyDatabase("m1.db", 1, withSpec = false).also { Database.open(it).close() }
         val v2 = legacyDatabase("m2.db", 2, withSpec = true).also { Database.open(it).close() }
 
-        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("3")
+        assertThat(scalar(fresh, "PRAGMA user_version")).isEqualTo("4")
         listOf(v1, v2).forEach { migrated ->
             listOf("card", "event", "spec").forEach { table ->
                 assertThat(columns(migrated, table)).isEqualTo(columns(fresh, table))
@@ -390,6 +391,124 @@ class ModuleTest {
             StoredCard("c1", moved),
             StoredCard("c2", Card.create("Second", Column.INBOX)),
         )
+    }
+
+    private fun ref(provider: String, externalId: String, at: String = "2026-10-10T09:30:00Z") =
+        ExternalRef(provider, externalId, "https://tracker.example/$externalId", Instant.parse(at), TextHash.of("text $externalId"))
+
+    private fun insertReference(file: Path, cardId: String, position: Int, r: ExternalRef) {
+        jdbc(file) { c ->
+            c.prepareStatement(
+                "INSERT INTO card_reference (card_id, position, provider, external_id, url, imported_at, text_hash) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ).use { p ->
+                p.setString(1, cardId)
+                p.setInt(2, position)
+                p.setString(3, r.provider)
+                p.setString(4, r.externalId)
+                p.setString(5, r.url)
+                p.setString(6, r.importedAt.toString())
+                p.setString(7, r.textHash.value)
+                p.executeUpdate()
+            }
+        }
+    }
+
+    @Test
+    fun `AC-1 references are written and read back equal and in order`() = withStore { store, _ ->
+        val card = Card.create("Imported", Column.INBOX)
+            .withReference(ref("jira", "PROJ-2"))
+            .withReference(ref("github", "7", "2026-10-11T12:00:00Z"))
+            .withReference(ref("jira", "PROJ-1"))
+
+        store.recordChange("c1", card, anEvent("e1"))
+
+        assertThat(store.card("c1")).isEqualTo(card)
+        assertThat(store.card("c1")?.references).containsExactlyElementsOf(card.references)
+        assertThat(store.cards()).containsExactly(StoredCard("c1", card))
+
+        val trimmed = Card.create("Imported", Column.CODING).withReference(ref("github", "7", "2026-10-11T12:00:00Z"))
+        store.recordChange("c1", trimmed, anEvent("e2", EventType.CARD_MOVED))
+        assertThat(store.card("c1")).isEqualTo(trimmed)
+    }
+
+    @Test
+    fun `AC-2 card without references reads back with an empty list`() = withStore { store, _ ->
+        val card = Card.create("Plain", Column.INBOX)
+
+        store.recordChange("c1", card, anEvent("e1"))
+
+        assertThat(store.card("c1")?.references).isEmpty()
+        assertThat(store.card("c1")).isEqualTo(card)
+    }
+
+    @Test
+    fun `AC-3 version 3 database with cards and events migrates to 4 without losing data`() {
+        val file = dir.resolve("v3.db")
+        jdbc(file) { c ->
+            c.createStatement().use { s ->
+                s.execute("CREATE TABLE card (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, column_name TEXT NOT NULL)")
+                s.execute(
+                    "CREATE TABLE event (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, " +
+                        "card_id TEXT NOT NULL REFERENCES card(id), at TEXT NOT NULL, actor TEXT NOT NULL, " +
+                        "type TEXT NOT NULL, payload_json TEXT NOT NULL)",
+                )
+                s.execute("CREATE INDEX event_card_id ON event(card_id)")
+                s.execute("CREATE TABLE spec (card_id TEXT NOT NULL PRIMARY KEY, path TEXT NOT NULL, hash TEXT NOT NULL)")
+                s.execute("INSERT INTO card (id, title, column_name) VALUES ('c1', 'Write docs', 'INBOX')")
+                s.execute("INSERT INTO card (id, title, column_name) VALUES ('c2', 'Other', 'CODING')")
+            }
+            c.prepareStatement(
+                "INSERT INTO event (id, card_id, at, actor, type, payload_json) VALUES (?, 'c1', ?, 'owner', ?, ?)",
+            ).use { p ->
+                legacyEvents.forEach { e ->
+                    p.setString(1, e.id.value)
+                    p.setString(2, e.at.toString())
+                    p.setString(3, e.type.name)
+                    p.setString(4, EventJson.encode(e))
+                    p.executeUpdate()
+                }
+            }
+            c.createStatement().use { it.execute("PRAGMA user_version = 3") }
+        }
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
+
+        Database.open(file).use { db ->
+            val store = CardEventStore(db)
+            assertThat(store.cards()).containsExactly(
+                StoredCard("c1", Card.create("Write docs", Column.INBOX)),
+                StoredCard("c2", Card.create("Other", Column.CODING)),
+            )
+            assertThat(store.card("c1")?.references).isEmpty()
+            assertThat(store.events("c1")).containsExactlyElementsOf(legacyEvents)
+        }
+        assertThat(scalar(file, "PRAGMA user_version")).isEqualTo("4")
+        assertThat(longs(file, "SELECT seq FROM event ORDER BY seq")).containsExactly(1L, 2L, 3L)
+    }
+
+    @Test
+    fun `AC-4 database refuses a second reference with the same provider and id on one card`() = withStore { store, file ->
+        val card = Card.create("Imported", Column.INBOX).withReference(ref("jira", "PROJ-1"))
+        store.recordChange("c1", card, anEvent("e1"))
+
+        assertThatThrownBy { insertReference(file, "c1", 1, ref("jira", "PROJ-1", "2026-10-12T00:00:00Z")) }
+            .isInstanceOf(Exception::class.java)
+
+        assertThat(longs(file, "SELECT count(*) FROM card_reference WHERE card_id = 'c1'")).containsExactly(1L)
+        assertThat(store.card("c1")).isEqualTo(card)
+    }
+
+    @Test
+    fun `AC-5 same provider and id on different cards are both accepted`() = withStore { store, _ ->
+        val shared = ref("jira", "PROJ-1")
+        val first = Card.create("First", Column.INBOX).withReference(shared)
+        val second = Card.create("Second", Column.INBOX).withReference(shared)
+
+        store.recordChange("c1", first, anEvent("e1"))
+        store.recordChange("c2", second, anEvent("e2"))
+
+        assertThat(store.card("c1")).isEqualTo(first)
+        assertThat(store.card("c2")).isEqualTo(second)
     }
 
     private fun perms(file: Path): String = PosixFilePermissions.toString(Files.getPosixFilePermissions(file))
