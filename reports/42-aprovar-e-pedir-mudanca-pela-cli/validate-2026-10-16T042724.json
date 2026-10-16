@@ -1,0 +1,4 @@
+{"issue": 42, "slug": "aprovar-e-pedir-mudanca-pela-cli", "pipeline": "validate", "started_at": "2026-10-16T07:20:00Z", "finished_at": "2026-10-16T07:40:00Z", "outcome": "ok",
+ "agents": [{"role": "qa-engineer", "tokens": 18988, "duration_s": 17}],
+ "rounds": {"ci": 1, "qa-amend": 1}, "gates_failed": ["ci build (main avançou: DevelopGates.layers)"], "flaky": [], "gates_reused": [], "manual_edit": false,
+ "amendments": [{"file": "e2e/src/test/kotlin/sfv2/e2e/PhaseExitTest.kt", "reason": "DevelopGates ganhou layers após o merge de main (#40); o teste implementa o membro, sem mudar asserção."}]}
