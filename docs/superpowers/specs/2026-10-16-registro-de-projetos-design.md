@@ -16,6 +16,7 @@ _Product Owner_
 - **AC-4** — Dado um projeto registrado e um `factory.yml` alterado numa branch (não mergeada), quando o daemon lê a configuração, então valem os valores da `main`.
 - **AC-5** — Dado um repositório sem `.shipfloor/factory.yml` na `main`, quando o registro é pedido, então o daemon recusa com erro que diz que o arquivo não foi encontrado.
 - **AC-6** — Dado um projeto já registrado, quando o mesmo repositório é registrado de novo, então o daemon recusa por duplicidade e a listagem segue com uma única entrada.
+- **AC-7** — Dado um pedido `project.add` com ator agente, adaptador ou fábrica, ou com ator dono sem `proof` válida, quando o daemon o processa, então recusa com motivo e o projeto não é registrado: só o dono, com prova, registra projetos.
 **Out of scope:** comandos `sfv2 project add/list` da CLI (card separado); persistência do registro (fica em memória, perdido ao reiniciar o daemon); recarregar a configuração após mudança na `main`; remoção de projetos; UI.
 **Product fit:** serve ao princípio de a fábrica ser dona do próprio estado, com política por projeto declarada no repositório e lida da `main`, não de rascunho em branch. Não contradiz posicionamento nem o que está fora de escopo.
 **Touches UI:** no
@@ -35,7 +36,7 @@ _Tech Lead_
   - `class ProjectRegistry(source: ProjectConfigSource)` com `register(repo: Path): Project` e `list(): List<Project>` (em memória, `@Synchronized`).
   - `class InvalidProjectConfigException(val field: String, message)` : `RuntimeException`; `ProjectNotFoundException`/`ProjectAlreadyRegisteredException` com o repositório na mensagem.
   - Campos exigidos: `project.name` (não vazio), `layers` (lista não vazia; cada item com `name` e `path` não vazios, nomes únicos). Falha de política repassa o campo de `InvalidPolicyException`.
-- **Protocolo:** `project.add` (`actor`, `path`, `proof` quando owner, mesma prova de `card.*`) e `project.list`; respostas `ProjectResult`/`ProjectsResult` com nome, camadas e políticas. Erro devolve `ok=false` com a mensagem que nomeia o campo.
+- **Protocolo:** `project.add` (`actor`, `path`, `proof`): só o ator dono com `proof` válida registra (a mesma `OwnerProof` de `card.*`, verificada antes de ler qualquer arquivo ou rodar o git); `project.list` é leitura e dispensa prova e `project.list`; respostas `ProjectResult`/`ProjectsResult` com nome, camadas e políticas. Erro devolve `ok=false` com a mensagem que nomeia o campo.
 - **Duplicidade:** chave é o caminho canônico do repositório (`toRealPath`).
 - **Migração:** nenhuma (sem persistência).
 
@@ -50,9 +51,15 @@ _Tech Lead_
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
 | AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ProjectRegistryTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **Por que só o dono registra:** o `factory.yml` do projeto declara quem assina cada efeito externo (`signers`, #19), inclusive `policy` (dispensa a assinatura do dono). Quem registra um repositório escolhe, na prática, quais efeitos saem sem o dono; um agente nunca pode fazer isso (ARCHITECTURE, invariante 4).
+- **`path` vem de fora:** canonicalizar com `toRealPath`, exigir diretório com repositório git, recusar caminho inexistente com mensagem sem eco do conteúdo.
+- **`git` seguro:** `git -C <repo> show main:.shipfloor/factory.yml` sem shell, argumentos fixos, `GIT_TERMINAL_PROMPT=0`, `-c core.fsmonitor=false`, timeout, tamanho máximo do arquivo e saída padrão lida com limite. Nada do conteúdo do `factory.yml` vira comando.
+- **YAML não confiável:** `snakeyaml-engine` em modo seguro (sem tipos arbitrários, limites de aliases e de tamanho); campos desconhecidos viram erro com o nome do campo.
+- **Log:** só o id do projeto (nome validado) e o caminho; nunca o conteúdo do arquivo.
 
 ## Rollback
 n/a
