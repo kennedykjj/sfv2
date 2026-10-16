@@ -7,7 +7,7 @@ import sfv2.store.CardEventStore
 import sfv2.store.SpecRead
 import sfv2.store.SpecStore
 
-data class ReferenceView(val provider: String, val externalId: String, val url: String)
+data class ReferenceView(val provider: String, val externalId: String, val url: UntrustedText)
 
 data class McpCardView(val id: String, val title: UntrustedText, val column: Column, val references: List<ReferenceView>)
 
@@ -35,7 +35,7 @@ class McpReadTools(
             cardId,
             UntrustedText("card", card.title),
             card.column,
-            card.references.map { ReferenceView(it.provider, it.externalId, it.url) },
+            card.references.map { ReferenceView(it.provider, it.externalId, UntrustedText("reference_url", it.url)) },
         )
     }
 

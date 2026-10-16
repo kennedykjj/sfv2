@@ -191,7 +191,7 @@ class McpServerFactory(
             "references",
             buildJsonArray {
                 card.references.forEach {
-                    add(buildJsonObject { put("provider", it.provider); put("externalId", it.externalId); put("url", it.url) })
+                    add(buildJsonObject { put("provider", it.provider); put("externalId", it.externalId); put("url", untrusted(it.url)) })
                 }
             },
         )

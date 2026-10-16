@@ -169,7 +169,7 @@ class McpReadToolsTest {
         assertThat(card.title.text).isEqualTo("Add login")
         assertThat(card.column).isEqualTo(Column.CODING)
         assertThat(card.references).extracting("provider", "externalId", "url")
-            .containsExactly(tuple("jira", "PROJ-7", "https://tracker.example/PROJ-7"))
+            .containsExactly(tuple("jira", "PROJ-7", UntrustedText("reference_url", "https://tracker.example/PROJ-7")))
         assertThat(tools.specGet("c1")).isEqualTo(SpecView("c1", UntrustedText("spec", "# Spec\nAC-1 login works")))
         assertThat(tools.reviewCriteriaGet().criteria.text).isEqualTo("Review for security first")
         assertThat(tools.policiesGet()).isEqualTo(alpha.policies)
