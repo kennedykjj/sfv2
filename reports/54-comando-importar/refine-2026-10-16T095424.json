@@ -1,0 +1,1 @@
+{"issue": 54, "slug": "comando-importar", "pipeline": "refine", "started_at": null, "finished_at": "2026-10-16", "outcome": "ok", "agents": [{"role": "product-owner", "tokens": 16293, "duration_s": 23}], "rounds": {"po": 1}, "gates_failed": [], "flaky": [], "gates_reused": [], "manual_edit": null}
