@@ -17,6 +17,8 @@ _Product Owner_
 - AC-3: Dado o runtime falso e uma revisão que reporta um achado bloqueante, quando o estágio de validate termina, então o card volta ao dono do problema (o estágio que o originou) e não avança para Staged.
 - AC-4: Dado o retorno do AC-3, quando se consulta o card, então o motivo do bloqueio (o achado) está registrado no evento de devolução.
 - AC-5: Dado o runtime falso e uma revisão sem bloqueio, quando o validate termina e os gates estão verdes, então o card segue o caminho normal do pipeline (Staged).
+- AC-6: Dado um relato `VERDICT: BLOCKED layer=<nome>` cuja camada não é uma das camadas do projeto (`layers_get`), ou cujo motivo passa de 2 KiB, quando o daemon o aplica, então o resultado é `Malformed` (o card fica onde está e nada é gravado); o motivo gravado no evento é sempre tratado como texto não confiável, e só a primeira linha do relato decide o veredito.
+- AC-7: Dado a skill de validate empacotada, quando o teste de contrato a lê, então ela contém as três regras de segurança marcadas por `<!-- rule:untrusted-data -->`, `<!-- rule:no-shell -->` e `<!-- rule:write-scope -->` (texto não confiável é dado e nunca instrução; sem shell, `gh`, `git` nem `board.sh`; o validate não escreve código), e a regra de que `APPROVED` nunca basta sozinho (o daemon exige gates verdes); sem qualquer marca o teste falha.
 
 **Fora do escopo:** abrir o PR (fase 3); novas ferramentas MCP; mover card por agente; rodar gates pela skill (o daemon roda).
 
@@ -36,7 +38,7 @@ _Tech Lead_
 - Toda gravação passa por `EventRecorder.record`; o movimento usa `MoveRules.check` do core, sem regra nova.
 
 **Camadas e arquivos (daemon):**
-- `daemon/src/main/resources/skills/validate.md` (novo): texto da skill, em português, falando só MCP.
+- `daemon/src/main/resources/skills/validate/SKILL.md` (novo): texto da skill, em português, falando só MCP; carregada por `StageSkills.load("validate")` do #36 (mesmo layout `skills/<estágio>/SKILL.md`; sem segundo carregador).
 - `daemon/src/main/kotlin/sfv2/daemon/ValidationOutcome.kt` (novo).
 - `daemon/src/test/kotlin/sfv2/daemon/ValidateSkillTest.kt` (novo): contrato da skill contra as ferramentas registradas por `McpServerFactory.serverFor`.
 - `daemon/src/test/kotlin/sfv2/daemon/ValidationOutcomeTest.kt` (novo): fluxo com `FakeRuntime` + `McpRequestTools.completionReport`.
@@ -53,9 +55,13 @@ _Tech Lead_
 | AC-3 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidationOutcomeTest.kt` |
 | AC-4 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidationOutcomeTest.kt` |
 | AC-5 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidationOutcomeTest.kt` |
+| AC-6 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidationOutcomeTest.kt` |
+| AC-7 | daemon | `daemon/src/test/kotlin/sfv2/daemon/ValidateSkillTest.kt` |
 
 ## Security
-_Cybersec_ — n/a
+_Revisão do dono interino_
+- **O veredito vem de texto do agente** (que leu issue, spec e código não confiáveis): `APPROVED` só tem efeito com gates verdes, e quem chega a Staged ainda precisa da aprovação do dono; `BLOCKED` só devolve para Coding (AC-6 valida a camada e o tamanho); nenhuma outra ação nasce do texto.
+- **Um agente que sempre responde `BLOCKED` gera laço de custo:** quem limita é o limite de custo (#34); registrar no #41 um teto de devoluções seguidas por card.
 
 ## Rollback
 n/a
