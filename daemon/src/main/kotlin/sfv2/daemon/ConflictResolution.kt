@@ -121,7 +121,7 @@ class ConflictResolution(
         val token = sessions.open(project.repo, STAGE, cardId)
         val config = writeMcpConfig(configDir, mcpPort, token)
         try {
-            val result = runtime.launch(SessionRequest(STAGE, worktree, model, config))
+            val result = runtime.launch(SessionRequest(STAGE, worktree, model, config, StagePrompt.of(STAGE, cardId)))
             costRecorder.record(cardId, UUID.randomUUID().toString(), runtimeName, STAGE, model, result)
         } finally {
             runCatching { Files.deleteIfExists(config) }

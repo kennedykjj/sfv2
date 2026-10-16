@@ -7,6 +7,10 @@ import java.nio.channels.Channels
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,6 +19,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import sfv2.core.Column
+
+private const val DEFAULT_TIMEOUT_MILLIS = 5_000L
 
 /** What the board needs to act as the owner. Never throws: failures are a [MoveOutcome]. */
 interface OwnerCommands {
@@ -40,12 +46,21 @@ fun ownerMoveRequest(cardId: String, from: Column, to: Column, note: String?, pr
         put("proof", proof)
     }.toString()
 
-/** Talks to the daemon's Unix socket; reads [token] at every send and never keeps it. */
-class SocketOwnerCommands(private val socket: Path, private val token: Path) : OwnerCommands {
+/**
+ * Talks to the daemon's Unix socket; reads [token] at every send and never keeps it.
+ * A daemon that accepts the connection but stays silent for [timeoutMillis] is [NotSentCause.NO_ANSWER].
+ */
+class SocketOwnerCommands(
+    private val socket: Path,
+    private val token: Path,
+    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+) : OwnerCommands {
     override fun move(cardId: String, from: Column, to: Column, note: String?): MoveOutcome {
         val proof = readProof(token) ?: return MoveOutcome.NotSent(NotSentCause.NO_OWNER_PROOF)
         return try {
-            parse(sendLine(socket, ownerMoveRequest(cardId, from, to, note, proof)))
+            parse(sendLine(socket, ownerMoveRequest(cardId, from, to, note, proof), timeoutMillis))
+        } catch (e: TimeoutException) {
+            MoveOutcome.NotSent(NotSentCause.NO_ANSWER)
         } catch (e: IOException) {
             MoveOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE)
         }
@@ -101,10 +116,16 @@ fun closureConfirmRequest(cardId: String, draftHash: String, proof: String): Str
 private const val DRAFT_CHANGED_PREFIX = "draft changed"
 
 /** Talks to the daemon's Unix socket; reads [token] at every confirm and never keeps it. */
-class SocketClosureCommands(private val socket: Path, private val token: Path) : ClosureCommands {
+class SocketClosureCommands(
+    private val socket: Path,
+    private val token: Path,
+    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+) : ClosureCommands {
     override fun draft(cardId: String): DraftOutcome =
         try {
-            parseDraft(sendLine(socket, closureDraftRequest(cardId)))
+            parseDraft(sendLine(socket, closureDraftRequest(cardId), timeoutMillis))
+        } catch (e: TimeoutException) {
+            DraftOutcome.NotSent(NotSentCause.NO_ANSWER)
         } catch (e: IOException) {
             DraftOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE)
         }
@@ -112,7 +133,9 @@ class SocketClosureCommands(private val socket: Path, private val token: Path) :
     override fun confirm(cardId: String, draftHash: String): ConfirmOutcome {
         val proof = readProof(token) ?: return ConfirmOutcome.NotSent(NotSentCause.NO_OWNER_PROOF)
         return try {
-            parseConfirm(sendLine(socket, closureConfirmRequest(cardId, draftHash, proof)))
+            parseConfirm(sendLine(socket, closureConfirmRequest(cardId, draftHash, proof), timeoutMillis))
+        } catch (e: TimeoutException) {
+            ConfirmOutcome.NotSent(NotSentCause.NO_ANSWER)
         } catch (e: IOException) {
             ConfirmOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE)
         }
@@ -141,15 +164,28 @@ private fun readProof(token: Path): String? =
         null
     }
 
-private fun sendLine(socket: Path, command: String): String? {
+/** Sends one line and reads one line back; throws [TimeoutException] when the daemon stays silent for [timeoutMillis]. */
+private fun sendLine(socket: Path, command: String, timeoutMillis: Long): String? {
     val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
     try {
         channel.connect(UnixDomainSocketAddress.of(socket))
-        Channels.newOutputStream(channel).apply {
-            write((command + "\n").toByteArray())
-            flush()
+        // A blocking read has no timeout of its own: closing the channel is what ends a daemon that never answers.
+        val reply = CompletableFuture.supplyAsync {
+            try {
+                Channels.newOutputStream(channel).apply {
+                    write((command + "\n").toByteArray())
+                    flush()
+                }
+                Channels.newInputStream(channel).bufferedReader().readLine()
+            } catch (e: IOException) {
+                null
+            }
         }
-        return Channels.newInputStream(channel).bufferedReader().readLine()
+        return try {
+            reply.get(timeoutMillis, TimeUnit.MILLISECONDS)
+        } catch (e: ExecutionException) {
+            throw IOException("daemon request failed", e)
+        }
     } finally {
         channel.close()
     }

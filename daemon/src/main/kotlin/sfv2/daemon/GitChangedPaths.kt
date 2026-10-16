@@ -15,14 +15,21 @@ interface ChangedPaths {
     fun untracked(worktree: Path): List<String> = emptyList()
 }
 
-/** Lists the changed paths with `git diff --name-only --no-renames`, so a rename yields origin and destination. */
+/**
+ * Lists the paths changed since the branch left [base] with `git diff --name-only --no-renames`, so a rename yields
+ * origin and destination.
+ */
 class GitChangedPaths(private val timeoutSeconds: Long = 30) : ChangedPaths {
 
     override fun between(worktree: Path, base: String): List<String> {
         if (base.isBlank() || base.startsWith("-")) {
             throw ChangedPathsException("invalid base revision: $base")
         }
-        return list(worktree, "diff", "--name-only", "--no-renames", "-z", base, "--")
+        // Against the fork point, not the tip of [base]: a base that moved on after the branch started must not
+        // show as changes of the card.
+        val forkPoint = list(worktree, "merge-base", base, "HEAD").singleOrNull()?.trim()
+            ?: throw ChangedPathsException("no common ancestor between $base and HEAD in $worktree")
+        return list(worktree, "diff", "--name-only", "--no-renames", "-z", forkPoint, "--")
     }
 
     override fun untracked(worktree: Path): List<String> =

@@ -62,6 +62,19 @@ class AssistantStateTest {
     }
 
     @Test
+    fun `AC-2 the single public owner wait set is Spec Review and Staged`() {
+        assertThat(OWNER_WAIT_COLUMNS).containsExactlyInAnyOrder(Column.SPEC_REVIEW, Column.STAGED)
+    }
+
+    @Test
+    fun `AC-2 a card in each owner wait column derives waiting for the owner`() {
+        assertThat(OWNER_WAIT_COLUMNS).isNotEmpty()
+        OWNER_WAIT_COLUMNS.forEach { column ->
+            assertThat(derive(f.aCard(column))).describedAs(column.name).isEqualTo(AssistantState.WAITING_OWNER)
+        }
+    }
+
+    @Test
     fun `AC-4 CARD_BLOCKED without a later owner move is blocked`() {
         assertThat(derive(f.aCard(Column.CODING, f.blocked()))).isEqualTo(AssistantState.BLOCKED)
     }

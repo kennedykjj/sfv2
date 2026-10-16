@@ -1,13 +1,17 @@
 package sfv2.app
 
 import java.io.IOException
+import java.math.BigDecimal
 import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.channels.Channels
 import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -16,7 +20,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.ThrowingSupplier
 import sfv2.core.Column
 
 /**
@@ -28,6 +34,13 @@ import sfv2.core.Column
  * `closureConfirmRequest(cardId, draftHash, proof)` and `SocketClosureCommands(socket, token)`. A confirm answered with
  * `ok:false` and an error starting with "draft changed" is `ConfirmOutcome.DraftChanged`; any other error is
  * `ConfirmOutcome.Failed(error)`. A draft error is `DraftOutcome.Refused(error)`.
+ *
+ * Card view actions (#67), also in `OwnerMoves.kt`: `SpecReviewController(commands: OwnerCommands, io: CoroutineDispatcher)`
+ * with `state: StateFlow<SpecReviewState(notePending, sending, sent, notice)>`; `suspend approve(cardId)`;
+ * `suspend requestChange(cardId, note: String?)` (a blank note opens the note field and sends nothing); `cancel()`;
+ * `dismissNotice()`; `onDetail(detail: CardDetail)` clears `sent` once the card left `SPEC_REVIEW`. There is no
+ * optimistic edit: the column only changes when the daemon event reaches the detail. The pure
+ * `specReviewActionsVisible(state: CardDetailState)` is true only for a loaded card in `SPEC_REVIEW`.
  */
 class OwnerMovesTest {
     @Test
@@ -394,6 +407,298 @@ class OwnerMovesTest {
             daemon.close()
         }
     }
+
+    @Test
+    fun `AC-1 a daemon that accepts the connection and never answers gives NO_ANSWER within the deadline`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val socket = dir.resolve("daemon.sock")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val release = CountDownLatch(1)
+        val reached = CountDownLatch(1)
+        val daemon = FakeDaemon(socket) {
+            reached.countDown()
+            release.await()
+            """{"ok":true,"result":{}}"""
+        }
+        try {
+            val commands = SocketOwnerCommands(socket, token, timeoutMillis = 200)
+
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier { commands.move("a", Column.STAGED, Column.READY_FOR_PROD, null) },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
+            assertThat(reached.await(3, TimeUnit.SECONDS)).isTrue()
+            assertThat(daemon.requests).hasSize(1)
+        } finally {
+            release.countDown()
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-1 a move with no answer closes the connection to the silent daemon`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = SilentDaemon(dir.resolve("daemon.sock"))
+        try {
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier {
+                    SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 200)
+                        .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+                },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_ANSWER))
+            assertThat(daemon.hungUp.await(3, TimeUnit.SECONDS)).isTrue()
+            assertThat(daemon.requests).hasSize(1)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a daemon that answers within the deadline still gives Accepted`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":true,"result":{}}""" }
+        try {
+            val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 2_000)
+                .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+            assertThat(outcome).isEqualTo(MoveOutcome.Accepted)
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-2 a daemon refusal within the deadline still carries the daemon reason`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) { """{"ok":false,"error":"too late"}""" }
+        try {
+            val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 2_000)
+                .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+            assertThat(outcome).isEqualTo(MoveOutcome.Refused("too late"))
+        } finally {
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-3 a move with no answer puts the card back and tells the owner to check the board`() = runBlocking {
+        val fx = ControllerFixtures(BoardFixtures.aCard("a", Column.STAGED))
+        fx.commands.reply = { MoveOutcome.NotSent(NotSentCause.NO_ANSWER) }
+
+        fx.controller.hold("a")
+        fx.controller.chooseTarget(Column.READY_FOR_PROD)
+        fx.controller.submit()
+
+        assertThat(fx.edits.current.cardsIn(Column.STAGED).map { it.id }).containsExactly("a")
+        assertThat(fx.edits.current.cardsIn(Column.READY_FOR_PROD)).isEmpty()
+        assertThat(fx.controller.state.value.notice).isEqualTo(
+            MoveNotice(NoticeKind.NOT_SENT, "Movimento sem resposta do daemon: confira o quadro antes de repetir."),
+        )
+    }
+
+    @Test
+    fun `AC-4 a refused connection is still DAEMON_UNAVAILABLE with a deadline set`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val token = dir.resolve("owner.token")
+        Files.writeString(token, "tok\n")
+
+        val outcome = SocketOwnerCommands(dir.resolve("daemon.sock"), token, timeoutMillis = 200)
+            .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+
+        assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.DAEMON_UNAVAILABLE))
+    }
+
+    @Test
+    fun `AC-4 a missing token is still NO_OWNER_PROOF and sends nothing to a daemon that does not answer`() {
+        val dir = Files.createTempDirectory("sfv2m")
+        val release = CountDownLatch(1)
+        val daemon = FakeDaemon(dir.resolve("daemon.sock")) {
+            release.await()
+            """{"ok":true,"result":{}}"""
+        }
+        try {
+            val outcome = assertTimeoutPreemptively(
+                Duration.ofSeconds(3),
+                ThrowingSupplier {
+                    SocketOwnerCommands(dir.resolve("daemon.sock"), dir.resolve("owner.token"), timeoutMillis = 200)
+                        .move("a", Column.STAGED, Column.READY_FOR_PROD, null)
+                },
+            )
+
+            assertThat(outcome).isEqualTo(MoveOutcome.NotSent(NotSentCause.NO_OWNER_PROOF))
+            assertThat(daemon.requests).isEmpty()
+        } finally {
+            release.countDown()
+            daemon.close()
+        }
+    }
+
+    @Test
+    fun `AC-1 the card view shows the actions only for a loaded card in Spec Review`() {
+        assertThat(specReviewActionsVisible(CardDetailState.Loaded(SpecReviewFixtures.aDetail(Column.SPEC_REVIEW)))).isTrue()
+
+        Column.entries.filter { it != Column.SPEC_REVIEW }.forEach {
+            assertThat(specReviewActionsVisible(CardDetailState.Loaded(SpecReviewFixtures.aDetail(it)))).isFalse()
+        }
+        assertThat(specReviewActionsVisible(CardDetailState.Loading)).isFalse()
+        assertThat(specReviewActionsVisible(CardDetailState.NotFound)).isFalse()
+        assertThat(specReviewActionsVisible(CardDetailState.Disconnected)).isFalse()
+    }
+
+    @Test
+    fun `AC-2 approving sends card approve as the owner and shows the approval as sent without moving the column`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+        var stateWhileInFlight: SpecReviewState? = null
+        fx.commands.reply = {
+            stateWhileInFlight = fx.controller.state.value
+            MoveOutcome.Accepted
+        }
+
+        fx.controller.approve("a")
+
+        assertThat(fx.commands.calls).containsExactly(SentMove("a", Column.SPEC_REVIEW, Column.READY_FOR_DEV, null))
+        assertThat(stateWhileInFlight?.sending).isTrue()
+        val state = fx.controller.state.value
+        assertThat(state.sent).isTrue()
+        assertThat(state.sending).isFalse()
+        assertThat(state.notice).isNull()
+    }
+
+    @Test
+    fun `AC-3 asking for a change without a note sends nothing and keeps asking for the note`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+
+        fx.controller.requestChange("a", null)
+        assertThat(fx.controller.state.value.notePending).isTrue()
+        fx.controller.requestChange("a", "   ")
+        fx.controller.requestChange("a", "\n\t ")
+
+        assertThat(fx.commands.calls).isEmpty()
+        assertThat(fx.controller.state.value.notePending).isTrue()
+        assertThat(fx.controller.state.value.sending).isFalse()
+        assertThat(fx.controller.state.value.sent).isFalse()
+    }
+
+    @Test
+    fun `AC-3 asking for a change with a note sends card request-change with the trimmed note`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+
+        fx.controller.requestChange("a", "  cover offline  ")
+
+        assertThat(fx.commands.calls)
+            .containsExactly(SentMove("a", Column.SPEC_REVIEW, Column.READY_FOR_REFINEMENT, "cover offline"))
+        assertThat(fx.controller.state.value.notePending).isFalse()
+        assertThat(fx.controller.state.value.sent).isTrue()
+    }
+
+    @Test
+    fun `AC-3 cancelling the note closes the field and sends nothing`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+        fx.controller.requestChange("a", null)
+
+        fx.controller.cancel()
+
+        assertThat(fx.controller.state.value).isEqualTo(SpecReviewState())
+        assertThat(fx.commands.calls).isEmpty()
+    }
+
+    @Test
+    fun `AC-4 a refused approval shows the daemon reason, frees the actions and is dismissable`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+        fx.commands.reply = { MoveOutcome.Refused("card is not in Spec Review") }
+
+        fx.controller.approve("a")
+
+        val state = fx.controller.state.value
+        assertThat(state.notice).isEqualTo(MoveNotice(NoticeKind.REFUSED, "Não movido: card is not in Spec Review"))
+        assertThat(state.sending).isFalse()
+        assertThat(state.sent).isFalse()
+
+        fx.controller.dismissNotice()
+        assertThat(fx.controller.state.value.notice).isNull()
+    }
+
+    @Test
+    fun `AC-4 an unavailable daemon or a missing proof says not sent with the cause and frees the actions`() = runBlocking {
+        val cases = mapOf(
+            NotSentCause.DAEMON_UNAVAILABLE to "Movimento não enviado: o daemon está indisponível.",
+            NotSentCause.NO_OWNER_PROOF to "Movimento não enviado: prova do dono não encontrada.",
+        )
+        cases.forEach { (cause, text) ->
+            val fx = SpecReviewFixtures.controller()
+            fx.commands.reply = { MoveOutcome.NotSent(cause) }
+
+            fx.controller.requestChange("a", "cover offline")
+
+            val state = fx.controller.state.value
+            assertThat(state.notice).isEqualTo(MoveNotice(NoticeKind.NOT_SENT, text))
+            assertThat(state.sending).isFalse()
+            assertThat(state.sent).isFalse()
+        }
+    }
+
+    @Test
+    fun `AC-4 after a refusal the owner can act again and the next accepted command clears the notice`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+        fx.commands.reply = { MoveOutcome.Refused("busy") }
+        fx.controller.approve("a")
+        fx.commands.reply = { MoveOutcome.Accepted }
+
+        fx.controller.approve("a")
+
+        assertThat(fx.commands.calls).hasSize(2)
+        assertThat(fx.controller.state.value.notice).isNull()
+        assertThat(fx.controller.state.value.sent).isTrue()
+    }
+
+    @Test
+    fun `AC-5 a second click while a command is in flight sends nothing new`() = runBlocking {
+        val fx = SpecReviewFixtures.controller()
+        fx.commands.reply = {
+            runBlocking {
+                fx.controller.approve("a")
+                fx.controller.requestChange("a", "cover offline")
+            }
+            MoveOutcome.Accepted
+        }
+
+        fx.controller.approve("a")
+
+        assertThat(fx.commands.calls).containsExactly(SentMove("a", Column.SPEC_REVIEW, Column.READY_FOR_DEV, null))
+    }
+}
+
+object SpecReviewFixtures {
+    class Controller(val commands: FakeOwnerCommands, val controller: SpecReviewController)
+
+    fun controller(): Controller {
+        val commands = FakeOwnerCommands()
+        return Controller(commands, SpecReviewController(commands, Dispatchers.Unconfined))
+    }
+
+    fun aDetail(column: Column, events: List<TimelineEvent> = emptyList()) = CardDetail(
+        id = "a",
+        title = "A card",
+        column = column.name,
+        spec = SpecView("valid", "Do the thing"),
+        events = events,
+        eventsTruncated = false,
+        runs = emptyList(),
+        total = CostTotal(CostStatus.KNOWN, BigDecimal.ZERO),
+    )
 }
 
 data class SentMove(val cardId: String, val from: Column, val to: Column, val note: String?)
@@ -444,6 +749,30 @@ class FakeDaemon(socket: Path, private val reply: (String) -> String) {
                 }
             } catch (e: IOException) {
                 // closed by the test
+            }
+        }
+    }
+
+    fun close() = server.close()
+}
+
+/** Accepts one connection, reads the request and never answers; [hungUp] opens when the client closes its side. */
+class SilentDaemon(socket: Path) {
+    val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val hungUp = CountDownLatch(1)
+    private val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX).also { it.bind(UnixDomainSocketAddress.of(socket)) }
+
+    init {
+        Thread.ofPlatform().daemon().start {
+            try {
+                server.accept().use { client ->
+                    val reader = Channels.newInputStream(client).bufferedReader()
+                    reader.readLine()?.let { requests.add(it) }
+                    if (reader.read() == -1) hungUp.countDown()
+                }
+            } catch (e: IOException) {
+                // a reset by the client is also a hang-up
+                hungUp.countDown()
             }
         }
     }
