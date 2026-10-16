@@ -19,6 +19,8 @@ import sfv2.core.ProjectPolicies
 import sfv2.ports.ChecksState
 import sfv2.ports.FailedCheck
 import sfv2.ports.FakeForge
+import sfv2.ports.Forge
+import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.store.CardEventStore
@@ -368,6 +370,124 @@ class AutonomousDeliveryTest {
 
         assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
         assertThat(forge.merges.map { it.head }).containsExactly(pr.head)
+    }
+
+    /** The fake forge, but the merged lookup reports [mergedBy], and a found open PR may get merged outside. */
+    private inner class OutsideForge(
+        private val mergedBy: String?,
+        private val mergeOutsideAfterFind: Boolean = false,
+    ) : Forge by forge {
+        override fun findMergedPullRequest(branch: String): MergedPullRequest? =
+            forge.findMergedPullRequest(branch)?.copy(mergedBy = mergedBy)
+
+        override fun findOpenPullRequest(branch: String): PullRequestRef? =
+            forge.findOpenPullRequest(branch)?.also { if (mergeOutsideAfterFind) forge.mergedOutside(it) }
+    }
+
+    private val logs = mutableListOf<Pair<String, Map<String, String>>>()
+
+    private fun deliveryOn(other: Forge) = AutonomousDelivery(
+        store, recorder, { other }, { policies }, { pauses++ }, 3, clock, DaemonLog { event, fields -> logs += event to fields },
+    )
+
+    private fun assertDoneOutside(outcome: DeliveryOutcome, cardId: String, pr: PullRequestRef) {
+        assertThat(outcome).isEqualTo(DeliveryOutcome.Done)
+        assertThat(forge.merges).isEmpty()
+        assertThat(pauses).isZero()
+        assertThat(column(cardId)).isEqualTo(Column.DONE)
+        val event = merged(cardId).single()
+        assertThat(event.payload)
+            .containsEntry("pr", pr.number.toString())
+            .containsEntry("merge_commit", "merge-${pr.number}")
+            .containsEntry("head", pr.head)
+            .containsEntry("origin", "external")
+        assertThat(lastMove(cardId).payload)
+            .containsEntry("to", "DONE")
+            .containsEntry("merge_commit", "merge-${pr.number}")
+            .containsEntry("origin", "external")
+            .containsEntry("reason", "merged_outside_factory")
+        assertThat(logs).anySatisfy {
+            assertThat(it.first).isEqualTo("delivery_done")
+            assertThat(it.second).containsEntry("origin", "external")
+        }
+    }
+
+    @Test
+    fun `AC-1 AC-2 a PR merged outside closes the card without a merge or the main CI and records the external merge`() {
+        val pr = approvedCard("c1")
+        forge.mergedOutside(pr)
+
+        val outcome = deliveryOn(OutsideForge(mergedBy = null)).deliver("c1")
+
+        assertDoneOutside(outcome, "c1", pr)
+        assertThat(merged("c1").single().payload).doesNotContainKey("merged_by")
+    }
+
+    @Test
+    fun `AC-3 a PR merged outside between the lookup and the merge ends like one found merged`() {
+        val pr = approvedCard("c1")
+
+        val outcome = deliveryOn(OutsideForge(mergedBy = null, mergeOutsideAfterFind = true)).deliver("c1")
+
+        assertDoneOutside(outcome, "c1", pr)
+    }
+
+    @Test
+    fun `AC-4 a merge made by the factory is not marked external`() {
+        val pr = approvedCard("c1")
+        greenOn(pr)
+
+        assertThat(delivery().deliver("c1")).isEqualTo(DeliveryOutcome.Done)
+
+        assertThat(merged("c1").single().payload).doesNotContainKey("origin")
+        assertThat(lastMove("c1").payload).doesNotContainKey("origin")
+    }
+
+    @Test
+    fun `AC-5 a PR closed without merge goes back to the owner as pr_not_open with no external merge`() {
+        val pr = approvedCard("c1")
+        forge.closeOutside(pr)
+
+        returned(deliveryOn(OutsideForge(mergedBy = null)).deliver("c1"), "c1", "pr_not_open")
+
+        assertThat(merged("c1")).isEmpty()
+    }
+
+    @Test
+    fun `AC-6 a forge failure on the merged lookup goes back to the owner as forge_failed`() {
+        val pr = approvedCard("c1")
+        forge.closeOutside(pr)
+        forge.failNext("findMergedPullRequest")
+
+        returned(delivery().deliver("c1"), "c1", "forge_failed")
+
+        assertThat(merged("c1")).isEmpty()
+    }
+
+    @Test
+    fun `AC-7 a PR merged outside with another head is not delivered and keeps the external merge for the owner`() {
+        val pr = approvedCard("c1")
+        forge.pushHead(pr, "sha-pushed-later")
+        forge.mergedOutside(pr)
+
+        val outcome = deliveryOn(OutsideForge(mergedBy = null)).deliver("c1")
+
+        returned(outcome, "c1", "merged_head_differs", pr.head, "sha-pushed-later")
+        assertThat(store.events("c1").none { it.type == EventType.CARD_MOVED && it.payload["to"] == "DONE" }).isTrue()
+        val event = merged("c1").single()
+        assertThat(event.payload).containsEntry("origin", "external").containsEntry("head", "sha-pushed-later")
+    }
+
+    @Test
+    fun `AC-8 the external merge records who merged it in the event and never in the log`() {
+        val pr = approvedCard("c1")
+        forge.mergedOutside(pr)
+
+        val outcome = deliveryOn(OutsideForge(mergedBy = "octo-cat")).deliver("c1")
+
+        assertDoneOutside(outcome, "c1", pr)
+        assertThat(merged("c1").single().payload).containsEntry("merged_by", "octo-cat")
+        assertThat(logs.toString()).doesNotContain("octo-cat")
     }
 
     @Test

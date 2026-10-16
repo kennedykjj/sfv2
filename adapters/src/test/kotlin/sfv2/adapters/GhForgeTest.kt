@@ -13,6 +13,7 @@ import sfv2.ports.FakeForge
 import sfv2.ports.Forge
 import sfv2.ports.ForgeException
 import sfv2.ports.MergeResult
+import sfv2.ports.MergedPullRequest
 import sfv2.ports.PullRequestRef
 import sfv2.ports.PullRequestRequest
 import sfv2.ports.PullRequestState
@@ -183,6 +184,47 @@ class GhForgeTest {
         assertThat(open.message).contains(GhForgeFixtures.BRANCH).doesNotContain("ghp_", "issue-body-text")
         assertThat(Files.list(h.bodies).use { it.count() }).isZero()
         assertThat(h.callsTo("pr merge")).isEmpty()
+    }
+
+    private fun mergedJson(login: String? = "octocat", oid: String? = GhForgeFixtures.MERGE_OID) =
+        """[{"number":7,"mergeCommit":${if (oid == null) "{}" else """{"oid":"$oid"}"""},""" +
+            """"headRefOid":"${GhForgeFixtures.HEAD}","mergedBy":${if (login == null) "null" else """{"login":"$login"}"""}}]"""
+
+    @Test
+    fun `AC-9 finds the merged PR of a branch with number, merge commit, head and mergedBy`() {
+        val h = harness()
+        h.on("pr-list", mergedJson())
+
+        val merged = h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)
+
+        assertThat(merged).isEqualTo(
+            MergedPullRequest(7, GhForgeFixtures.MERGE_OID, GhForgeFixtures.HEAD, "octocat"),
+        )
+        assertThat(h.callsTo("pr list").single())
+            .contains("--repo ${GhForgeFixtures.REPO}", "--head ${GhForgeFixtures.BRANCH}", "--state merged")
+    }
+
+    @Test
+    fun `AC-9 no merged PR is null and a login out of format is omitted`() {
+        val h = harness()
+        h.on("pr-list", "[]")
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)).isNull()
+
+        h.on("pr-list", mergedJson(login = "bad login;rm"))
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)?.mergedBy).isNull()
+        assertThat(h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH)?.number).isEqualTo(7)
+    }
+
+    @Test
+    fun `AC-9 refuses an invalid branch or repo without calling gh and fails on a missing merge commit`() {
+        val h = harness()
+        h.on("pr-list", mergedJson())
+        assertThrows<ForgeException> { h.forge().findMergedPullRequest("-evil") }
+        assertThrows<ForgeException> { h.forge(repo = "no-slash").findMergedPullRequest(GhForgeFixtures.BRANCH) }
+        assertThat(h.calls()).isEmpty()
+
+        h.on("pr-list", mergedJson(oid = null))
+        assertThrows<ForgeException> { h.forge().findMergedPullRequest(GhForgeFixtures.BRANCH) }
     }
 
     @Test

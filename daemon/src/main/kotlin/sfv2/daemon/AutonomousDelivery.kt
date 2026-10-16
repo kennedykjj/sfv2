@@ -96,7 +96,7 @@ class AutonomousDelivery(
         var pr: PullRequestRef? = null
         try {
             pr = forge.findOpenPullRequest(branch)
-                ?: return stop(returnToOwner(cardId, card, "pr_not_open", emptyMap()))
+                ?: return notOpen(forge, cardId, card, branch, approvedHead)
             return when (val result = forge.merge(pr, approvedHead)) {
                 is MergeResult.Merged -> {
                     record(cardId, card, EventType.PR_MERGED, mapOf("pr" to pr.number.toString(), "merge_commit" to result.mergeCommit, "head" to approvedHead))
@@ -105,12 +105,36 @@ class AutonomousDelivery(
                 is MergeResult.HeadMismatch ->
                     stop(returnToOwner(cardId, card, "head_mismatch expected=$approvedHead actual=${result.actualHead}", emptyMap()))
                 MergeResult.Conflict -> stop(returnToOwner(cardId, card, "merge_conflict", emptyMap()))
-                is MergeResult.NotOpen -> stop(returnToOwner(cardId, card, "pr_not_open", emptyMap()))
+                is MergeResult.NotOpen -> notOpen(forge, cardId, card, branch, approvedHead)
             }
         } catch (e: ForgeException) {
             val merged = pr?.let { stateOf(forge, it) } == PullRequestState.Merged
             return stop(returnToOwner(cardId, card, if (merged) "merge_unrecorded" else "forge_failed", emptyMap()))
         }
+    }
+
+    /** No open PR: one merged outside the factory closes the card (same head) or goes to the owner (other head). */
+    private fun notOpen(forge: Forge, cardId: String, card: Card, branch: String, approvedHead: String): Merge {
+        val mergedPr = forge.findMergedPullRequest(branch)
+            ?: return stop(returnToOwner(cardId, card, "pr_not_open", emptyMap()))
+        val payload = mapOf(
+            "pr" to mergedPr.number.toString(),
+            "merge_commit" to mergedPr.mergeCommit,
+            "head" to mergedPr.head,
+            "origin" to EXTERNAL,
+        ) + (mergedPr.mergedBy?.let { mapOf("merged_by" to it) } ?: emptyMap())
+        record(cardId, card, EventType.PR_MERGED, payload)
+        if (mergedPr.head != approvedHead) {
+            return stop(returnToOwner(cardId, card, "merged_head_differs expected=$approvedHead actual=${mergedPr.head}", emptyMap()))
+        }
+        move(
+            cardId,
+            card,
+            Column.DONE,
+            mapOf("merge_commit" to mergedPr.mergeCommit, "origin" to EXTERNAL, "reason" to "merged_outside_factory"),
+        )
+        log.log("delivery_done", mapOf("card" to cardId, "origin" to EXTERNAL))
+        return stop(DeliveryOutcome.Done)
     }
 
     private fun stateOf(forge: Forge, pr: PullRequestRef): PullRequestState? =
@@ -218,6 +242,7 @@ class AutonomousDelivery(
     private companion object {
         const val VALIDATE = "validate"
         const val DELIVER = "deliver"
+        const val EXTERNAL = "external"
         const val MAX_REASON_BYTES = 2048
     }
 }
@@ -229,6 +254,7 @@ class AutonomousDelivery(
 class AutonomousDeliveryTrigger(
     private val delivery: AutonomousDelivery,
     private val log: DaemonLog,
+    private val handoff: PullRequestHandoff? = null,
 ) : DeliveryTrigger, AutoCloseable {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "autonomous-delivery").apply { isDaemon = true }
@@ -241,6 +267,7 @@ class AutonomousDeliveryTrigger(
             executor.execute {
                 try {
                     delivery.deliver(cardId)
+                    handoff?.reconcile(cardId)
                 } catch (e: RuntimeException) {
                     log.log("delivery_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
                 } finally {
