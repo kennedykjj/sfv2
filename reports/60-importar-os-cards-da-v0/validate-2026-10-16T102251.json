@@ -1,0 +1,1 @@
+{"issue": 60, "slug": "importar-os-cards-da-v0", "pipeline": "validate", "started_at": "2026-10-16T13:20:00Z", "finished_at": "2026-10-16T13:22:42Z", "outcome": "ok", "agents": [], "rounds": {"gates": 0, "review": 0, "ci": 0}, "gates_failed": [], "flaky": [], "gates_reused": ["green daemon sfv2.daemon.CardImportTest*"], "manual_edit": false}
