@@ -1,0 +1,7 @@
+{"issue": 28, "slug": "mcp-ferramentas-de-leitura", "pipeline": "validate", "started_at": "2026-10-16T04:25:00Z", "finished_at": "2026-10-16T04:50:00Z", "outcome": "ok",
+ "agents": [{"role": "engineer", "tokens": 47784, "duration_s": 122}, {"role": "engineer", "tokens": 30259, "duration_s": 59}],
+ "rounds": {"review": 1, "ci": 1},
+ "gates_failed": ["CI build: SocketServerTest AC-4 grace (descritores abertos)"],
+ "flaky": [],
+ "gates_reused": ["green daemon sfv2.daemon.McpReadToolsTest", "green store sfv2.store.ModuleTest"],
+ "manual_edit": false}
