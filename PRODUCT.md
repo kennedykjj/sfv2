@@ -36,7 +36,7 @@ Um daemon por máquina, sempre ligado, é o único escritor do estado. App, CLI 
 
 ## Capabilities and Constraints
 
-- Colunas, em ordem: Inbox, Ready for Refinement, Refinement, Spec Review, Ready for Dev, Coding, Validation, Staged, Ready for Prod, Done. Decisões do dono: Spec Review e Ready for Prod.
+- Colunas, em ordem: Inbox, Ready for Refinement, Refinement, Spec Review, Ready for Dev, Coding, Validation, Staged, Ready for Prod, Done. Decisões do dono: Spec Review (aprovar a spec) e Staged (liberar para Ready for Prod); um card em Ready for Prod já foi liberado e segue em entrega.
 - Modo de entrega por projeto: autônomo (a fábrica mergeia) ou entrega no PR (para em revisão humana).
 - Importar e fechar, sem sincronização contínua com o tracker externo.
 - Texto externo (issue, ticket, comentário) entra por uma porta só, marcado como não confiável.

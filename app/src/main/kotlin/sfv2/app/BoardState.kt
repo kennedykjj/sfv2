@@ -5,8 +5,8 @@ import sfv2.core.EventType
 
 data class BoardCard(val id: String, val title: String, val column: Column)
 
-/** Columns whose cards wait for a decision of the owner (PRODUCT.md). */
-val OWNER_DECISION_COLUMNS: Set<Column> = setOf(Column.SPEC_REVIEW, Column.READY_FOR_PROD)
+/** Columns whose cards wait for a decision of the owner: the owner-only moves in `MoveRules` start here (PRODUCT.md). */
+val OWNER_DECISION_COLUMNS: Set<Column> = setOf(Column.SPEC_REVIEW, Column.STAGED)
 
 fun isWaitingForOwner(column: Column): Boolean = column in OWNER_DECISION_COLUMNS
 
