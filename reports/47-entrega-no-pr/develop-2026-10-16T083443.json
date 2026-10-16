@@ -1,0 +1,12 @@
+{
+  "issue": 47,
+  "slug": "entrega-no-pr",
+  "pipeline": "develop",
+  "outcome": "done",
+  "agents": ["qa-engineer", "engineer"],
+  "rounds": 0,
+  "failed_gates": [],
+  "flaky": [],
+  "gates_reused": [],
+  "amendments": []
+}
