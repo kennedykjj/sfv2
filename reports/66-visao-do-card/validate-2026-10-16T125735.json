@@ -1,0 +1,1 @@
+{"issue": 66, "slug": "visao-do-card", "pipeline": "validate", "started_at": "2026-10-16T15:50:00Z", "finished_at": "2026-10-16T16:05:00Z", "outcome": "ok", "agents": [], "rounds": {"merge-main": 2}, "gates_failed": ["build (redeclaração de sans/mono após merge da main, corrigida)"], "flaky": [], "gates_reused": [], "manual_edit": false}
