@@ -3,6 +3,7 @@ package sfv2.app
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -12,8 +13,12 @@ import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
 import java.nio.file.Path
 import java.time.Clock
+import java.time.LocalDate
+import java.time.ZoneId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 private const val SOCKET_RELATIVE_PATH = "sfv2/daemon.sock"
 
@@ -22,6 +27,7 @@ fun main() {
     val monitor = runtimeDir?.let {
         ConnectionMonitor(SocketDaemonProbe(Path.of(it, SOCKET_RELATIVE_PATH)), SystemctlDaemonStarter(), Clock.systemUTC())
     }
+    val feed = runtimeDir?.let { FeedRuntime(Path.of(it, SOCKET_RELATIVE_PATH), Clock.systemUTC(), ZoneId.systemDefault()) }
     val noRuntimeDir: StateFlow<ConnectionState> =
         MutableStateFlow(ConnectionState.Disconnected(DisconnectReason.NO_RUNTIME_DIR))
 
@@ -34,7 +40,16 @@ fun main() {
             state = rememberWindowState(size = DpSize(640.dp, 400.dp), position = WindowPosition.PlatformDefault),
         ) {
             window.minimumSize = Dimension(360, 240)
-            ConnectionScreen(state)
+            if (state == ConnectionState.Connected && feed != null) {
+                val feedState by feed.client.state.collectAsState()
+                LaunchedEffect(feed) { feed.run() }
+                val scope = rememberCoroutineScope()
+                FeedScreen(feedState, LocalDate.now(feed.clock.withZone(feed.zone))) { day ->
+                    scope.launch(Dispatchers.IO) { feed.client.selectDay(day) }
+                }
+            } else {
+                ConnectionScreen(state)
+            }
         }
     }
 }
