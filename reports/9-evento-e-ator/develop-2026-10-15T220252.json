@@ -1,0 +1,16 @@
+{
+  "issue": 9,
+  "slug": "evento-e-ator",
+  "pipeline": "develop",
+  "started_at": "2026-10-16T00:50:00Z",
+  "finished_at": "2026-10-16T01:20:00Z",
+  "outcome": "ok",
+  "agents": [
+    {"role": "qa-engineer", "tokens": 20151, "duration_s": 17}
+  ],
+  "rounds": {"plan": 1, "acceptance": 1, "implementation": 1},
+  "gates_failed": [],
+  "flaky": [],
+  "gates_reused": [],
+  "manual_edit": false
+}
