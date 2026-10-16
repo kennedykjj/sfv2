@@ -26,6 +26,7 @@ class McpRequestTools(
     private val registry: ProjectRegistry,
     private val clock: Clock,
     private val log: DaemonLog = StderrDaemonLog,
+    private val docsScratchRoot: Path? = null,
 ) {
 
     fun completionReport(cardId: String, summary: String): ReportedView {
@@ -39,6 +40,7 @@ class McpRequestTools(
     }
 
     fun fileWriteRequest(cardId: String, path: String, content: String): WriteView {
+        if (session.role == DOCS_DRAFT_ROLE) return docsDraftWrite(cardId, path, content)
         val card = requireOwnCard(FILE_WRITE, cardId)
         val project = project()
         val bytes = content.toByteArray(Charsets.UTF_8)
@@ -57,6 +59,23 @@ class McpRequestTools(
         writeInside(root, relative, bytes, cardId, FILE_WRITE)
         recorder.record(cardId, card, event)
         log.log("mcp_tool", mapOf("tool" to FILE_WRITE, "card" to cardId, "path" to relative))
+        return WriteView(relative, bytes.size)
+    }
+
+    /** A docs-draft session has no card: it writes only the three fixed draft files of its own scratch directory. */
+    private fun docsDraftWrite(draftId: String, path: String, content: String): WriteView {
+        val root = docsScratchRoot?.resolve(session.cardId)
+        if (draftId != session.cardId || !DRAFT_ID.matches(draftId) || root == null || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
+            throw refused(FILE_WRITE, draftId, "draft session $draftId has no scratch directory")
+        }
+        val relative = path.split("/").filter { it.isNotEmpty() && it != "." }.joinToString("/")
+        if (relative !in DRAFT_PATHS) throw refused(FILE_WRITE, draftId, "path is not writable for draft $draftId")
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        if (bytes.size > ProjectFileSource.MAX_BYTES) {
+            throw refused(FILE_WRITE, draftId, "content above ${ProjectFileSource.MAX_BYTES} bytes refused for draft $draftId")
+        }
+        writeInside(root, relative, bytes, draftId, FILE_WRITE)
+        log.log("mcp_tool", mapOf("tool" to FILE_WRITE, "draft" to draftId, "path" to relative))
         return WriteView(relative, bytes.size)
     }
 
@@ -202,6 +221,9 @@ class McpRequestTools(
 
     private companion object {
         val CARD_ID = Regex("[A-Za-z0-9-]{1,64}")
+        val DRAFT_ID = Regex("[A-Za-z0-9-]{1,64}")
+        val DRAFT_PATHS = ProjectDocsDraft.DOCS.map { "${ProjectDocsDraft.DRAFT_DIR}/$it" }.toSet()
+        const val DOCS_DRAFT_ROLE = ProjectDocsDraft.ROLE
         const val MAX_CONTENT_BYTES = 256 * 1024
         const val MAX_PATH_CHARS = 512
         const val GIT_DIR = ".git"

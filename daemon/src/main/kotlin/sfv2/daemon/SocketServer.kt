@@ -39,6 +39,7 @@ class SocketServer private constructor(
     private val costSummary: CostSummaryQuery?,
     private val tcp: TcpTransport?,
     private val pulse: FactoryPulse?,
+    private val docsDraft: ProjectDocsDraft?,
     private val onClose: () -> Unit,
 ) : AutoCloseable {
 
@@ -121,6 +122,7 @@ class SocketServer private constructor(
         is Request.Rejected -> Response.Error(request.message)
         is Request.ProjectAdd, Request.ProjectList ->
             projects?.handle(request) ?: Response.Error("project commands are not available")
+        is Request.ProjectDocsDraft -> docsDraft?.handle(request) ?: Response.Error("docs draft is not available")
         Request.SettingsGet, is Request.SettingsSave ->
             settings?.handle(request) ?: Response.Error("settings commands are not available")
         is Request.CardRebuild -> rebuild?.handle(request) ?: Response.Error("card rebuild is not available")
@@ -197,6 +199,7 @@ class SocketServer private constructor(
             costSummary: CostSummaryQuery? = null,
             tcp: TcpTransport? = null,
             pulse: FactoryPulse? = null,
+            docsDraft: ProjectDocsDraft? = null,
         ): SocketServer {
             prepareDirectory(path)
             val lock = acquireLock(path)
@@ -218,7 +221,7 @@ class SocketServer private constructor(
                 releaseLock(lock)
                 throw DaemonStartException("cannot bind socket at $path: ${e.javaClass.simpleName}")
             }
-            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, tcp, pulse, onClose).also { it.startAccepting() }
+            return SocketServer(path, channel, lock, log, pause, commands, projects, rebuild, importer, closure, milestones, settings, costSummary, tcp, pulse, docsDraft, onClose).also { it.startAccepting() }
         }
 
         private fun releaseLock(lock: FileLock) {

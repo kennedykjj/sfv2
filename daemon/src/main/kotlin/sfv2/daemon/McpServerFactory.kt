@@ -19,6 +19,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import java.nio.file.Path
 import java.time.Clock
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
@@ -57,6 +58,7 @@ class McpServerFactory(
     private val worktrees: WorktreeManager,
     private val clock: Clock,
     private val log: DaemonLog = StderrDaemonLog,
+    private val docsScratchRoot: Path? = null,
 ) {
 
     fun start(port: Int = 0): McpEndpoint {
@@ -125,7 +127,7 @@ class McpServerFactory(
                 }
             }
         }
-        val requests = McpRequestTools(session, store, recorder, worktrees, registry, clock, log)
+        val requests = McpRequestTools(session, store, recorder, worktrees, registry, clock, log, docsScratchRoot)
         server.addTool(
             COMPLETION_REPORT,
             "Reports that the agent finished its work on the card; the card does not move.",
