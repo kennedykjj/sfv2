@@ -1,0 +1,1 @@
+{"issue": 45, "pipeline": "develop", "outcome": "done", "rounds": 0, "failed_gates": [], "flaky": [], "gates_reused": [], "amendments": [], "agents": [{"name": "qa-engineer", "calls": 1}]}
