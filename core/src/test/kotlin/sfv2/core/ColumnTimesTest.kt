@@ -41,10 +41,10 @@ class ColumnTimesTest {
         val result = times(
             ColumnTimesFixtures.aCardThrough(Column.SPEC_REVIEW to 600L, Column.STAGED to 10L),
             ColumnTimesFixtures.aCardThrough(Column.SPEC_REVIEW to 1_200L, Column.STAGED to 11L),
-            ColumnTimesFixtures.aCardThrough(Column.SPEC_REVIEW to 90_000L),
+            ColumnTimesFixtures.aCardThrough(Column.SPEC_REVIEW to 80_000L),
         )
 
-        assertThat(result[Column.SPEC_REVIEW]).isEqualTo(ColumnTime(ColumnTimeKind.MEAN_WAIT, 30_600L, 3))
+        assertThat(result[Column.SPEC_REVIEW]).isEqualTo(ColumnTime(ColumnTimeKind.MEAN_WAIT, 27_266L, 3))
         assertThat(result[Column.STAGED]).isEqualTo(ColumnTime(ColumnTimeKind.MEAN_WAIT, 10L, 2))
     }
 
