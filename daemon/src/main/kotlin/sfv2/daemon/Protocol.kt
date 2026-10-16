@@ -18,6 +18,7 @@ import sfv2.core.AssistantState
 import sfv2.core.Column
 import sfv2.core.ColumnTime
 import sfv2.core.FactorySettings
+import sfv2.core.QueueForecast
 import sfv2.store.StoredEvent
 
 /** A parsed client message. */
@@ -177,6 +178,7 @@ sealed interface Response {
         val phrase: String,
         val poolCapacity: Int,
         val active: List<String>,
+        val forecast: QueueForecast,
     ) : Response
 
     data class CostSummaryResult(
@@ -389,6 +391,21 @@ private fun parseActor(obj: JsonObject): Actor? {
 private fun isJsonLiteral(text: String): Boolean =
     text == "null" || text == "true" || text == "false" || text.toDoubleOrNull() != null
 
+private fun forecastJson(forecast: QueueForecast): JsonObject = buildJsonObject {
+    when (forecast) {
+        QueueForecast.Empty -> put("kind", "EMPTY")
+        is QueueForecast.FinishesAt -> {
+            put("kind", "FINISHES_AT")
+            put("at", forecast.at.toString())
+            put("ownerSteps", forecast.ownerSteps)
+        }
+        is QueueForecast.Unknown -> {
+            put("kind", "UNKNOWN")
+            put("gap", forecast.gap.name)
+        }
+    }
+}
+
 private fun cardJson(card: CardView): JsonObject = buildJsonObject {
     put("id", card.id)
     put("title", card.title)
@@ -573,6 +590,7 @@ fun render(response: Response): String = when (response) {
                 put("phrase", response.phrase)
                 put("poolCapacity", response.poolCapacity)
                 put("active", JsonArray(response.active.map { JsonPrimitive(it) }))
+                put("forecast", forecastJson(response.forecast))
             },
         )
     }.toString()

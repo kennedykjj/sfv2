@@ -1,6 +1,7 @@
 package sfv2.daemon
 
 import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalTime
 import sfv2.core.AssistantCard
@@ -8,14 +9,18 @@ import sfv2.core.AssistantState
 import sfv2.core.AssistantStateRules
 import sfv2.core.AssistantStates
 import sfv2.core.Column
+import sfv2.core.ColumnTimes
 import sfv2.core.Event
 import sfv2.core.EventType
+import sfv2.core.QueueForecasts
 import sfv2.store.CardEventStore
 import sfv2.store.StoredCard
 
 private val ISSUE_NUMBER = Regex("^[0-9]{1,10}$")
 
 private const val LABEL_HEX_LENGTH = 8
+
+private val FORECAST_WINDOW = Duration.ofDays(7)
 
 /**
  * Read-only `factory.pulse`: the assistant state, its phrase, the pool capacity and the cards with an active run.
@@ -49,7 +54,10 @@ class FactoryPulse(
             working = active,
             recentFailures = stored.sumOf { card -> events.getValue(card.id).count { isRecentFailure(it, now) } },
         )
-        return Response.PulseResult(state, speaker.say(state, facts), poolCapacity(), active)
+        val capacity = poolCapacity()
+        val medians = ColumnTimes.of(events.values.toList(), now.minus(FORECAST_WINDOW), now.plusSeconds(1))
+        val forecast = QueueForecasts.of(stored.map { it.card.column }, medians, capacity, now)
+        return Response.PulseResult(state, speaker.say(state, facts), capacity, active, forecast)
     }
 
     private fun derivesBlocked(card: StoredCard, events: List<Event>, now: Instant, blockOnly: AssistantStateRules): Boolean =
