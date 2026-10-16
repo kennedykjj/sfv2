@@ -1,0 +1,13 @@
+{
+  "card": 101,
+  "stage": "develop",
+  "outcome": "blocked",
+  "weight": "heavy",
+  "agents": [],
+  "rounds": {},
+  "failed_gates": ["qa-amend", "acceptance-intact"],
+  "gates_reused": [],
+  "flaky": [],
+  "amendments": [],
+  "note": "Resumed card; owner approval (shipfloor accept or qa-amend-ok) for removal of RedStubs.kt still missing; no agents called."
+}
