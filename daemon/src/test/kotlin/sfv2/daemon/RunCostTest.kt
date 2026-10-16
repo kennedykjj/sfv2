@@ -21,6 +21,7 @@ import sfv2.core.EventType
 import sfv2.ports.SessionResult
 import sfv2.store.CardEventStore
 import sfv2.store.Database
+import sfv2.store.StoredCard
 
 object RunCostFixtures {
     val pricesYaml = """
@@ -469,5 +470,121 @@ class RunCostTest {
             assertThat(requireNotNull(stopped["field"])).`as`(yaml).startsWith("prices.yml")
             assertThat(log.everything()).doesNotContain("NOT-A-PRICE-9931").doesNotContain("7718").doesNotContain("5521")
         }
+    }
+
+    // --- per-card report (#61) ---
+
+    private fun at(minutes: Long, seconds: Long = 0): Instant = now.plusSeconds(minutes * 60 + seconds)
+
+    private fun created(t: Instant, title: String = "Report card") =
+        Event(EventId("rc-created-$t"), t, Actor.Owner, EventType.CARD_CREATED, mapOf("title" to title))
+
+    private fun moved(t: Instant, from: Column, to: Column) =
+        Event(EventId("rc-moved-$t"), t, Actor.Factory("scheduler"), EventType.CARD_MOVED, mapOf("from" to from.name, "to" to to.name))
+
+    private fun runCost(id: String, status: String, usd: String?) =
+        Event(
+            EventId("rc-cost-$id"),
+            now,
+            Actor.Factory("cost"),
+            EventType.RUN_COST_RECORDED,
+            buildMap {
+                put("run_id", id)
+                put("status", status)
+                if (usd != null) put("cost_usd", usd)
+                put("estimate", "true")
+            },
+        )
+
+    private fun storedCard(id: String, column: Column, title: String = "Report card") = StoredCard(id, Card.create(title, column))
+
+    private fun reportOf(column: Column, events: List<Event>, title: String = "Report card"): List<CardReportRow> =
+        CardReport.build(listOf(storedCard("r1", column, title))) { events }
+
+    private val doneJourney = listOf(
+        created(at(0)),
+        moved(at(1), Column.INBOX, Column.READY_FOR_REFINEMENT),
+        moved(at(11), Column.READY_FOR_REFINEMENT, Column.CODING),
+        moved(at(21), Column.CODING, Column.VALIDATION),
+        moved(at(23), Column.VALIDATION, Column.CODING),
+        moved(at(33), Column.CODING, Column.DONE),
+    )
+
+    /** Cells of the data row of a one-card CSV, keyed by header name. Titles in these tests carry no comma. */
+    private fun csvRow(csv: String): Map<String, String> {
+        val lines = csv.trim().lines()
+        assertThat(lines).hasSize(2)
+        val header = lines[0].split(",")
+        val cells = lines[1].split(",")
+        assertThat(cells).hasSameSizeAs(header)
+        return header.zip(cells).toMap()
+    }
+
+    @Test
+    fun `AC-1 report gives seconds per stage between consecutive events, summing repeated visits, and skips cards outside Done`() {
+        val rows = CardReport.build(
+            listOf(storedCard("r1", Column.DONE), storedCard("r2", Column.CODING)),
+        ) { id -> if (id == "r1") doneJourney else listOf(created(at(0)), moved(at(5), Column.INBOX, Column.CODING)) }
+
+        assertThat(rows.map { it.cardId }).containsExactly("r1")
+        assertThat(rows.single().stageSeconds).containsExactlyInAnyOrderEntriesOf(
+            mapOf(
+                Column.INBOX to 60L,
+                Column.READY_FOR_REFINEMENT to 600L,
+                Column.CODING to 1200L,
+                Column.VALIDATION to 120L,
+            ),
+        )
+    }
+
+    @Test
+    fun `AC-2 report sums the cost of the runs and labels the CSV column as an estimate`() {
+        val events = doneJourney + runCost("a", "KNOWN", "1.50") + runCost("b", "KNOWN", "2.25")
+
+        val rows = reportOf(Column.DONE, events)
+
+        assertThat(rows.single().costUsd).isEqualByComparingTo(BigDecimal("3.75"))
+        assertThat(rows.single().costStatus).isEqualTo(CostStatus.KNOWN)
+        val csv = CardReport.toCsv(rows)
+        val row = csvRow(csv)
+        assertThat(BigDecimal(requireNotNull(row["cost_usd_estimate"]))).isEqualByComparingTo(BigDecimal("3.75"))
+        assertThat(row["cost_status"]).isEqualTo("KNOWN")
+        assertThat(row["card_id"]).isEqualTo("r1")
+        assertThat(row["inbox"]).isEqualTo("60")
+        assertThat(row["coding"]).isEqualTo("1200")
+    }
+
+    @Test
+    fun `AC-3 report never shows zero for an unknown or missing cost, and flags a partial one`() {
+        val unknown = reportOf(Column.DONE, doneJourney + runCost("a", "KNOWN", "1.00") + runCost("b", "UNKNOWN", null)).single()
+        val none = reportOf(Column.DONE, doneJourney).single()
+        val partial = reportOf(Column.DONE, doneJourney + runCost("a", "KNOWN", "1.00") + runCost("b", "PARTIAL", "0.50")).single()
+
+        assertThat(unknown.costStatus).isEqualTo(CostStatus.UNKNOWN)
+        assertThat(unknown.costUsd).isNull()
+        assertThat(none.costStatus).isEqualTo(CostStatus.NONE)
+        assertThat(none.costUsd).isNull()
+        assertThat(partial.costStatus).isEqualTo(CostStatus.PARTIAL)
+        assertThat(partial.costUsd).isEqualByComparingTo(BigDecimal("1.50"))
+
+        val unknownCsv = csvRow(CardReport.toCsv(listOf(unknown)))
+        assertThat(unknownCsv["cost_usd_estimate"]).isEmpty()
+        assertThat(unknownCsv["cost_status"]).isEqualTo("UNKNOWN")
+        assertThat(csvRow(CardReport.toCsv(listOf(none)))["cost_usd_estimate"]).isEmpty()
+        assertThat(csvRow(CardReport.toCsv(listOf(partial)))["cost_status"]).isEqualTo("PARTIAL")
+    }
+
+    @Test
+    fun `AC-4 csv header has one snake_case column per stage and quotes, escapes and neutralizes titles`() {
+        val header = CardReport.toCsv(emptyList()).trim().lines().first()
+
+        assertThat(header).isEqualTo(
+            "card_id,title," + Column.entries.joinToString(",") { it.name.lowercase() } + ",cost_usd_estimate,cost_status",
+        )
+
+        val quoted = CardReport.toCsv(reportOf(Column.DONE, doneJourney, "say \"hi\"")).trim().lines()[1]
+        val formula = CardReport.toCsv(reportOf(Column.DONE, doneJourney, "=SUM(A1)")).trim().lines()[1]
+        assertThat(quoted).startsWith("r1,\"say \"\"hi\"\"\",")
+        assertThat(formula).startsWith("r1,\"'=SUM(A1)\",")
     }
 }
