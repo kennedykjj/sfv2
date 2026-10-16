@@ -67,8 +67,14 @@ class CardImportTest {
         stream = EventStream(store)
         recorder = EventRecorder(store, stream)
         registry = ProjectRegistry(object : ProjectConfigSource {
-            override fun read(repo: Path): String =
+            override fun read(repo: Path): String {
+                val withExtra =
                 "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n" + extraYaml[repo.fileName.toString()].orEmpty()
+                val withDor =
+                "project:\n  name: ${repo.fileName}\nlayers:\n  - name: daemon\n    path: daemon/\n" +
+                    (if (repo.fileName.toString() == "strict") "dor:\n  - title\n  - body\n  - acceptance_criteria\n  - label\n" else "")
+                return if (repo.fileName.toString() == "strict") withDor else withExtra
+            }
         })
         alpha = register("alpha")
         beta = register("beta")
@@ -376,8 +382,8 @@ class CardImportTest {
 
     private class BoardOutcome(val cards: List<CardView>, val ignored: List<Pair<String, String>>)
 
-    private fun importBoard(vararg rows: Pair<String, String>): BoardOutcome {
-        val response = runCatching { importer()(boardLine(rows.toList())) }.getOrNull()
+    private fun importBoard(vararg rows: Pair<String, String>, project: String = "alpha"): BoardOutcome {
+        val response = runCatching { importer()(boardLine(rows.toList(), project)) }.getOrNull()
         assertThat(response?.javaClass?.simpleName).describedAs("board import response").isEqualTo("BoardImportResult")
         val result = requireNotNull(response)
         val cards = result.javaClass.methods.single { it.name == "getCards" }.invoke(result) as List<*>
@@ -391,6 +397,78 @@ class CardImportTest {
                 id to reason
             },
         )
+    }
+
+    private val completeBody = "Do the thing\n\nCritérios de Aceitação\n- it works"
+
+    private fun dorItem(id: String, body: String = completeBody, labels: List<String> = listOf("feature"), title: String = "Ready title $id"): TrackerItem =
+        TrackerItem.of(id, ExternalText(title), ExternalText(body), labels.map { ExternalText(it) }, "https://github.com/acme/strict/issues/$id", TrackerItemState.OPEN)
+
+    private fun blocks(externalId: String): List<Event> =
+        store.events(withRef(externalId).single()).filter { it.type == EventType.CARD_BLOCKED }
+
+    @Test
+    fun `AC-1 of #86 an incomplete ticket enters Inbox blocked by the DoR gate listing only the missing field names`() {
+        register("strict")
+        tracker.seed(dorItem("1", body = "secret text with no criteria", labels = emptyList()))
+        tracker.seed(dorItem("2", body = "secret text with no criteria", labels = emptyList()))
+        tracker.seed(dorItem("3", body = "secret text with no criteria", labels = emptyList()))
+
+        importById("1", project = "strict")
+        importQuery("Ready title 2", project = "strict")
+        importBoard("3" to "Inbox", project = "strict")
+
+        listOf("1", "2", "3").forEach { id ->
+            assertThat(columnOf(id)).describedAs(id).isEqualTo(Column.INBOX)
+            val block = blocks(id).single()
+            assertThat(block.actor).isEqualTo(Actor.Factory("dor-gate"))
+            val reason = block.payload["reason"].orEmpty()
+            assertThat(reason).startsWith("dor_missing:").contains("acceptance_criteria").contains("label")
+            assertThat(reason).doesNotContain("title").doesNotContain("body").doesNotContain("secret")
+        }
+    }
+
+    @Test
+    fun `AC-2 of #86 a ticket with every required field enters Inbox without a block`() {
+        register("strict")
+        tracker.seed(dorItem("1"))
+
+        importById("1", project = "strict")
+
+        assertThat(columnOf("1")).isEqualTo(Column.INBOX)
+        assertThat(blocks("1")).isEmpty()
+    }
+
+    @Test
+    fun `AC-4 of #86 fixing the ticket and reimporting keeps the card blocked until the owner unblocks`() {
+        register("strict")
+        tracker.seed(dorItem("1", labels = emptyList()))
+        importById("1", project = "strict")
+        tracker.seed(dorItem("1"))
+
+        importById("1", project = "strict")
+
+        val events = store.events(withRef("1").single())
+        assertThat(events.filter { it.type == EventType.CARD_BLOCKED }).hasSize(1)
+        assertThat(events.map { it.type }).doesNotContain(EventType.OWNER_APPROVED, EventType.CARD_MOVED)
+        assertThat(events.last { it.type == EventType.CARD_BLOCKED }.payload["reason"]).contains("label")
+    }
+
+    @Test
+    fun `AC-5 of #86 a V0 board import into a column other than Inbox is not blocked by the DoR`() {
+        register("strict")
+        tracker.seed(dorItem("1", body = "x", labels = emptyList()))
+        tracker.seed(dorItem("2", body = "x", labels = emptyList()))
+        tracker.seed(dorItem("3", body = "x", labels = emptyList()).let {
+            TrackerItem.of(it.id, it.title, it.body, it.labels, it.url, TrackerItemState.CLOSED)
+        })
+
+        importBoard("1" to "Ready for Refinement", "2" to "Spec Review", "3" to "Done", project = "strict")
+
+        assertThat(columnOf("1")).isEqualTo(Column.READY_FOR_REFINEMENT)
+        assertThat(columnOf("2")).isEqualTo(Column.SPEC_REVIEW)
+        assertThat(columnOf("3")).isEqualTo(Column.DONE)
+        listOf("1", "2", "3").forEach { assertThat(blocks(it)).describedAs(it).isEmpty() }
     }
 
     private fun columnOf(externalId: String): Column? =
