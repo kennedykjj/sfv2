@@ -17,7 +17,7 @@ import sfv2.ports.PullRequestState
 import sfv2.store.CardEventStore
 
 sealed interface HandoffOutcome {
-    /** The PR is open (or the approval was just recorded): the card waits in Ready for Prod. */
+    /** The PR is open: the card waits in Ready for Prod. */
     data object Waiting : HandoffOutcome
 
     /** Someone else merged the PR; the card moved to Done. */
@@ -34,8 +34,9 @@ sealed interface HandoffOutcome {
 }
 
 /**
- * Delivery in `PR_HANDOFF` mode: the factory never merges. The owner's approval parks the card in Ready for Prod and
- * the card closes only when the forge shows the PR merged by someone else.
+ * Delivery in `PR_HANDOFF` mode: the factory never merges. The owner's `card.move` to Ready for Prod, recorded with
+ * proof, parks the card there; this class only follows the PR and the card closes when the forge shows it merged by
+ * someone else. It exposes no way to record an owner event.
  */
 class PullRequestHandoff(
     private val store: CardEventStore,
@@ -45,19 +46,6 @@ class PullRequestHandoff(
     private val clock: Clock,
     private val log: DaemonLog,
 ) {
-    /**
-     * Moves the card from Staged to Ready for Prod as the owner. The caller has already verified the owner's approval;
-     * this never calls `Forge.merge`.
-     */
-    fun approve(cardId: String): HandoffOutcome {
-        val card = store.card(cardId)
-        if (card == null || card.column != Column.STAGED) return HandoffOutcome.Skipped
-        if (policies(cardId).deliveryMode != DeliveryMode.PR_HANDOFF) return HandoffOutcome.Skipped
-        move(cardId, card, Column.READY_FOR_PROD, Actor.Owner, emptyMap())
-        log.log("handoff_approved", mapOf("card" to cardId))
-        return HandoffOutcome.Waiting
-    }
-
     /** Follows the PR of a card waiting in Ready for Prod; forge state is data and never an instruction. */
     fun reconcile(cardId: String): HandoffOutcome {
         val card = store.card(cardId)
