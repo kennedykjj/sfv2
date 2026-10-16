@@ -30,7 +30,10 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
         val registry = ProjectRegistry(source)
         val projects = ProjectCommands(registry, ownerProof)
         val dataDir = resolveDatabasePath(env, socketPath).parent
+        val settingsStore = SettingsStore(dataDir.resolve("settings.json"), clock)
+        val settings = SettingsCommands(settingsStore, commands.recorder, store, ownerProof, env, clock)
         val refine = RefineRuntime.start(
+            settings = settingsStore,
             dataDir = dataDir,
             store = store,
             commands = commands,
@@ -66,6 +69,7 @@ fun launchDaemon(env: Map<String, String>, err: PrintStream): DaemonLaunch = try
                     ownerProof, clock, StderrDaemonLog,
                 ),
                 milestones = refine.milestones,
+                settings = settings,
                 onClose = {
                     runCatching { refine.close() }
                     database.close()

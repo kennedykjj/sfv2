@@ -39,6 +39,17 @@ class RefineRuntime private constructor(
         private val TICK: Duration = Duration.ofSeconds(30)
         private val SESSION_TIMEOUT: Duration = Duration.ofMinutes(30)
 
+        /** The saved pool size, read on every admission; without a settings file or when it is unreadable, the default. */
+        private fun poolCapacity(settings: SettingsStore?, log: DaemonLog): Int {
+            if (settings?.exists() != true) return POOL_CAPACITY
+            return try {
+                settings.load().poolSize
+            } catch (e: SettingsFileException) {
+                log.log("settings_unreadable", mapOf("field" to "poolSize"))
+                POOL_CAPACITY
+            }
+        }
+
         private sealed interface Prices {
             data class Loaded(val table: PriceTable) : Prices
             data class Failed(val field: String) : Prices
@@ -57,6 +68,7 @@ class RefineRuntime private constructor(
             source: ProjectConfigSource,
             env: Map<String, String>,
             log: DaemonLog = StderrDaemonLog,
+            settings: SettingsStore? = null,
         ): RefineRuntime {
             val recorder = commands.recorder
             val worktrees = WorktreeManager(dataDir.resolve("worktrees"), SystemWorktreeGit())
@@ -69,9 +81,9 @@ class RefineRuntime private constructor(
             val priceTable = (prices as? Prices.Loaded)?.table ?: PriceTable.parse("models: {}")
             if (prices is Prices.Failed) log.log("dispatcher_not_started", mapOf("field" to prices.field))
             val costRecorder = RunCostRecorder(store, recorder, priceTable, clock)
-            val pool = RunPool(POOL_CAPACITY, store, clock, SystemProcessProbe, recorder = recorder)
+            val pool = RunPool({ poolCapacity(settings, log) }, store, clock, SystemProcessProbe, recorder = recorder)
             val changedPaths = GitChangedPaths()
-            val control = ConfiguredDispatchControl(registry, source, env, store, recorder, clock, log)
+            val control = ConfiguredDispatchControl(registry, source, env, store, recorder, clock, log, settings)
             val stepUp = ModelStepUp(MODEL_LADDER, store)
             commands.events.addListener(stepUp::onEvent)
             val gateRunner = ProcessGateRunner(log)
