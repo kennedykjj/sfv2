@@ -70,6 +70,8 @@ class Dispatcher(
 
     @Synchronized
     fun runCycle(): List<DispatchedRun> {
+        // Frees the locks of runs that ended before anything else: a dead run must not hold a slot, paused or not.
+        pool.sweep()
         if (pause.isPaused()) return emptyList()
         val now = clock.instant()
         if (!schedule.isWorkTime(now)) return emptyList()
