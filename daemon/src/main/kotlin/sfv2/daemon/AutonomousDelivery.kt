@@ -190,6 +190,7 @@ class AutonomousDelivery(
 class AutonomousDeliveryTrigger(
     private val delivery: AutonomousDelivery,
     private val log: DaemonLog,
+    private val handoff: PullRequestHandoff? = null,
 ) : DeliveryTrigger, AutoCloseable {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { task ->
         Thread(task, "autonomous-delivery").apply { isDaemon = true }
@@ -202,6 +203,7 @@ class AutonomousDeliveryTrigger(
             executor.execute {
                 try {
                     delivery.deliver(cardId)
+                    handoff?.reconcile(cardId)
                 } catch (e: RuntimeException) {
                     log.log("delivery_failed", mapOf("card" to cardId, "error" to e.javaClass.simpleName))
                 } finally {
