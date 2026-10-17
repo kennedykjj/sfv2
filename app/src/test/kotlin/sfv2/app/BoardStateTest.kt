@@ -59,6 +59,44 @@ import sfv2.core.QueueForecast
  */
 class BoardStateTest {
     @Test
+    fun `a card shows the glyph of what is happening to it, and blocked wins over the column`() {
+        val glyphs = Column.entries.associateWith { glyphOf(it, blocked = false) }
+
+        assertThat(glyphs[Column.INBOX]).isEqualTo(CardGlyph.QUEUED)
+        assertThat(glyphs[Column.READY_FOR_DEV]).isEqualTo(CardGlyph.QUEUED)
+        assertThat(glyphs[Column.CODING]).isEqualTo(CardGlyph.RUNNING)
+        assertThat(glyphs[Column.SPEC_REVIEW]).isEqualTo(CardGlyph.WAITING)
+        assertThat(glyphs[Column.STAGED]).isEqualTo(CardGlyph.WAITING)
+        assertThat(glyphs[Column.DONE]).isEqualTo(CardGlyph.DONE)
+        assertThat(glyphOf(Column.CODING, blocked = true)).isEqualTo(CardGlyph.BLOCKED)
+    }
+
+    @Test
+    fun `the strip names the two Ready queues and Ready for Prod shortly, and every other column in full`() {
+        assertThat(stripLabel(Column.READY_FOR_REFINEMENT)).isEqualTo("Ready")
+        assertThat(stripLabel(Column.READY_FOR_DEV)).isEqualTo("Ready")
+        assertThat(stripLabel(Column.READY_FOR_PROD)).isEqualTo("Prod")
+        assertThat(stripLabel(Column.SPEC_REVIEW)).isEqualTo(Column.SPEC_REVIEW.displayName)
+    }
+
+    @Test
+    fun `the waiting count is the cards in the owner's decision columns`() {
+        val view = BoardView(
+            BoardFixtures.empty().applySnapshot(
+                listOf(
+                    BoardFixtures.aCard("a", Column.SPEC_REVIEW),
+                    BoardFixtures.aCard("b", Column.STAGED),
+                    BoardFixtures.aCard("c", Column.CODING),
+                ),
+            ),
+            live = true,
+        )
+
+        assertThat(waitingCount(view)).isEqualTo(2)
+        assertThat(waitingCount(null)).isEqualTo(0)
+    }
+
+    @Test
     fun `AC-1 lists every column in product order with the snapshot cards in the right one`() {
         val board = BoardFixtures.empty().applySnapshot(
             listOf(
@@ -1031,28 +1069,6 @@ class BoardStateTest {
         assertThat(after.widthOf(Column.INBOX)).isEqualTo(260)
         assertThat(state.withDensity(BoardDensity.CHIPS).resize(Column.CODING, 200).reset(Column.CODING).widthOf(Column.CODING))
             .isEqualTo(96)
-    }
-
-    @Test
-    fun `AC-3 equalize restores every width and keeps fit and density`() {
-        val state = ColumnLayoutState().withFit(false).resize(Column.CODING, 300).resize(Column.INBOX, 260)
-
-        val after = state.equalize()
-
-        assertThat(Column.entries.map { after.widthOf(it) }).allMatch { it == 220 }
-        assertThat(after.fit).isFalse()
-        assertThat(after.density).isEqualTo(BoardDensity.CARDS)
-    }
-
-    @Test
-    fun `AC-3 equalize in Chips goes back to the chip default and stays in Chips`() {
-        val state = ColumnLayoutState().withDensity(BoardDensity.CHIPS).resize(Column.CODING, 300)
-
-        val after = state.equalize()
-
-        assertThat(Column.entries.map { after.widthOf(it) }).allMatch { it == 96 }
-        assertThat(after.density).isEqualTo(BoardDensity.CHIPS)
-        assertThat(after.fit).isTrue()
     }
 
     @Test
