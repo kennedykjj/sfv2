@@ -67,6 +67,7 @@ private const val OWNER_TOKEN_FILE = "owner.token"
 private const val REQUEST_BUFFER = 8
 private const val TICK_EVERY_MILLIS = 60_000L
 private const val SENT_REFRESH_MILLIS = 2_000L
+private const val HIDDEN_GC_DELAY_MILLIS = 800L
 
 /** Keys the window handles itself while the palette is open; everything else reaches the text field. */
 private val PALETTE_KEYS = setOf(
@@ -179,6 +180,13 @@ private const val TOKEN_RELATIVE_PATH = "shipfloor/owner.token"
 fun main() {
     logEvent("app_startup", mapOf("phase" to "main", "ms" to sinceJvmStart().toString()))
     val runtimeDir = System.getenv("XDG_RUNTIME_DIR")?.takeIf { it.isNotBlank() }
+    // A second launch only asks the running app to show its window.
+    val instance = runtimeDir?.let { SingleInstance.tryAcquire(Path.of(it, "shipfloor")) }
+    if (instance is SingleInstance.Result.Running) {
+        val reached = instance.pid?.let(SingleInstance::activate) == true
+        logEvent("app_already_running", mapOf("shown" to reached.toString()))
+        return
+    }
     val monitor = runtimeDir?.let {
         ConnectionMonitor(SocketDaemonProbe(Path.of(it, SOCKET_RELATIVE_PATH)), SystemctlDaemonStarter(), Clock.systemUTC())
     }
@@ -248,6 +256,9 @@ fun main() {
         val pulseView by (pulse?.view ?: noPulse).collectAsState()
         val connected = state == ConnectionState.Connected
         var showFeed by remember { mutableStateOf(false) }
+        val hasTray = ports.tray !== NoTray
+        // SHIPFLOOR_START_HIDDEN=1 starts the app in the tray with no window, for a login start.
+        var windowVisible by remember { mutableStateOf(!(hasTray && System.getenv("SHIPFLOOR_START_HIDDEN") == "1")) }
         var detail by remember { mutableStateOf(DetailModalState()) }
         var listColumn by remember { mutableStateOf<BoardColumn?>(null) }
         var density by remember { mutableStateOf(BoardDensity.CARDS) }
@@ -318,8 +329,39 @@ fun main() {
                 withContext(Dispatchers.IO) { shell.tick() }
             }
         }
-        Window(
-            onCloseRequest = ::exitApplication,
+        // Requests from the tray and from the notifications only change state, so they work with no window at all.
+        LaunchedEffect(Unit) {
+            requests.collect { request ->
+                when (request) {
+                    is WindowRequest.Open -> {
+                        windowVisible = true
+                        showFeed = false
+                        showSettings = false
+                        request.cardId?.let { detail = detail.open(it) }
+                    }
+                    WindowRequest.ShowFeed -> {
+                        windowVisible = true
+                        showSettings = false
+                        showFeed = true
+                    }
+                    WindowRequest.ShowSettings -> {
+                        windowVisible = true
+                        showSettings = settingsClient != null
+                    }
+                    WindowRequest.Quit -> exitApplication()
+                }
+            }
+        }
+        // With the window hidden the app is only its readings and its tray icon: give the memory back.
+        LaunchedEffect(windowVisible) {
+            if (!windowVisible) {
+                delay(HIDDEN_GC_DELAY_MILLIS)
+                System.gc()
+            }
+        }
+        if (windowVisible) Window(
+            // The X hides the window and leaves the app in the tray; without a tray there would be no way back.
+            onCloseRequest = { if (hasTray) windowVisible = false else exitApplication() },
             title = Texts.TITLE,
             icon = remember { BitmapPainter(TrayIcons.renderTile(256).toComposeImageBitmap()) },
             state = rememberWindowState(size = DpSize(1280.dp, 800.dp), position = WindowPosition.PlatformDefault),
@@ -328,30 +370,11 @@ fun main() {
             window.minimumSize = Dimension(360, 240)
             LaunchedEffect(Unit) { logEvent("app_startup", mapOf("phase" to "window", "ms" to sinceJvmStart().toString())) }
             LaunchedEffect(view != null) { if (view != null) logEvent("app_startup", mapOf("phase" to "board", "ms" to sinceJvmStart().toString())) }
+            // A window that has just been shown comes to the front.
             LaunchedEffect(Unit) {
-                requests.collect { request ->
-                    when (request) {
-                        is WindowRequest.Open -> {
-                            window.isMinimized = false
-                            window.toFront()
-                            showFeed = false
-                            showSettings = false
-                            request.cardId?.let { detail = detail.open(it) }
-                        }
-                        WindowRequest.ShowFeed -> {
-                            window.isMinimized = false
-                            window.toFront()
-                            showSettings = false
-                            showFeed = true
-                        }
-                        WindowRequest.ShowSettings -> {
-                            window.isMinimized = false
-                            window.toFront()
-                            showSettings = settingsClient != null
-                        }
-                        WindowRequest.Quit -> exitApplication()
-                    }
-                }
+                window.isMinimized = false
+                window.toFront()
+                window.requestFocus()
             }
             val openSettings = settingsClient?.let { { showSettings = true } }
             val feedAvailable = feed != null && connected
